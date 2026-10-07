@@ -1,0 +1,1 @@
+ALTER TABLE `source_records` ADD `movement_type` text DEFAULT 'entrada' NOT NULL;
