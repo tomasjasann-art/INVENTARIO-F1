@@ -28,8 +28,7 @@ F1_ADMIN_EMAILS
 2. Instala Neon desde Vercel Marketplace para que se cree `DATABASE_URL`.
 3. Instala/configura Clerk, activa el acceso con Google y agrega las dos variables de Clerk.
 4. Agrega `F1_ADMIN_EMAILS` con el Gmail del administrador.
-5. Con las variables disponibles, inicializa la base una vez con `pnpm db:migrate`.
-6. Vuelve a desplegar el proyecto.
+5. Vuelve a desplegar el proyecto. El build detecta `DATABASE_URL` y aplica automáticamente las migraciones pendientes antes de compilar.
 
 Mientras falte alguna variable, la web mostrará una pantalla de configuración pendiente en lugar de fallar.
 
@@ -49,7 +48,7 @@ El comando `pnpm build` genera el directorio `.next` esperado por Vercel, inclui
 
 ```bash
 pnpm db:generate  # genera una migración después de modificar db/schema.ts
-pnpm db:migrate   # aplica migraciones pendientes
+pnpm db:migrate   # aplica migraciones pendientes manualmente cuando sea necesario
 pnpm db:push      # sincronización directa, solo para desarrollo controlado
 ```
 
