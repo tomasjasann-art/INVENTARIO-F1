@@ -1,8 +1,8 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { boolean, index, integer, pgTable, serial, text, uniqueIndex } from "drizzle-orm/pg-core";
 
-export const products = sqliteTable("products", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const products = pgTable("products", {
+  id: serial("id").primaryKey(),
   sku: text("sku").notNull().unique(),
   description: text("description").notNull(),
   category: text("category").notNull().default("Equipos"),
@@ -16,8 +16,8 @@ export const products = sqliteTable("products", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const movements = sqliteTable("movements", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const movements = pgTable("movements", {
+  id: serial("id").primaryKey(),
   productId: integer("product_id")
     .notNull()
     .references(() => products.id),
@@ -61,8 +61,8 @@ export const movements = sqliteTable("movements", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const sourceRecords = sqliteTable("source_records", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const sourceRecords = pgTable("source_records", {
+  id: serial("id").primaryKey(),
   source: text("source").notNull(),
   movementType: text("movement_type").notNull().default("entrada"),
   sku: text("sku").notNull(),
@@ -74,14 +74,14 @@ export const sourceRecords = sqliteTable("source_records", {
   importedAt: text("imported_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const coordinators = sqliteTable(
+export const coordinators = pgTable(
   "coordinators",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     organization: text("organization", { enum: ["F1", "ENTEL"] }).notNull(),
     name: text("name").notNull(),
     email: text("email").notNull().default(""),
-    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    active: boolean("active").notNull().default(true),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
@@ -89,10 +89,10 @@ export const coordinators = sqliteTable(
   ],
 );
 
-export const installationValidations = sqliteTable(
+export const installationValidations = pgTable(
   "installation_validations",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     movementId: integer("movement_id")
       .notNull()
       .references(() => movements.id),
@@ -117,10 +117,10 @@ export const installationValidations = sqliteTable(
   ],
 );
 
-export const auditImports = sqliteTable(
+export const auditImports = pgTable(
   "audit_imports",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     source: text("source", { enum: ["ENTEL", "ORACLE"] }).notNull(),
     fileName: text("file_name").notNull(),
     sheetName: text("sheet_name").notNull().default(""),
@@ -136,10 +136,10 @@ export const auditImports = sqliteTable(
   (table) => [index("audit_imports_source_status_idx").on(table.source, table.status, table.id)],
 );
 
-export const auditRecords = sqliteTable(
+export const auditRecords = pgTable(
   "audit_records",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     importId: integer("import_id")
       .notNull()
       .references(() => auditImports.id),
@@ -174,10 +174,10 @@ export const auditRecords = sqliteTable(
   ],
 );
 
-export const equipmentRequests = sqliteTable(
+export const equipmentRequests = pgTable(
   "equipment_requests",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     requestCode: text("request_code").notNull(),
     coordinatorName: text("coordinator_name").notNull(),
     coordinatorEmail: text("coordinator_email").notNull().default(""),
@@ -209,14 +209,14 @@ export const equipmentRequests = sqliteTable(
   ],
 );
 
-export const appUsers = sqliteTable(
+export const appUsers = pgTable(
   "app_users",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     email: text("email").notNull(),
     displayName: text("display_name").notNull().default(""),
     role: text("role", { enum: ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA"] }).notNull().default("SOLO_LECTURA"),
-    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    active: boolean("active").notNull().default(true),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },

@@ -1,29 +1,35 @@
 import KardexApp from "./KardexApp";
-import LoginScreen, { AccessDeniedScreen } from "./LoginScreen";
+import LoginScreen, { AccessDeniedScreen, DeploymentSetupScreen } from "./LoginScreen";
 import {
-  chatGPTSignInPath,
-  chatGPTSignOutPath,
-  getChatGPTUser,
+  getAuthenticatedUser,
   isAuthorizedKardexUser,
-} from "./chatgpt-auth";
+  signInPath,
+  signOutPath,
+} from "./auth";
+import { missingDeploymentConfig } from "./deployment-config";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const user = await getChatGPTUser();
+  const missingConfig = missingDeploymentConfig();
+  if (missingConfig.length) {
+    return <DeploymentSetupScreen missing={missingConfig} />;
+  }
+
+  const user = await getAuthenticatedUser();
 
   if (!user) {
-    return <LoginScreen signInPath={chatGPTSignInPath("/")} />;
+    return <LoginScreen signInPath={signInPath("/")} />;
   }
 
   if (!(await isAuthorizedKardexUser(user.email))) {
-    return <AccessDeniedScreen email={user.email} signOutPath={chatGPTSignOutPath("/")} />;
+    return <AccessDeniedScreen email={user.email} signOutPath={signOutPath()} />;
   }
 
   return (
     <KardexApp
       user={{ displayName: user.displayName, email: user.email }}
-      signOutPath={chatGPTSignOutPath("/")}
+      signOutPath={signOutPath()}
     />
   );
 }

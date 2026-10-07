@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
+import { isClerkConfigured } from "./deployment-config";
 
 export const metadata: Metadata = {
   title: "Kardex F1 Logística",
@@ -17,9 +19,13 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const content = isClerkConfigured()
+    ? <ClerkProvider>{children}</ClerkProvider>
+    : children;
+
   return (
     <html lang="es">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">{content}</body>
     </html>
   );
 }

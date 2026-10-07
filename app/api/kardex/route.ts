@@ -12,7 +12,8 @@ import {
   sourceRecords,
 } from "../../../db/schema";
 import { normalizeKardexDate } from "../../../lib/kardex-date";
-import { getChatGPTUser, isKardexAdminEmail } from "../../chatgpt-auth";
+import { getAuthenticatedUser, isKardexAdminEmail } from "../../auth";
+import { missingDeploymentConfig } from "../../deployment-config";
 
 type ProductInput = {
   action?: "product";
@@ -252,8 +253,8 @@ async function latestEntelUnitCosts(db: ReturnType<typeof getDb>) {
 
 function errorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : "Error inesperado";
-  if (message.includes("UNIQUE constraint failed")) return "El SKU ya está registrado.";
-  if (message.includes("no such table")) return "La base de datos todavía no está disponible.";
+  if (message.includes("UNIQUE constraint failed") || message.includes("duplicate key value violates unique constraint")) return "El registro ya existe.";
+  if (message.includes("no such table") || message.includes("relation") && message.includes("does not exist")) return "La base de datos todavía no está inicializada. Ejecuta las migraciones de Neon.";
   return message;
 }
 
@@ -303,7 +304,9 @@ function normalizeStockLocation(value: unknown) {
 
 export async function GET(request: Request) {
   try {
-    const user = await getChatGPTUser();
+    const missingConfig = missingDeploymentConfig();
+    if (missingConfig.length) return Response.json({ error: `Configuración pendiente: ${missingConfig.join(", ")}.` }, { status: 503 });
+    const user = await getAuthenticatedUser();
     if (!user) return Response.json({ error: "Debes iniciar sesión para acceder al Kardex." }, { status: 401 });
     const db = getDb();
     const access = await currentAccess(db, user.email);
@@ -457,7 +460,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const user = await getChatGPTUser();
+    const missingConfig = missingDeploymentConfig();
+    if (missingConfig.length) return Response.json({ error: `Configuración pendiente: ${missingConfig.join(", ")}.` }, { status: 503 });
+    const user = await getAuthenticatedUser();
     if (!user) return Response.json({ error: "Debes iniciar sesión para modificar el Kardex." }, { status: 401 });
     const db = getDb();
     const access = await currentAccess(db, user.email);

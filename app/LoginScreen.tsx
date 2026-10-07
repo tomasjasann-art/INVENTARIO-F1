@@ -26,18 +26,18 @@ export default function LoginScreen({ signInPath }: { signInPath: string }) {
           <Image className="login-client-logo" src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
           <div className="login-secure-label"><ShieldCheck size={15} /> ACCESO PRIVADO</div>
           <h2>Bienvenido</h2>
-          <p>Ingresa con la cuenta de ChatGPT vinculada al <strong>Gmail que el Administrador registró</strong> en el Kardex.</p>
+          <p>Ingresa con el <strong>Google o Gmail que el Administrador registró</strong> en el Kardex.</p>
 
           <div className="login-access-steps">
             <strong>¿Cómo ingresar?</strong>
             <ol>
-              <li><b>1</b><span>Presiona el botón y selecciona <em>Usar otra cuenta</em>.</span></li>
-              <li><b>2</b><span>Continúa con Google y elige exactamente el Gmail autorizado.</span></li>
+              <li><b>1</b><span>Presiona el botón y selecciona tu cuenta de Google.</span></li>
+              <li><b>2</b><span>Elige exactamente el Gmail autorizado por F1.</span></li>
             </ol>
           </div>
 
           <a className="login-submit" href={signInPath} target="_top">
-            Ingresar con Gmail mediante ChatGPT <ArrowRight size={18} />
+            Ingresar con Google o Gmail <ArrowRight size={18} />
           </a>
 
           <div className="login-security-note">
@@ -53,6 +53,25 @@ export default function LoginScreen({ signInPath }: { signInPath: string }) {
       </section>
     </main>
   );
+}
+
+export function DeploymentSetupScreen({ missing }: { missing: string[] }) {
+  return <main className="login-page access-denied-page">
+    <section className="login-brand-panel">
+      <div className="login-brand-lockup" aria-label="F1 Projects, Engineering and Services">
+        <Image src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
+      </div>
+      <div className="login-message"><p>CONFIGURACIÓN DE PRODUCCIÓN</p><h1>El código ya está<br />listo para Vercel.</h1><span>Falta conectar la base de datos y el acceso Gmail del proyecto.</span></div>
+      <div className="login-brand-footer"><span>F1 Services © 2026</span><span>Kardex F1 Logística</span></div>
+    </section>
+    <section className="login-access-panel"><div className="login-card access-denied-card">
+      <div className="login-secure-label denied"><ShieldAlert size={15} /> CONFIGURACIÓN PENDIENTE</div>
+      <h2>Faltan variables en Vercel</h2>
+      <p>Conecta Neon y Clerk al proyecto y agrega estas variables:</p>
+      <div className="login-security-note"><ShieldCheck size={18} /><span><b>{missing.join(", ")}</b></span></div>
+      <p>Después vuelve a desplegar la rama <strong>main</strong>.</p>
+    </div></section>
+  </main>;
 }
 
 export function AccessDeniedScreen({ email, signOutPath }: { email: string; signOutPath: string }) {

@@ -1,51 +1,60 @@
 # Kardex F1 Logística
 
-Sistema web de inventario y trazabilidad para F1 Services.
+Aplicación de inventario, stock, movimientos, solicitudes, conciliación y auditoría para F1 Services. Esta versión está preparada para desplegarse como una aplicación **Next.js nativa en Vercel**.
 
-## Módulos
+## Servicios de producción
 
-- Maestro de SKU
-- Ingresos y salidas unitarias
-- Carga masiva desde Excel
-- Stock y trazabilidad por SKU, serie/lote, GR, pedido, site y coordinador
-- Solicitudes de equipos y seguimiento logístico
-- Conciliación de instalaciones
-- Auditoría Entel y Oracle
-- Usuarios, roles y permisos
+- Vercel: aplicación y API.
+- Neon PostgreSQL: datos e historial persistente.
+- Clerk: inicio de sesión con Google/Gmail.
+- GitHub: código fuente y despliegue automático desde `main`.
 
-## Producción
+## Variables de entorno
 
-- Sitio: https://kardex-f1-logistica.tomasjasann.chatgpt.site
-- Plataforma: ChatGPT Sites / Cloudflare Workers
-- Base de datos: Cloudflare D1
-- Proyecto Sites: `appgprj_6ac47e9c69f48191a0451d999faf40c8`
+Copia `.env.example` a `.env.local` para desarrollo. En Vercel configura:
 
-## Desarrollo
+```text
+DATABASE_URL
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+CLERK_SECRET_KEY
+F1_ADMIN_EMAILS
+```
 
-Requisitos:
+`F1_ADMIN_EMAILS` acepta uno o varios correos separados por comas. Esos correos ingresan inicialmente como Administrador y luego pueden registrar al resto del equipo en **Configuración → Usuarios y permisos**.
 
-- Node.js 22 o superior
-- pnpm 11.25.0
+## Preparar producción en Vercel
+
+1. Conecta este repositorio al proyecto Vercel y usa `main` como rama de producción.
+2. Instala Neon desde Vercel Marketplace para que se cree `DATABASE_URL`.
+3. Instala/configura Clerk, activa el acceso con Google y agrega las dos variables de Clerk.
+4. Agrega `F1_ADMIN_EMAILS` con el Gmail del administrador.
+5. Con las variables disponibles, inicializa la base una vez con `pnpm db:migrate`.
+6. Vuelve a desplegar el proyecto.
+
+Mientras falte alguna variable, la web mostrará una pantalla de configuración pendiente en lugar de fallar.
+
+## Desarrollo y verificación
 
 ```bash
-pnpm install --frozen-lockfile
+pnpm install
+pnpm dev
 pnpm exec tsc --noEmit
 pnpm lint
 pnpm build
 ```
 
-## Datos y seguridad
+El comando `pnpm build` genera el directorio `.next` esperado por Vercel, incluido `.next/routes-manifest.json`.
 
-Este repositorio contiene código, esquema y migraciones. No contiene la base de datos de producción, exportaciones de inventario, archivos Excel, contraseñas ni tokens.
+## Base de datos
 
-Las variables sensibles, como `F1_ADMIN_EMAILS`, se configuran únicamente en el entorno de producción.
+```bash
+pnpm db:generate  # genera una migración después de modificar db/schema.ts
+pnpm db:migrate   # aplica migraciones pendientes
+pnpm db:push      # sincronización directa, solo para desarrollo controlado
+```
 
-## Sincronización
+Las migraciones PostgreSQL están en `drizzle-pg/`. Los datos de prueba del antiguo entorno D1 no se copian automáticamente a Neon.
 
-GitHub es la copia externa y fuente de referencia del código. Todo cambio funcional debe:
+## Despliegue automático
 
-1. Actualizar la rama `main` de este repositorio.
-2. Pasar las validaciones automáticas.
-3. Publicar el mismo estado de código en ChatGPT Sites.
-
-Consulta `AGENTS.md` para las reglas de mantenimiento.
+Cada actualización de `main` inicia un nuevo despliegue en Vercel mediante la integración GitHub del proyecto. No se deben cargar secretos al repositorio; todos se administran desde Vercel.
