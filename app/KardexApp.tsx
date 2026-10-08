@@ -64,6 +64,7 @@ type Movement = {
   coordinator: string;
   coordinatorF1: string;
   serials: string;
+  lotAssignment: string;
   sourceRow: string;
   originSite: string;
   stockLocation: string;
@@ -147,11 +148,19 @@ type EquipmentRequest = {
   warehouse: string;
   productId: number;
   quantity: number;
+  seriesLot: string;
+  contractorRuc: string;
+  contractorBusinessName: string;
+  pickupPerson: string;
+  region: string;
+  city: string;
   neededDate: string;
   status: "PENDIENTE" | "VALIDADA" | "DESPACHADA" | "EN_TRANSITO" | "LISTA_RECOJO" | "RECOGIDA" | "CERRADA" | "RECHAZADA";
   outboundGuide: string;
   outboundGuideLink: string;
+  outboundGuidePhoto: string;
   shippingTicket: string;
+  shippingTicketPhoto: string;
   shippingKey: string;
   sentDate: string;
   arrivalDate: string;
@@ -190,6 +199,7 @@ type View = "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lote
 const money = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" });
 const number = new Intl.NumberFormat("es-PE");
 const today = () => new Date().toISOString().slice(0, 10);
+const REQUEST_UNTRACKED = "__SIN_SERIE_LOTE__";
 
 const SALIDA_BULK_HEADERS = [
   "ITEM",
@@ -236,6 +246,12 @@ function bulkNumberValue(row: Record<string, unknown>, ...headers: string[]) {
     ? (raw.lastIndexOf(",") > raw.lastIndexOf(".") ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, ""))
     : raw.replace(",", ".");
   return Number(normalized) || 0;
+}
+
+function automaticPreviewLotCode({ movementDate, orderNumber, sku, sourceRow }: { movementDate: string; orderNumber: string; sku: string; sourceRow: string }) {
+  const part = (value: string, fallback: string) => value.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || fallback;
+  return ["TRF", movementDate.replace(/\D/g, "").slice(0, 8) || "SINFECHA", part(orderNumber, "SINPEDIDO"), part(sku, "SINSKU"), part(sourceRow, "1")].join("-");
 }
 
 function movementEffect(type: Movement["type"]) {
@@ -360,11 +376,11 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
     const entries = quantityByMeasure(data.movements.filter((movement) => movement.type === "entrada" && movement.movementDate.startsWith(currentMonth)));
     const exits = quantityByMeasure(data.movements.filter((movement) => movement.type === "salida" && movement.movementDate.startsWith(currentMonth)));
     const movedProductIds = new Set(data.movements.map((movement) => movement.productId));
-    const lotControlledProductIds = new Set(data.movements
-      .filter((movement) => movement.quantity > 1 || !movement.serials.trim())
+    const traceControlledProductIds = new Set(data.movements
+      .filter((movement) => movement.serials.trim())
       .map((movement) => movement.productId));
     const alertProducts = data.products.filter((product) => movedProductIds.has(product.id)
-      && lotControlledProductIds.has(product.id)
+      && traceControlledProductIds.has(product.id)
       && product.stock <= product.minStock);
     return { stock, inventoryValue, entries, exits, alerts: alertProducts.length, alertProducts };
   }, [data]);
@@ -535,7 +551,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
                 <Metric label="Valor del inventario" value={money.format(metrics.inventoryValue)} meta="Costo referencial actual" icon={<CircleDollarSign size={20} />} tone="neutral" />
                 <Metric label="Ingresos del mes" value={`${number.format(metrics.entries.units)} UND`} meta={`${number.format(metrics.entries.meters)} MTS recibidos`} icon={<ArrowDownLeft size={20} />} tone="green" />
                 <Metric label="Salidas del mes" value={`${number.format(metrics.exits.units)} UND`} meta={`${number.format(metrics.exits.meters)} MTS despachados`} icon={<ArrowUpRight size={20} />} tone="orange" />
-                <Metric label="Alertas de stock" value={number.format(metrics.alerts)} meta="SKU por lote en stock mínimo" icon={<AlertTriangle size={20} />} tone="red" />
+                <Metric label="Alertas de stock" value={number.format(metrics.alerts)} meta="SKU con series/lotes en mínimo" icon={<AlertTriangle size={20} />} tone="red" />
               </section>
 
               <section className="dashboard-grid">
@@ -544,7 +560,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
                   <FlowChart movements={data.movements} />
                 </div>
                 <div className="panel alerts-panel">
-                  <div className="panel-title"><div><h2>Atención requerida</h2><p>Lotes con movimiento en nivel mínimo</p></div><span className="count-badge">{metrics.alerts}</span></div>
+                  <div className="panel-title"><div><h2>Atención requerida</h2><p>Series y lotes por SKU en nivel mínimo</p></div><span className="count-badge">{metrics.alerts}</span></div>
                   <StockAlerts products={metrics.alertProducts} hasMovements={data.movements.length > 0} />
                 </div>
               </section>
@@ -776,15 +792,36 @@ function TraceHistoryModal({ selected, movements, onClose }: { selected: Movemen
 function StockTable({ products, movements, loading }: { products: Product[]; movements: Movement[]; loading: boolean }) {
   const [scope, setScope] = useState<"gr" | "serie" | "proyecto" | "pedido" | "sku" | "coordinador">("pedido");
   const [traceQuery, setTraceQuery] = useState("");
-
-  function availableSeries(productId: number) {
-    const balances = new Map<string, number>();
-    movements.filter((row) => row.productId === productId).forEach((row) => {
-      const effect = row.type === "salida" || row.type === "baja" ? -1 : row.type === "traslado" ? 0 : 1;
-      row.serials.split(/[,;\n]/).map((item) => item.trim().toUpperCase()).filter(Boolean).forEach((serial) => balances.set(serial, (balances.get(serial) ?? 0) + effect));
+  const traceStockByProduct = useMemo(() => {
+    const map = new Map<number, { balances: Map<string, number>; untracked: number; hasTracking: boolean }>();
+    movements.forEach((movement) => {
+      const current = map.get(movement.productId) ?? { balances: new Map<string, number>(), untracked: 0, hasTracking: false };
+      const effect = movementEffect(movement.type);
+      const tokens = movementSeries(movement.serials);
+      if (!tokens.length) {
+        current.untracked += effect * movement.quantity;
+      } else {
+        current.hasTracking = true;
+        tokens.forEach((token) => current.balances.set(token, (current.balances.get(token) ?? 0) + effect * seriesQuantity(movement.serials, movement.quantity, token)));
+      }
+      map.set(movement.productId, current);
     });
-    return [...balances.entries()].filter(([, balance]) => balance > 0).map(([serial]) => serial);
-  }
+    return map;
+  }, [movements]);
+  const traceSummary = (productId: number) => {
+    const data = traceStockByProduct.get(productId);
+    const available = [...(data?.balances ?? new Map<string, number>())].filter(([, balance]) => balance > 0);
+    return {
+      tokens: available,
+      series: available.filter(([, balance]) => balance === 1).length,
+      lots: available.filter(([, balance]) => balance > 1).length,
+      untracked: Math.max(0, data?.untracked ?? 0),
+      hasTracking: data?.hasTracking ?? false,
+    };
+  };
+  const traceAlerts = products.map((product) => ({ product, trace: traceSummary(product.id) }))
+    .filter(({ product, trace }) => trace.hasTracking && product.stock <= product.minStock)
+    .sort((a, b) => a.product.stock - b.product.stock || a.product.sku.localeCompare(b.product.sku));
 
   const traceRows = useMemo(() => {
     const query = traceQuery.trim().toLowerCase();
@@ -827,9 +864,14 @@ function StockTable({ products, movements, loading }: { products: Product[]; mov
       </div>
     </section>
 
+    <section className="panel trace-stock-alert-panel">
+      <div className="panel-title"><div><h2>Alertas de series y lotes por SKU</h2><p>Solo muestra SKU con trazabilidad y stock igual o menor al mínimo configurado.</p></div><span className="count-badge">{traceAlerts.length}</span></div>
+      <div className="table-wrap"><table><thead><tr><th>Alerta</th><th>SKU / Equipo</th><th className="align-right">Series disponibles</th><th className="align-right">Lotes disponibles</th><th className="align-right">Sin serie/lote</th><th className="align-right">Stock / Mínimo</th></tr></thead><tbody>{loading ? <tr><td colSpan={6}><Empty text="Calculando alertas de trazabilidad..." /></td></tr> : !traceAlerts.length ? <tr><td colSpan={6}><Empty text="No hay SKU con series o lotes por debajo del mínimo." /></td></tr> : traceAlerts.map(({ product, trace }) => <tr key={product.id}><td><span className={`status-pill ${product.stock <= 0 ? "status-low" : "status-warning"}`}><i />{product.stock <= 0 ? "Sin stock" : "Stock mínimo"}</span></td><td><strong>{product.sku}</strong><small>{product.description}</small></td><td className="align-right"><strong>{trace.series}</strong><small>serie(s)</small></td><td className="align-right"><strong>{trace.lots}</strong><small>lote(s)</small></td><td className="align-right"><strong>{trace.untracked}</strong><small>{product.unit}</small></td><td className="align-right"><strong className="negative">{number.format(product.stock)}</strong><small>mín. {number.format(product.minStock)} {product.unit}</small></td></tr>)}</tbody></table></div>
+    </section>
+
     <MovementTable movements={traceRows} loading={loading} title={`Historial por ${scopeLabel}`} subtitle={traceQuery ? `${traceRows.length} movimientos encontrados` : "Mostrando los últimos 100 movimientos"} />
 
-    <section className="panel table-panel stock-current-panel"><div className="panel-title"><div><h2>Stock actual por SKU</h2><p>{products.length} SKU entre MO Company y F1 en tránsito</p></div></div><div className="table-wrap"><table><thead><tr><th>SKU</th><th>Descripción</th><th>Serie / Lote disponible</th><th>Proyecto / Propietario</th><th>Ubicación</th><th>Estado</th><th className="align-right">Stock actual</th></tr></thead><tbody>{loading ? <tr><td colSpan={7}><Empty text="Cargando stock..." /></td></tr> : products.length === 0 ? <tr><td colSpan={7}><Empty text="Registra tu primer producto para comenzar." /></td></tr> : products.map((product) => { const low = product.stock <= product.minStock; const series = availableSeries(product.id); return <tr key={product.id}><td><strong>{product.sku}</strong><small>{product.category}</small></td><td><strong>{product.description}</strong><small>{money.format(product.unitCostCents / 100)} c/u · {product.costSource || "KARDEX"}</small></td><td><strong>{series.slice(0, 2).join(", ") || "Control por cantidad"}</strong><small>{series.length > 2 ? `+${series.length - 2} series adicionales` : `${series.length} series disponibles`}</small></td><td><strong>{product.defaultProject || product.client}</strong><small>{product.owner}</small></td><td><strong>{product.location || "MO COMPANY"}</strong><small>{(product.location || "").includes("F1") ? "Tránsito temporal F1" : "Stock en almacén"}</small></td><td><span className={`status-pill ${low ? "status-low" : "status-ok"}`}><i />{low ? "Reponer" : "Disponible"}</span></td><td className="align-right"><strong className={low ? "negative" : ""}>{number.format(product.stock)}</strong><small>{product.unit} · mín. {product.minStock}</small></td></tr>; })}</tbody></table></div></section>
+    <section className="panel table-panel stock-current-panel"><div className="panel-title"><div><h2>Stock actual por SKU</h2><p>{products.length} SKU entre MO Company y F1 en tránsito</p></div></div><div className="table-wrap"><table><thead><tr><th>SKU</th><th>Descripción</th><th>Serie / Lote disponible</th><th>Proyecto / Propietario</th><th>Ubicación</th><th>Estado</th><th className="align-right">Stock actual</th></tr></thead><tbody>{loading ? <tr><td colSpan={7}><Empty text="Cargando stock..." /></td></tr> : products.length === 0 ? <tr><td colSpan={7}><Empty text="Registra tu primer producto para comenzar." /></td></tr> : products.map((product) => { const low = product.stock <= product.minStock; const trace = traceSummary(product.id); return <tr key={product.id}><td><strong>{product.sku}</strong><small>{product.category}</small></td><td><strong>{product.description}</strong><small>{money.format(product.unitCostCents / 100)} c/u · {product.costSource || "KARDEX"}</small></td><td><strong>{trace.tokens.slice(0, 2).map(([token, balance]) => `${token} (${balance})`).join(", ") || (trace.untracked ? `${trace.untracked} sin serie/lote` : "Sin stock trazable")}</strong><small>{trace.series} series · {trace.lots} lotes disponibles</small></td><td><strong>{product.defaultProject || product.client}</strong><small>{product.owner}</small></td><td><strong>{product.location || "MO COMPANY"}</strong><small>{(product.location || "").includes("F1") ? "Tránsito temporal F1" : "Stock en almacén"}</small></td><td><span className={`status-pill ${low ? "status-low" : "status-ok"}`}><i />{low ? "Reponer" : "Disponible"}</span></td><td className="align-right"><strong className={low ? "negative" : ""}>{number.format(product.stock)}</strong><small>{product.unit} · mín. {product.minStock}</small></td></tr>; })}</tbody></table></div></section>
   </>;
 }
 
@@ -1193,8 +1235,9 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
   const [selectedCoordinator, setSelectedCoordinator] = useState("");
   const [selectedOrder, setSelectedOrder] = useState("");
   const [productQuery, setProductQuery] = useState("");
+  const [selectedSeriesLot, setSelectedSeriesLot] = useState("");
   const [quantity, setQuantity] = useState(1);
-  const [items, setItems] = useState<Array<{ productId: number; quantity: number }>>([]);
+  const [items, setItems] = useState<Array<{ productId: number; quantity: number; seriesLot: string }>>([]);
   const [tracking, setTracking] = useState<EquipmentRequest | null>(null);
   const productMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const activeCoordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "F1").sort((a, b) => a.name.localeCompare(b.name));
@@ -1213,13 +1256,37 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
     .filter(([, balances]) => [...balances.values()].some((balance) => balance > 0))
     .map(([order]) => order)
     .sort((a, b) => a.localeCompare(b)), [orderStock]);
+  const orderTraceStock = useMemo(() => {
+    const map = new Map<string, Map<number, Map<string, number>>>();
+    movements.filter((movement) => movement.orderNumber.trim()).forEach((movement) => {
+      const order = movement.orderNumber.trim();
+      const productsInOrder = map.get(order) ?? new Map<number, Map<string, number>>();
+      const traces = productsInOrder.get(movement.productId) ?? new Map<string, number>();
+      const tokens = movementSeries(movement.serials);
+      if (!tokens.length) {
+        traces.set("", (traces.get("") ?? 0) + movementEffect(movement.type) * movement.quantity);
+      } else {
+        tokens.forEach((token) => traces.set(token, (traces.get(token) ?? 0) + movementEffect(movement.type) * seriesQuantity(movement.serials, movement.quantity, token)));
+      }
+      productsInOrder.set(movement.productId, traces);
+      map.set(order, productsInOrder);
+    });
+    return map;
+  }, [movements]);
   const availableProducts = useMemo(() => products.filter((product) => (orderStock.get(selectedOrder)?.get(product.id) ?? 0) > 0), [orderStock, products, selectedOrder]);
   const selectedProduct = availableProducts.find((product) => {
     const label = `${product.sku} — ${product.description}`;
     return label.toUpperCase() === productQuery.trim().toUpperCase() || product.sku.toUpperCase() === productQuery.trim().toUpperCase();
   });
-  const selectedInCart = items.find((item) => item.productId === selectedProduct?.id)?.quantity ?? 0;
-  const selectedAvailable = selectedProduct ? Math.max(0, (orderStock.get(selectedOrder)?.get(selectedProduct.id) ?? 0) - selectedInCart) : 0;
+  const selectedTraceOptions = selectedProduct
+    ? [...(orderTraceStock.get(selectedOrder)?.get(selectedProduct.id) ?? new Map<string, number>())]
+      .filter(([, balance]) => balance > 0)
+      .map(([seriesLot, balance]) => ({ seriesLot, selectionValue: seriesLot || REQUEST_UNTRACKED, balance }))
+      .sort((a, b) => a.seriesLot.localeCompare(b.seriesLot))
+    : [];
+  const selectedTrace = selectedTraceOptions.find((item) => item.selectionValue === selectedSeriesLot);
+  const selectedInCart = items.find((item) => item.productId === selectedProduct?.id && item.seriesLot === selectedTrace?.seriesLot)?.quantity ?? 0;
+  const selectedAvailable = selectedTrace ? Math.max(0, selectedTrace.balance - selectedInCart) : 0;
   const groupedRequests = useMemo(() => {
     const groups = new Map<string, EquipmentRequest[]>();
     requests.forEach((request) => groups.set(request.requestCode, [...(groups.get(request.requestCode) ?? []), request]));
@@ -1238,14 +1305,15 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
 
   function addItem() {
     const productId = selectedProduct?.id;
-    if (!productId || !selectedOrder || selectedAvailable <= 0 || quantity > selectedAvailable) return;
+    if (!productId || !selectedOrder || !selectedTrace || selectedAvailable <= 0 || quantity > selectedAvailable) return;
     setItems((current) => {
-      const existing = current.find((item) => item.productId === productId);
+      const existing = current.find((item) => item.productId === productId && item.seriesLot === selectedTrace.seriesLot);
       return existing
-        ? current.map((item) => item.productId === productId ? { ...item, quantity: item.quantity + Math.min(selectedAvailable, Math.max(1, quantity)) } : item)
-        : [...current, { productId, quantity: Math.max(1, quantity) }];
+        ? current.map((item) => item.productId === productId && item.seriesLot === selectedTrace.seriesLot ? { ...item, quantity: item.quantity + Math.min(selectedAvailable, Math.max(1, quantity)) } : item)
+        : [...current, { productId, quantity: Math.max(1, quantity), seriesLot: selectedTrace.seriesLot }];
     });
     setProductQuery("");
+    setSelectedSeriesLot("");
     setQuantity(1);
   }
 
@@ -1259,6 +1327,7 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
       setSelectedCoordinator("");
       setSelectedOrder("");
       setProductQuery("");
+      setSelectedSeriesLot("");
       setItems([]);
     }
   }
@@ -1275,18 +1344,24 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
         <div className="request-form-body">
           <div className="form-grid">
             <label className="field"><span>Coordinador F1 *</span><select name="coordinatorName" required value={selectedCoordinator} onChange={(event) => setSelectedCoordinator(event.target.value)}><option value="" disabled>Selecciona un coordinador F1</option>{activeCoordinators.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
-            <label className="field"><span>N° Pedido con ingreso *</span><select name="orderNumber" required value={selectedOrder} onChange={(event) => { setSelectedOrder(event.target.value); setItems([]); setProductQuery(""); }}><option value="" disabled>Selecciona un pedido ingresado</option>{orderOptions.map((order) => <option value={order} key={order}>{order}</option>)}</select><small>Solo aparecen pedidos con saldo disponible.</small></label>
+            <label className="field"><span>N° Pedido con ingreso *</span><select name="orderNumber" required value={selectedOrder} onChange={(event) => { setSelectedOrder(event.target.value); setItems([]); setProductQuery(""); setSelectedSeriesLot(""); }}><option value="" disabled>Selecciona un pedido ingresado</option>{orderOptions.map((order) => <option value={order} key={order}>{order}</option>)}</select><small>Solo aparecen pedidos con saldo disponible.</small></label>
             <label className="field"><span>Proyecto</span><input name="project" placeholder="Rollout, PEXT, PINT..." /></label>
             <label className="field"><span>Site destino</span><input name="site" placeholder="Código o nombre del site" /></label>
+            <label className="field"><span>RUC de la contrata *</span><input name="contractorRuc" inputMode="numeric" pattern="[0-9]{11}" maxLength={11} required placeholder="11 dígitos" /></label>
+            <label className="field"><span>Razón social *</span><input name="contractorBusinessName" required placeholder="Nombre legal de la contrata" /></label>
+            <label className="field"><span>Persona que recoge *</span><input name="pickupPerson" required placeholder="Nombres y apellidos" /></label>
+            <label className="field"><span>Región de envío *</span><input name="region" required placeholder="Ej. Lima" /></label>
+            <label className="field"><span>Ciudad de envío *</span><input name="city" required placeholder="Ej. Lima / Arequipa" /></label>
             <label className="field"><span>Almacén que atenderá</span><input name="warehouse" value={warehouse} readOnly /></label>
             <label className="field"><span>Fecha requerida</span><input name="neededDate" type="date" min={today()} /></label>
           </div>
           <div className="request-item-builder">
-            <label className="field product-search-field"><span>Buscar SKU o descripción</span><input list="request-product-options" value={productQuery} onChange={(event) => setProductQuery(event.target.value)} placeholder={selectedOrder ? "Escribe parte del SKU o nombre..." : "Primero selecciona el pedido"} disabled={!selectedOrder} /><datalist id="request-product-options">{availableProducts.map((product) => <option key={product.id} value={`${product.sku} — ${product.description}`}>Disponible en pedido: {orderStock.get(selectedOrder)?.get(product.id) ?? 0}</option>)}</datalist><small>{productQuery && !selectedProduct ? "Este SKU no pertenece al pedido o ya no tiene stock." : selectedProduct ? `Disponible en este pedido: ${selectedAvailable} ${selectedProduct.unit}` : selectedOrder ? `${availableProducts.length} SKU con saldo en el pedido.` : "El pedido limita los equipos que puedes elegir."}</small></label>
+            <label className="field product-search-field"><span>Buscar SKU o descripción</span><input list="request-product-options" value={productQuery} onChange={(event) => { setProductQuery(event.target.value); setSelectedSeriesLot(""); }} placeholder={selectedOrder ? "Escribe parte del SKU o nombre..." : "Primero selecciona el pedido"} disabled={!selectedOrder} /><datalist id="request-product-options">{availableProducts.map((product) => <option key={product.id} value={`${product.sku} — ${product.description}`}>Disponible en pedido: {orderStock.get(selectedOrder)?.get(product.id) ?? 0}</option>)}</datalist><small>{productQuery && !selectedProduct ? "Este SKU no pertenece al pedido o ya no tiene stock." : selectedProduct ? `${selectedTraceOptions.length} serie(s)/lote(s) con saldo · ${orderStock.get(selectedOrder)?.get(selectedProduct.id) ?? 0} ${selectedProduct.unit} en total.` : selectedOrder ? `${availableProducts.length} SKU con saldo en el pedido.` : "El pedido limita los equipos que puedes elegir."}</small></label>
+            <label className="field trace-stock-select"><span>Serie / Lote disponible</span><select value={selectedSeriesLot} onChange={(event) => { setSelectedSeriesLot(event.target.value); setQuantity(1); }} disabled={!selectedProduct} required><option value="" disabled>{selectedProduct ? "Selecciona stock" : "Primero elige un SKU"}</option>{selectedTraceOptions.map((item) => <option key={item.selectionValue} value={item.selectionValue}>{item.seriesLot || "Sin serie/lote registrado"} · {item.balance} disponible{item.balance === 1 ? " · Serie" : " · Lote"}</option>)}</select><small>{selectedTrace ? `Puedes solicitar hasta ${selectedAvailable} de ${selectedTrace.seriesLot || "stock sin serie/lote"}.` : "El stock se muestra por serie o lote real del pedido."}</small></label>
             <label className="field"><span>Cantidad</span><input type="number" min="1" max={selectedAvailable || undefined} step="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /></label>
-            <button type="button" className="secondary-button" onClick={addItem} disabled={!selectedProduct || selectedAvailable <= 0 || quantity > selectedAvailable}><Plus size={15} />Agregar</button>
+            <button type="button" className="secondary-button" onClick={addItem} disabled={!selectedProduct || !selectedTrace || selectedAvailable <= 0 || quantity > selectedAvailable}><Plus size={15} />Agregar</button>
           </div>
-          <div className="request-cart">{!items.length ? <p>Agrega uno o varios SKU a la solicitud.</p> : items.map((item) => { const product = productMap.get(item.productId); return <div key={item.productId}><span><strong>{product?.sku}</strong><small>{product?.description}</small></span><b>{item.quantity} {product?.unit}</b><button type="button" className="icon-button" onClick={() => setItems((current) => current.filter((row) => row.productId !== item.productId))} aria-label="Quitar"><X size={15} /></button></div>; })}</div>
+          <div className="request-cart">{!items.length ? <p>Agrega uno o varios SKU seleccionando la serie o lote disponible.</p> : items.map((item) => { const product = productMap.get(item.productId); const itemKey = `${item.productId}::${item.seriesLot}`; return <div key={itemKey}><span><strong>{product?.sku}</strong><small>{product?.description} · {item.seriesLot || "Sin serie/lote"}</small></span><b>{item.quantity} {product?.unit}</b><button type="button" className="icon-button" onClick={() => setItems((current) => current.filter((row) => `${row.productId}::${row.seriesLot}` !== itemKey))} aria-label="Quitar"><X size={15} /></button></div>; })}</div>
           <label className="field"><span>Observación</span><textarea name="notes" rows={2} placeholder="Detalle para Logística" /></label>
           <button className="primary-button request-submit" type="submit" disabled={saving || !items.length || !canRequest}>{saving ? "Registrando..." : canRequest ? `Registrar solicitud · ${items.length} SKU` : "Perfil de solo lectura"}</button>
         </div>
@@ -1300,18 +1375,61 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
 
     <section className="panel request-history">
       <div className="panel-title"><div><h2>Solicitudes registradas</h2><p>{number.format(groupedRequests.length)} solicitudes; seguimiento separado del Kardex.</p></div></div>
-      <div className="table-wrap"><table><thead><tr><th>Solicitud</th><th>Coordinador F1</th><th>Pedido / Site</th><th>Equipos solicitados</th><th>GR / Ticket</th><th>Envío / Llegada</th><th>Días pendientes</th><th>Estado</th><th>Seguimiento</th></tr></thead><tbody>{loading ? <tr><td colSpan={9}><Empty text="Cargando solicitudes..." /></td></tr> : !groupedRequests.length ? <tr><td colSpan={9}><Empty text="Las solicitudes de los coordinadores F1 aparecerán aquí." /></td></tr> : groupedRequests.map((group) => { const request = group[0]; const days = pendingDays(request); const closed = ["CERRADA", "RECOGIDA", "RECHAZADA"].includes(request.status); return <tr key={request.requestCode}><td><strong>{request.requestCode}</strong><small>{displayDate(request.createdAt)}</small></td><td><strong>{request.coordinatorName}</strong><small>{request.coordinatorEmail || "Sin correo"}</small></td><td><strong>{request.orderNumber}</strong><small>{request.site || request.project || "Sin site"}</small></td><td>{group.map((row) => { const product = productMap.get(row.productId); return <span className="request-line" key={row.id}><strong>{product?.sku || `Producto ${row.productId}`}</strong><small>{row.quantity} {product?.unit || "UND"} · {product?.description}</small></span>; })}</td><td><strong>{request.outboundGuide || "Sin GR"}</strong><small>{request.shippingTicket ? `Ticket: ${request.shippingTicket}` : "Sin ticket de envío"}</small><GrLinkCell link={request.outboundGuideLink} /></td><td><strong>{request.sentDate ? displayDate(request.sentDate) : "Sin fecha de envío"}</strong><small>{request.arrivalDate ? `Llegó: ${displayDate(request.arrivalDate)}` : "Llegada pendiente"}</small></td><td><span className={`pending-days ${!closed && days > 7 ? "danger" : !closed && days >= 3 ? "warning" : "ok"}`}>{closed ? "Cerrada" : `${days} días`}</span><small>{request.pickupDate ? `Recogido: ${displayDate(request.pickupDate)}` : "Pendiente de recojo"}</small></td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td><td><button className="secondary-button trace-button" disabled={!canOperate} onClick={() => setTracking(request)}><ClipboardList size={14} />Actualizar</button></td></tr>; })}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>Solicitud</th><th>Coordinador F1</th><th>Pedido / Destino</th><th>Contrata / Recojo</th><th>Equipos solicitados</th><th>GR / Ticket / Fotos</th><th>Envío / Llegada</th><th>Días pendientes</th><th>Estado</th><th>Seguimiento</th></tr></thead><tbody>{loading ? <tr><td colSpan={10}><Empty text="Cargando solicitudes..." /></td></tr> : !groupedRequests.length ? <tr><td colSpan={10}><Empty text="Las solicitudes de los coordinadores F1 aparecerán aquí." /></td></tr> : groupedRequests.map((group) => { const request = group[0]; const days = pendingDays(request); const closed = ["CERRADA", "RECOGIDA", "RECHAZADA"].includes(request.status); return <tr key={request.requestCode}><td><strong>{request.requestCode}</strong><small>{displayDate(request.createdAt)}</small></td><td><strong>{request.coordinatorName}</strong><small>{request.coordinatorEmail || "Sin correo"}</small></td><td><strong>{request.orderNumber}</strong><small>{request.site || request.project || "Sin site"}</small><small>{[request.region, request.city].filter(Boolean).join(" · ") || "Sin región/ciudad"}</small></td><td><strong>{request.contractorBusinessName || "Sin razón social"}</strong><small>RUC: {request.contractorRuc || "—"}</small><small>Recoge: {request.pickupPerson || "—"}</small></td><td>{group.map((row) => { const product = productMap.get(row.productId); return <span className="request-line" key={row.id}><strong>{product?.sku || `Producto ${row.productId}`}</strong><small>{row.quantity} {product?.unit || "UND"} · {product?.description}</small><small>Serie/Lote: {row.seriesLot || "Sin registro"}</small></span>; })}</td><td><strong>{request.outboundGuide || "Sin GR"}</strong><small>{request.shippingTicket ? `Ticket: ${request.shippingTicket}` : "Sin ticket de envío"}</small><GrLinkCell link={request.outboundGuideLink} /><span className="evidence-links">{request.outboundGuidePhoto && <a href={request.outboundGuidePhoto} target="_blank" rel="noreferrer">Foto GR</a>}{request.shippingTicketPhoto && <a href={request.shippingTicketPhoto} target="_blank" rel="noreferrer">Foto ticket</a>}</span></td><td><strong>{request.sentDate ? displayDate(request.sentDate) : "Sin fecha de envío"}</strong><small>{request.arrivalDate ? `Llegó: ${displayDate(request.arrivalDate)}` : "Llegada pendiente"}</small></td><td><span className={`pending-days ${!closed && days > 7 ? "danger" : !closed && days >= 3 ? "warning" : "ok"}`}>{closed ? "Cerrada" : `${days} días`}</span><small>{request.pickupDate ? `Recogido: ${displayDate(request.pickupDate)}` : "Pendiente de recojo"}</small></td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td><td><button className="secondary-button trace-button" disabled={!canOperate} onClick={() => setTracking(request)}><ClipboardList size={14} />Actualizar</button></td></tr>; })}</tbody></table></div>
     </section>
     {tracking && <RequestTrackingModal request={tracking} saving={saving} onClose={() => setTracking(null)} onSave={async (payload) => { const ok = await onSave(payload, "Seguimiento logístico actualizado."); if (ok) setTracking(null); }} />}
   </>;
 }
 
+async function compressEvidencePhoto(file: File) {
+  if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) throw new Error("Usa una foto JPG, PNG o WEBP.");
+  if (file.size > 8_000_000) throw new Error("La foto original supera 8 MB.");
+  const source = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("No se pudo leer la foto."));
+    reader.readAsDataURL(file);
+  });
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("No se pudo procesar la foto."));
+    element.src = source;
+  });
+  const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const compressed = canvas.toDataURL("image/jpeg", 0.78);
+  if (compressed.length > 2_500_000) throw new Error("La foto sigue siendo muy pesada. Toma otra con menor resolución.");
+  return compressed;
+}
+
 function RequestTrackingModal({ request, saving, onClose, onSave }: { request: EquipmentRequest; saving: boolean; onClose: () => void; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
+  const [outboundGuidePhoto, setOutboundGuidePhoto] = useState(request.outboundGuidePhoto || "");
+  const [shippingTicketPhoto, setShippingTicketPhoto] = useState(request.shippingTicketPhoto || "");
+  const [photoError, setPhotoError] = useState("");
+  const [compressing, setCompressing] = useState(false);
+
+  async function loadPhoto(file: File | undefined, setter: (value: string) => void) {
+    if (!file) return;
+    setPhotoError("");
+    setCompressing(true);
+    try {
+      setter(await compressEvidencePhoto(file));
+    } catch (error) {
+      setPhotoError(error instanceof Error ? error.message : "No se pudo procesar la foto.");
+    } finally {
+      setCompressing(false);
+    }
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void onSave(Object.fromEntries(new FormData(event.currentTarget).entries()));
+    void onSave({ ...Object.fromEntries(new FormData(event.currentTarget).entries()), outboundGuidePhoto, shippingTicketPhoto });
   }
-  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">SEGUIMIENTO LOGÍSTICO</span><h2>{request.requestCode}</h2><p>Estos datos no modifican stock ni crean movimientos.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="requestLogistics" /><input type="hidden" name="requestCode" value={request.requestCode} /><div className="form-grid"><label className="field"><span>Estado *</span><select name="status" defaultValue={request.status}><option>PENDIENTE</option><option>VALIDADA</option><option>DESPACHADA</option><option>EN_TRANSITO</option><option>LISTA_RECOJO</option><option>RECOGIDA</option><option>CERRADA</option><option>RECHAZADA</option></select></label><label className="field"><span>Nro. GR de salida</span><input name="outboundGuide" defaultValue={request.outboundGuide} /></label><label className="field field-wide"><span>Link GR de salida</span><input name="outboundGuideLink" defaultValue={request.outboundGuideLink} placeholder="Vínculo SharePoint o nombre del archivo" /></label><label className="field"><span>Ticket de envío</span><input name="shippingTicket" defaultValue={request.shippingTicket} /></label><label className="field"><span>Clave</span><input name="shippingKey" defaultValue={request.shippingKey} /></label><label className="field"><span>Fecha de envío</span><input name="sentDate" type="date" defaultValue={request.sentDate} /></label><label className="field"><span>Fecha de llegada</span><input name="arrivalDate" type="date" defaultValue={request.arrivalDate} /></label><label className="field"><span>Fecha de recojo</span><input name="pickupDate" type="date" defaultValue={request.pickupDate} /></label><label className="field field-wide"><span>Notas de seguimiento</span><textarea name="logisticsNotes" rows={3} defaultValue={request.logisticsNotes} placeholder="Incidencias, contacto, recordatorio..." /></label></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : "Guardar seguimiento"}</button></div></form></div></div>;
+  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">SEGUIMIENTO LOGÍSTICO</span><h2>{request.requestCode}</h2><p>Estos datos no modifican stock ni crean movimientos.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="requestLogistics" /><input type="hidden" name="requestCode" value={request.requestCode} /><div className="form-grid"><label className="field"><span>Estado *</span><select name="status" defaultValue={request.status}><option>PENDIENTE</option><option>VALIDADA</option><option>DESPACHADA</option><option>EN_TRANSITO</option><option>LISTA_RECOJO</option><option>RECOGIDA</option><option>CERRADA</option><option>RECHAZADA</option></select></label><label className="field"><span>Nro. GR de salida</span><input name="outboundGuide" defaultValue={request.outboundGuide} /></label><label className="field field-wide"><span>Link GR de salida</span><input name="outboundGuideLink" defaultValue={request.outboundGuideLink} placeholder="Vínculo SharePoint o nombre del archivo" /></label><label className="field"><span>Foto de la GR de despacho</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setOutboundGuidePhoto)} /><small>{outboundGuidePhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{outboundGuidePhoto && <span className="photo-actions"><a href={outboundGuidePhoto} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setOutboundGuidePhoto("")}>Quitar</button></span>}</label><label className="field"><span>Ticket de envío</span><input name="shippingTicket" defaultValue={request.shippingTicket} /></label><label className="field"><span>Foto del ticket de envío</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setShippingTicketPhoto)} /><small>{shippingTicketPhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{shippingTicketPhoto && <span className="photo-actions"><a href={shippingTicketPhoto} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setShippingTicketPhoto("")}>Quitar</button></span>}</label><label className="field"><span>Clave</span><input name="shippingKey" defaultValue={request.shippingKey} /></label><label className="field"><span>Fecha de envío</span><input name="sentDate" type="date" defaultValue={request.sentDate} /></label><label className="field"><span>Fecha de llegada</span><input name="arrivalDate" type="date" defaultValue={request.arrivalDate} /></label><label className="field"><span>Fecha de recojo</span><input name="pickupDate" type="date" defaultValue={request.pickupDate} /></label><label className="field field-wide"><span>Notas de seguimiento</span><textarea name="logisticsNotes" rows={3} defaultValue={request.logisticsNotes} placeholder="Incidencias, contacto, recordatorio..." /></label></div>{photoError && <div className="inline-error">{photoError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || compressing}>{compressing ? "Procesando fotos..." : saving ? "Guardando..." : "Guardar seguimiento"}</button></div></form></div></div>;
 }
 
 function SettingsView({ data, saving, onSave }: { data: KardexData; saving: boolean; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
@@ -1409,17 +1527,28 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       const orderNumber = bulkRowValue(row, "N° Pedido", "Pedido");
       const coordinator = bulkRowValue(row, "Coordinador Entel", "CordEntelFinal");
       const coordinatorF1 = bulkRowValue(row, "Coordinador F1", "CordF1");
-      const serials = bulkRowValue(row, "Serie/Lote", "Serie").toUpperCase();
+      let serials = bulkRowValue(row, "Serie/Lote", "Serie").toUpperCase();
       const document = bulkRowValue(row, movementType === "entrada" ? "GR. de Ingreso" : "NroGRSalida", "GR. de Salida").toUpperCase();
       const sourceRow = bulkRowValue(row, "ITEM", "Fila").toUpperCase();
+      const origin = bulkRowValue(row, "Proviene", "Origen");
+      const requestedLotMode = bulkRowValue(row, "Modo de Lote", "Modo Lote", "Asignación de Lote", "Asignacion de Lote").toUpperCase();
+      const movementDate = normalizeKardexDate(bulkRowValue(row, movementType === "entrada" ? "Fecha de Ingreso" : "Fecha Salida", "Fecha de Salida", "Fecha"), today());
       const quantity = Math.max(1, bulkNumberValue(row, "Cantidad") || 1);
       const product = productsBySku.get(sku);
       const rowUnitCostCents = Math.max(0, Math.round(bulkNumberValue(row, "Costo") * 100));
       const unitCostCents = rowUnitCostCents || product?.unitCostCents || 0;
       const rowNumber = bulkRowValue(row, "ITEM", "Fila") || String(index + 2);
       let reason = "";
+      let autoLotGenerated = false;
 
-      if (!sku) reason = "Falta el SKU.";
+      if (movementType === "entrada" && !serials && requestedLotMode.includes("MANUAL")) {
+        reason = "Elegiste lote manual, pero falta Serie/Lote.";
+      } else if (movementType === "entrada" && !serials && (requestedLotMode.includes("AUTO") || origin.toUpperCase().includes("TRANSFER"))) {
+        serials = automaticPreviewLotCode({ movementDate, orderNumber, sku, sourceRow: sourceRow || rowNumber });
+        autoLotGenerated = true;
+      }
+
+      if (!reason && !sku) reason = "Falta el SKU.";
       else if (movementType === "maestro" && !description) reason = "Falta la descripción del SKU.";
       else if (movementType === "maestro" && !equipmentType) reason = "Falta el tipo de equipo.";
       else if (movementType !== "maestro" && (!orderNumber || !coordinator)) reason = "Faltan N° Pedido o Coordinador Entel.";
@@ -1492,7 +1621,7 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
         quantity,
         totalCostCents: movementType === "maestro" ? 0 : unitCostCents * quantity,
         accepted: !reason,
-        reason: reason || "Lista para cargar",
+        reason: reason || (autoLotGenerated ? "Lote automático de transferencia; se generará al confirmar." : "Lista para cargar"),
       };
     });
   }, [movements, movementType, products, rows]);
@@ -1613,7 +1742,7 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
   async function downloadTemplate() {
     const XLSX = await import("xlsx");
     const row = movementType === "entrada" ? {
-      Fila: 1, Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Estado de Equipo": "NUEVO", Condición: "OPERATIVO", Proyecto: "ENTEL", Proviene: "MO COMPANY", "Fecha de Ingreso": today(), "GR. de Ingreso": "GR-ING-001", "Link de GR. de Ingreso": "https://ejemplo.com/gr-ingreso.pdf", "N° Pedido": "PED-001", "Coordinador Entel": "COORDINADOR ENTEL", "Coordinador F1": "COORDINADOR F1", "Site Origen": "MO COMPANY", Ubicación: "MO COMPANY", "Serie/Lote": "SERIE001", "Unidad de Medida": "UND", Cantidad: 1, Costo: 100, "Tipo de Equipo": "EQUIPO", "Cargar Gr": "SI",
+      Fila: 1, Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Estado de Equipo": "NUEVO", Condición: "OPERATIVO", Proyecto: "ENTEL", Proviene: "MO COMPANY", "Fecha de Ingreso": today(), "GR. de Ingreso": "GR-ING-001", "Link de GR. de Ingreso": "https://ejemplo.com/gr-ingreso.pdf", "N° Pedido": "PED-001", "Coordinador Entel": "COORDINADOR ENTEL", "Coordinador F1": "COORDINADOR F1", "Site Origen": "MO COMPANY", Ubicación: "MO COMPANY", "Serie/Lote": "SERIE001", "Modo de Lote": "MANUAL", "Unidad de Medida": "UND", Cantidad: 1, Costo: 100, "Tipo de Equipo": "EQUIPO", "Cargar Gr": "SI",
     } : movementType === "salida" ? {
       ITEM: 1,
       "Fecha Salida": today(),
@@ -1709,10 +1838,10 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       <div className="upload-actions"><button className="secondary-button" onClick={() => void downloadTemplate()}><Download size={16} />Plantilla de {operationLabel}</button><button className={`primary-button ${movementType === "salida" ? "danger-button" : ""} ${loadComplete ? "load-complete-button" : ""}`} disabled={!acceptedPreviewRows.length || saving || loadComplete} onClick={() => void submitBulk()}>{saving ? "Procesando..." : loadComplete ? "✓ Carga completada" : `Cargar ${acceptedPreviewRows.length || ""} líneas aprobadas`}</button></div>
     </div>
     <aside className="panel mapping-panel">
-      <div className="panel-title"><div><h2>{movementType === "entrada" ? "20 campos de ingresos" : movementType === "salida" ? "26 campos de salidas" : "3 campos del maestro"}</h2><p>Plantilla diferenciada por proceso</p></div></div>
+      <div className="panel-title"><div><h2>{movementType === "entrada" ? "21 campos de ingresos" : movementType === "salida" ? "26 campos de salidas" : "3 campos del maestro"}</h2><p>Plantilla diferenciada por proceso</p></div></div>
       <div className={`operation-summary ${movementType}`}><span>{movementType === "entrada" ? <ArrowDownLeft size={19} /> : movementType === "salida" ? <ArrowUpRight size={19} /> : <Boxes size={19} />}</span><div><strong>{movementType === "entrada" ? "Ingreso al inventario" : movementType === "salida" ? "Salida del inventario" : "Maestro de productos"}</strong><small>{movementType === "entrada" ? "Los SKU existentes conservan el nombre y tipo oficiales del maestro." : movementType === "salida" ? "Acepta exactamente la estructura de tu Excel de despachos." : "Carga SKU, descripción oficial y tipo de equipo."}</small></div></div>
       <ul>{movementType === "entrada" ? <>
-        <li><b>Identificación</b><span>Fila, Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Estado y asignación</b><span>Estado de Equipo, Condición y Proyecto</span></li><li><b>Recepción</b><span>Proviene, Fecha de Ingreso y GR. de Ingreso</span></li><li><b>Responsables</b><span>Coordinador Entel y Coordinador F1</span></li><li><b>Trazabilidad</b><span>N° Pedido, Site Origen y Serie/Lote</span></li><li><b>Valorización</b><span>Unidad de Medida, Cantidad y costo opcional; si falta, usa Stock Contrata Entel</span></li><li><b>Evidencia</b><span>Cargar Gr y Link de GR. de Ingreso</span></li>
+        <li><b>Identificación</b><span>Fila, Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Estado y asignación</b><span>Estado de Equipo, Condición y Proyecto</span></li><li><b>Recepción</b><span>Proviene, Fecha de Ingreso y GR. de Ingreso</span></li><li><b>Responsables</b><span>Coordinador Entel y Coordinador F1</span></li><li><b>Trazabilidad</b><span>N° Pedido, Site Origen, Serie/Lote y Modo de Lote opcional</span></li><li><b>Transferencias</b><span>Si Serie/Lote está vacío y Proviene contiene “Transferencia”, el sistema genera un lote TRF automático.</span></li><li><b>Valorización</b><span>Unidad de Medida, Cantidad y costo opcional; si falta, usa Stock Contrata Entel</span></li><li><b>Evidencia</b><span>Cargar Gr y Link de GR. de Ingreso</span></li>
       </> : movementType === "salida" ? <>
         <li><b>Despacho</b><span>ITEM, Fecha Salida, NroGRSalida, IDDespacho y Link de GR</span></li>
         <li><b>Equipo</b><span>Sku, Descripción Sku, Serie/Lote, Cantidad, UnidadMedida y Tipo de Equipo</span></li>
@@ -1723,6 +1852,7 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       </> : <>
         <li><b>Campos obligatorios</b><span>Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Fuente oficial</b><span>Ingresos y salidas se relacionan por SKU y muestran estos nombres.</span></li><li><b>Correcciones</b><span>Al actualizar el maestro, el nuevo nombre se refleja en todo el historial.</span></li>
       </>}</ul>
+      {movementType !== "maestro" && <div className="mapping-note"><ShieldCheck size={17} /><span><b>Control de duplicados:</b> una GR o pedido puede contener varias líneas. Solo se rechaza la misma combinación de SKU + pedido + coordinador + GR + serie/lote (o fila del archivo).</span></div>}
       <div className="storage-note"><Database size={18} /><div><strong>¿Dónde se almacena?</strong><span>Maestro SKU en Productos; ingresos y salidas en el Historial de movimientos.</span></div></div>
       <div className="mapping-note"><AlertTriangle size={17} /><span>{movementType === "entrada" ? "Los ingresos suman stock y agrupan todos los SKU del mismo pedido/coordinador. Si el SKU ya existe, el Excel no reemplaza su descripción ni su tipo." : movementType === "salida" ? "Las salidas validan SKU + N° Pedido + CordEntelFinal + Serie/Lote antes de descontar." : "Usa esta plantilla como catálogo oficial. Los SKU faltantes todavía pueden crearse desde un ingreso y luego corregirse en el maestro."}</span></div>
     </aside>
@@ -1745,8 +1875,8 @@ function FlowChart({ movements }: { movements: Movement[] }) {
 
 function StockAlerts({ products, hasMovements }: { products: Product[]; hasMovements: boolean }) {
   const alerts = products.slice(0, 4);
-  if (!alerts.length) return <Empty text={hasMovements ? "No hay lotes en su nivel mínimo." : "Las alertas se activarán después de registrar ingresos y salidas."} compact />;
-  return <div className="alert-list">{alerts.map((product) => <div className="alert-item" key={product.id}><span className="alert-icon"><AlertTriangle size={17} /></span><div><strong>{product.description}</strong><small>{product.sku} · Mínimo {product.minStock}</small></div><b>{product.stock} {product.unit}</b></div>)}</div>;
+  if (!alerts.length) return <Empty text={hasMovements ? "No hay SKU con series o lotes en su nivel mínimo." : "Las alertas se activarán después de registrar ingresos y salidas."} compact />;
+  return <div className="alert-list">{alerts.map((product) => <div className="alert-item" key={product.id}><span className="alert-icon"><AlertTriangle size={17} /></span><div><strong>{product.description}</strong><small>{product.sku} · Serie/Lote · Mínimo {product.minStock}</small></div><b>{product.stock} {product.unit}</b></div>)}</div>;
 }
 
 function Empty({ text, compact = false }: { text: string; compact?: boolean }) {
@@ -1755,6 +1885,7 @@ function Empty({ text, compact = false }: { text: string; compact?: boolean }) {
 
 function MovementModal({ products, coordinators, initialType, warehouse, saving, onClose, onSave, onNewProduct }: { products: Product[]; coordinators: Coordinator[]; initialType: Movement["type"]; warehouse: string; saving: boolean; onClose: () => void; onSave: (payload: Record<string, unknown>) => void; onNewProduct: () => void }) {
   const [type, setType] = useState<Movement["type"]>(initialType);
+  const [lotAssignment, setLotAssignment] = useState<"MANUAL" | "AUTOMATICO">("MANUAL");
   const singleUnit = type === "entrada" || type === "salida";
   const entelCoordinators = coordinators.filter((coordinator) => coordinator.organization === "ENTEL" && coordinator.active);
   const f1Coordinators = coordinators.filter((coordinator) => coordinator.organization === "F1" && coordinator.active);
@@ -1775,7 +1906,8 @@ function MovementModal({ products, coordinators, initialType, warehouse, saving,
       {products.length === 0 ? <div className="no-products"><PackagePlus size={24} /><div><strong>Primero registra un SKU</strong><p>Necesitas un producto en Maestro_Equipos para crear movimientos.</p></div><button type="button" className="secondary-button" onClick={onNewProduct}>Crear producto</button></div> : <>
         <div className="form-grid">
           <label className="field field-wide"><span>SKU / Producto *</span><select name="productId" required defaultValue=""><option value="" disabled>Selecciona un SKU</option>{products.map((product) => <option value={product.id} key={product.id}>{product.sku} — {product.description} (Disponible: {product.stock})</option>)}</select></label>
-          <label className="field"><span>Serie / Lote</span><input name="serials" placeholder="Serie única o lote" /></label>
+          {type === "entrada" && <label className="field"><span>Asignación de Serie/Lote</span><select name="lotAssignment" value={lotAssignment} onChange={(event) => setLotAssignment(event.target.value as "MANUAL" | "AUTOMATICO")}><option value="MANUAL">Manual</option><option value="AUTOMATICO">Automática para transferencia</option></select><small>Automática genera un código TRF repetible para detectar duplicados.</small></label>}
+          <label className="field"><span>Serie / Lote {type === "entrada" && lotAssignment === "MANUAL" ? "*" : ""}</span><input name="serials" required={type === "entrada" && lotAssignment === "MANUAL"} disabled={type === "entrada" && lotAssignment === "AUTOMATICO"} placeholder={type === "entrada" && lotAssignment === "AUTOMATICO" ? "Se generará al guardar" : "Serie única o lote"} /></label>
           <label className="field"><span>Cantidad *</span><input name="quantity" type="number" min="1" max={singleUnit ? 1 : undefined} step="1" required readOnly={singleUnit} defaultValue={1} /><small>{singleUnit ? "Registro unitario; para varias líneas usa Carga masiva." : "Cantidad solicitada."}</small></label>
           <label className="field"><span>Fecha *</span><input name="movementDate" type="date" required defaultValue={today()} /></label>
           <label className="field"><span>N° Pedido/Cod. Oracle {type === "entrada" || type === "salida" ? "*" : ""}</span><input name="orderNumber" required={type === "entrada" || type === "salida"} placeholder="Pedido Entel / código Oracle" /></label>

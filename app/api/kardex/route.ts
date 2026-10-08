@@ -42,6 +42,7 @@ type MovementInput = {
   coordinator?: string;
   coordinatorF1?: string;
   serials?: string;
+  lotAssignment?: "ORIGINAL" | "MANUAL" | "AUTOMATICO";
   sourceRow?: string;
   originSite?: string;
   stockLocation?: string;
@@ -151,9 +152,14 @@ type EquipmentRequestInput = {
   project?: string;
   site?: string;
   warehouse?: string;
+  contractorRuc?: string;
+  contractorBusinessName?: string;
+  pickupPerson?: string;
+  region?: string;
+  city?: string;
   neededDate?: string;
   notes?: string;
-  items?: Array<{ productId?: number; quantity?: number }>;
+  items?: Array<{ productId?: number; quantity?: number; seriesLot?: string }>;
 };
 
 type RequestStatusInput = {
@@ -170,7 +176,9 @@ type RequestLogisticsInput = {
   status?: RequestStatus;
   outboundGuide?: string;
   outboundGuideLink?: string;
+  outboundGuidePhoto?: string;
   shippingTicket?: string;
+  shippingTicketPhoto?: string;
   shippingKey?: string;
   sentDate?: string;
   arrivalDate?: string;
@@ -228,6 +236,33 @@ function normalizeGrLink(value: unknown) {
   if (/^https?:\/\//i.test(link)) return link;
   if (/^(www\.|[^/\s]+\.sharepoint\.com\/)/i.test(link)) return `https://${link}`;
   return link;
+}
+
+function normalizeEvidenceImage(value: unknown) {
+  const image = clean(value);
+  if (!image) return "";
+  if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(image)) {
+    throw new Error("La evidencia debe ser una foto JPG, PNG o WEBP.");
+  }
+  if (image.length > 2_500_000) {
+    throw new Error("La foto supera el tamaño permitido. Usa una imagen menor a 2 MB.");
+  }
+  return image;
+}
+
+function lotTokenPart(value: unknown, fallback: string) {
+  return clean(value).toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || fallback;
+}
+
+function automaticLotCode({ movementDate, orderNumber, sku, sourceRow }: { movementDate: string; orderNumber: string; sku: string; sourceRow: string }) {
+  return [
+    "TRF",
+    movementDate.replace(/\D/g, "").slice(0, 8) || "SINFECHA",
+    lotTokenPart(orderNumber, "SINPEDIDO"),
+    lotTokenPart(sku, "SINSKU"),
+    lotTokenPart(sourceRow, "1"),
+  ].join("-");
 }
 
 function auditUnitCosts(rows: Array<{ source: string; sku: string; quantity: number; totalCostCents: number }>) {
@@ -379,6 +414,7 @@ export async function GET(request: Request) {
         coordinator: movements.coordinator,
         coordinatorF1: movements.coordinatorF1,
         serials: movements.serials,
+        lotAssignment: movements.lotAssignment,
         sourceRow: movements.sourceRow,
         originSite: movements.originSite,
         stockLocation: movements.stockLocation,
@@ -513,17 +549,30 @@ export async function POST(request: Request) {
       const requestPayload = payload as EquipmentRequestInput;
       const coordinatorName = clean(requestPayload.coordinatorName).toUpperCase();
       const orderNumber = clean(requestPayload.orderNumber);
+      const contractorRuc = clean(requestPayload.contractorRuc).replace(/\D/g, "");
+      const contractorBusinessName = clean(requestPayload.contractorBusinessName).toUpperCase();
+      const pickupPerson = clean(requestPayload.pickupPerson).toUpperCase();
+      const region = clean(requestPayload.region).toUpperCase();
+      const city = clean(requestPayload.city).toUpperCase();
       const items = Array.isArray(requestPayload.items) ? requestPayload.items.slice(0, 30) : [];
       if (!coordinatorName || !orderNumber || !items.length) {
         return Response.json({ error: "Coordinador, N° Pedido y al menos un equipo son obligatorios." }, { status: 400 });
       }
+      if (!/^\d{11}$/.test(contractorRuc) || !contractorBusinessName || !pickupPerson || !region || !city) {
+        return Response.json({ error: "Completa RUC de 11 dígitos, razón social, persona que recoge, región y ciudad." }, { status: 400 });
+      }
       const normalizedItems = items.map((item) => ({
         productId: Number(item.productId),
         quantity: Math.max(1, Math.round(Number(item.quantity) || 1)),
+        seriesLot: clean(item.seriesLot).toUpperCase(),
       })).filter((item) => item.productId > 0);
       if (!normalizedItems.length) return Response.json({ error: "No se encontraron equipos válidos en la solicitud." }, { status: 400 });
-      const requestedByProduct = new Map<number, number>();
-      normalizedItems.forEach((item) => requestedByProduct.set(item.productId, (requestedByProduct.get(item.productId) ?? 0) + item.quantity));
+      const requestedByControl = new Map<string, { productId: number; seriesLot: string; quantity: number }>();
+      normalizedItems.forEach((item) => {
+        const key = `${item.productId}::${item.seriesLot}`;
+        const current = requestedByControl.get(key);
+        requestedByControl.set(key, { ...item, quantity: (current?.quantity ?? 0) + item.quantity });
+      });
       const uniqueProductIds = [...new Set(normalizedItems.map((item) => item.productId))];
       const availableProducts = await Promise.all(uniqueProductIds.map((id) => db.select().from(products).where(eq(products.id, id)).limit(1)));
       if (availableProducts.some((rows) => !rows[0])) return Response.json({ error: "Uno de los SKU solicitados ya no existe." }, { status: 404 });
@@ -537,15 +586,18 @@ export async function POST(request: Request) {
       }
       const movementRows = await db.select().from(movements);
       const normalizedOrder = orderNumber.toUpperCase();
-      for (const [productId, requestedQuantity] of requestedByProduct) {
+      for (const item of requestedByControl.values()) {
+        const { productId, requestedQuantity, seriesLot } = { productId: item.productId, requestedQuantity: item.quantity, seriesLot: item.seriesLot };
         const orderRows = movementRows.filter((row) => row.productId === productId && clean(row.orderNumber).toUpperCase() === normalizedOrder);
         const hasIngreso = orderRows.some((row) => ["entrada", "devolucion", "regularizacion"].includes(row.type));
-        const available = orderRows.reduce((total, row) => total + stockEffect(row.type) * row.quantity, 0);
+        const available = seriesLot
+          ? orderRows.reduce((total, row) => total + stockEffect(row.type) * trackedSeriesQuantity(row.serials, row.quantity, seriesLot), 0)
+          : orderRows.filter((row) => !splitSeries(row.serials).length).reduce((total, row) => total + stockEffect(row.type) * row.quantity, 0);
         if (!hasIngreso) return Response.json({ error: `El SKU seleccionado no tiene un ingreso asociado al pedido ${orderNumber}.` }, { status: 409 });
-        if (requestedQuantity > available) return Response.json({ error: `Stock insuficiente para el pedido ${orderNumber}. Disponible: ${Math.max(0, available)}.` }, { status: 409 });
+        if (requestedQuantity > available) return Response.json({ error: `Stock insuficiente para ${seriesLot || "stock sin serie/lote"} del pedido ${orderNumber}. Disponible: ${Math.max(0, available)}.` }, { status: 409 });
       }
       const requestCode = `SOL-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(Date.now()).slice(-6)}`;
-      const created = await db.insert(equipmentRequests).values([...requestedByProduct].map(([productId, quantity]) => ({
+      const created = await db.insert(equipmentRequests).values([...requestedByControl.values()].map(({ productId, quantity, seriesLot }) => ({
         requestCode,
         coordinatorName,
         coordinatorEmail: clean(requestPayload.coordinatorEmail).toLowerCase() || coordinatorMatch?.email || "",
@@ -555,6 +607,12 @@ export async function POST(request: Request) {
         warehouse: "MO Company",
         productId,
         quantity,
+        seriesLot,
+        contractorRuc,
+        contractorBusinessName,
+        pickupPerson,
+        region,
+        city,
         neededDate: normalizeKardexDate(requestPayload.neededDate),
         notes: clean(requestPayload.notes),
       }))).returning();
@@ -582,7 +640,9 @@ export async function POST(request: Request) {
         status,
         outboundGuide: clean(logisticsPayload.outboundGuide),
         outboundGuideLink: normalizeGrLink(logisticsPayload.outboundGuideLink),
+        outboundGuidePhoto: logisticsPayload.outboundGuidePhoto === undefined ? undefined : normalizeEvidenceImage(logisticsPayload.outboundGuidePhoto),
         shippingTicket: clean(logisticsPayload.shippingTicket),
+        shippingTicketPhoto: logisticsPayload.shippingTicketPhoto === undefined ? undefined : normalizeEvidenceImage(logisticsPayload.shippingTicketPhoto),
         shippingKey: clean(logisticsPayload.shippingKey),
         sentDate: normalizeKardexDate(logisticsPayload.sentDate),
         arrivalDate: normalizeKardexDate(logisticsPayload.arrivalDate),
@@ -827,7 +887,7 @@ export async function POST(request: Request) {
       const rejected: Array<{ row: number; sku: string; reason: string }> = [];
       for (const [rowIndex, row] of rows.entries()) {
         const sku = clean(rowValue(row, "Sku", "SKU")).toUpperCase();
-        const seriesLot = clean(rowValue(row, "Serie/Lote", "Serie", "seriesLot")).toUpperCase();
+        let seriesLot = clean(rowValue(row, "Serie/Lote", "Serie", "seriesLot")).toUpperCase();
         const description = clean(rowValue(row, "Descripción Sku", "Descripción", "description"));
         const quantity = Math.max(1, numeric(rowValue(row, "Cantidad", "quantity")) || 1);
         const unitMeasure = clean(rowValue(row, "Unidad de Medida", "UnidadMedida", "Unidad", "unit")) || "UND";
@@ -835,6 +895,8 @@ export async function POST(request: Request) {
         const equipmentTypeFromFile = clean(rowValue(row, "Tipo de Equipo", "Categoría", "category"));
         const equipmentType = equipmentTypeFromFile || "Equipos";
         const project = clean(rowValue(row, "Proyecto", "ProyectoFinal", "project"));
+        const origin = clean(rowValue(row, "Proviene", "Origen")) || "MO COMPANY";
+        const requestedLotMode = clean(rowValue(row, "Modo de Lote", "Modo Lote", "Asignación de Lote", "Asignacion de Lote")).toUpperCase();
         const originSite = clean(rowValue(row, "Site Origen", "originSite"));
         const stockLocation = normalizeStockLocation(rowValue(row, "Ubicación", "Ubicacion", "Almacén", "Almacen", "stockLocation"));
         const orderNumber = clean(rowValue(row, "N° Pedido", "N Pedido", "Pedido", "orderNumber"));
@@ -846,6 +908,17 @@ export async function POST(request: Request) {
         );
         const document = clean(rowValue(row, movementType === "entrada" ? "GR. de Ingreso" : "NroGRSalida", "GR. de Salida", "GR Ingreso", "GR Salida", "Guía", "document"));
         const sourceRow = clean(rowValue(row, "Fila", "ITEM"));
+        let lotAssignment = "ORIGINAL";
+        if (movementType === "entrada" && !seriesLot && requestedLotMode.includes("MANUAL")) {
+          rejected.push({ row: rowIndex + 2, sku: sku || "—", reason: "Elegiste lote manual, pero falta Serie/Lote." });
+          continue;
+        }
+        if (movementType === "entrada" && !seriesLot && (requestedLotMode.includes("AUTO") || origin.toUpperCase().includes("TRANSFER"))) {
+          seriesLot = automaticLotCode({ movementDate, orderNumber, sku, sourceRow: sourceRow || String(rowIndex + 2) });
+          lotAssignment = "AUTOMATICO";
+        } else if (seriesLot && requestedLotMode.includes("MANUAL")) {
+          lotAssignment = "MANUAL";
+        }
         const grLink = normalizeGrLink(rowValue(row, "Link de GR", "Link GR", "Link de GR. de Ingreso"));
         const fileCostCents = Math.round(unitCost * 100);
         const entelCostCents = entelCostBySku.get(sku) || 0;
@@ -985,6 +1058,7 @@ export async function POST(request: Request) {
             coordinator,
             coordinatorF1,
             serials: seriesLot,
+            lotAssignment,
             sourceRow,
             originSite,
             stockLocation,
@@ -997,7 +1071,7 @@ export async function POST(request: Request) {
             ticket: clean(rowValue(row, "Ticket/JIRA", "Ticket", "JIRA")),
             equipmentStatus: clean(rowValue(row, "Estado de Equipo", "Estado")) || "NUEVO",
             condition: clean(rowValue(row, "Condición", "Condicion")) || "OPERATIVO",
-            origin: clean(rowValue(row, "Proviene", "Origen")) || "MO COMPANY",
+            origin,
             owner: clean(rowValue(row, "Propietario F1", "Propietario")) || "F1 SERVICES",
             recordStatus: movementType === "salida" ? "Despachado" : "Disponible",
             region: clean(rowValue(row, "Region", "Región")),
@@ -1062,12 +1136,27 @@ export async function POST(request: Request) {
     const productMovements = await db.select().from(movements).where(eq(movements.productId, productId));
     const movementDate = normalizeKardexDate(movementPayload.movementDate, new Date().toISOString().slice(0, 10));
     const document = clean(movementPayload.document);
-    const serials = clean(movementPayload.serials).toUpperCase();
+    const origin = clean(movementPayload.origin) || "MO COMPANY";
+    const sourceRow = clean(movementPayload.sourceRow);
+    let serials = clean(movementPayload.serials).toUpperCase();
+    let lotAssignment = clean(movementPayload.lotAssignment).toUpperCase();
+    if (type === "entrada" && !serials && lotAssignment === "MANUAL") {
+      return Response.json({ error: "Ingresa el número de lote manual o cambia la asignación a automática." }, { status: 400 });
+    }
+    if (type === "entrada" && !serials && (lotAssignment === "AUTOMATICO" || origin.toUpperCase().includes("TRANSFER"))) {
+      serials = automaticLotCode({ movementDate, orderNumber, sku: product.sku, sourceRow: sourceRow || "1" });
+      lotAssignment = "AUTOMATICO";
+    } else if (serials && lotAssignment === "MANUAL") {
+      lotAssignment = "MANUAL";
+    } else {
+      lotAssignment = "ORIGINAL";
+    }
     const duplicateMovement = productMovements.some((row) => row.type === type
       && sameControlGroup(row, orderNumber, coordinator)
-      && Boolean(serials)
-      && clean(row.serials).toUpperCase() === serials
-      && (!document || clean(row.document).toUpperCase() === document.toUpperCase()));
+      && (!document || clean(row.document).toUpperCase() === document.toUpperCase())
+      && (serials
+        ? clean(row.serials).toUpperCase() === serials
+        : !clean(row.serials) && row.quantity === quantity && row.movementDate === movementDate));
     if (duplicateMovement) {
       return Response.json({ error: "Este movimiento ya fue registrado para la misma serie, pedido y GR." }, { status: 409 });
     }
@@ -1137,7 +1226,8 @@ export async function POST(request: Request) {
         coordinator,
         coordinatorF1,
         serials,
-        sourceRow: clean(movementPayload.sourceRow),
+        lotAssignment,
+        sourceRow,
         originSite: clean(movementPayload.originSite),
         stockLocation,
         unitMeasure: clean(movementPayload.unitMeasure) || product.unit,
@@ -1149,7 +1239,7 @@ export async function POST(request: Request) {
         ticket: clean(movementPayload.ticket),
         equipmentStatus: clean(movementPayload.equipmentStatus) || "NUEVO",
         condition: clean(movementPayload.condition) || "OPERATIVO",
-        origin: clean(movementPayload.origin) || "MO COMPANY",
+        origin,
         owner: clean(movementPayload.owner) || "F1 SERVICES",
         recordStatus: type === "salida" ? "Despachado" : type === "baja" ? "Baja" : "Disponible",
         region: clean(movementPayload.region),

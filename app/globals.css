@@ -321,5 +321,17 @@ button { cursor: pointer; }
 @media (max-width: 620px) { .mail-rules-head { align-items: flex-start; flex-wrap: wrap; }.mail-rules-head > div { min-width: calc(100% - 52px); }.mail-rules-head > b { margin-left: 50px; }.mail-rules-grid { grid-template-columns: 1fr; }.mail-rules-grid article + article { border-top: 1px solid #f0dfb9; border-left: 0; } }
 @media (max-width: 720px) { .stock-scope-tabs,.coordinator-cost-filter,.operational-controls { grid-template-columns: 1fr; }.coordinator-cost-filter > div { text-align: left; }.operational-export { width: 100%; }.bulk-preview-head { align-items: flex-start; flex-direction: column; }.bulk-preview-metrics { justify-content: flex-start; }.stock-trace-controls { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .request-item-builder,.cleanup-options,.cleanup-confirm { grid-template-columns: 1fr; }.request-item-builder .secondary-button,.cleanup-action { width: 100%; }.backup-card { flex-direction: column; }.request-cart > div { grid-template-columns: minmax(0,1fr) auto; }.request-cart > div .icon-button { grid-column: 2; grid-row: 1 / span 2; } }
+
+/* Solicitudes, evidencias y alertas de trazabilidad */
+.request-item-builder { grid-template-columns: minmax(250px,1.2fr) minmax(220px,1fr) 100px auto; }
+.trace-stock-select { min-width: 0; }
+.trace-stock-alert-panel { margin: 17px 0; overflow: hidden; }
+.status-pill.status-warning { background: #fff3d7; color: #9a6900; }
+.evidence-links,.photo-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.evidence-links a,.photo-actions a,.photo-actions button { display: inline-flex; align-items: center; min-height: 26px; padding: 0 8px; border: 1px solid #e1e5e8; border-radius: 6px; background: #fff; color: #d75d27; font: inherit; font-size: 8px; font-weight: 800; text-decoration: none; cursor: pointer; }
+.photo-actions button { color: #a74a45; }
+.inline-error { margin: 0 24px 12px; padding: 9px 11px; border: 1px solid #efc5c1; border-radius: 8px; background: #fff7f6; color: #a33f39; font-size: 9px; font-weight: 700; }
+@media (max-width: 1120px) { .request-item-builder { grid-template-columns: minmax(240px,1fr) minmax(210px,1fr); }.request-item-builder .secondary-button { grid-column: auto; } }
+@media (max-width: 620px) { .request-item-builder { grid-template-columns: 1fr; }.request-item-builder .secondary-button { grid-column: auto; } }
 @media (max-width: 900px) { .login-page { grid-template-columns: 1fr; }.login-brand-panel { min-height: 47vh; padding: 32px; }.login-message { padding: 60px 0 44px; }.login-message h1 { font-size: clamp(40px,10vw,68px); }.login-access-panel { min-height: 53vh; padding: 52px 28px; }.login-card { width: min(520px,100%); } }
 @media (max-width: 520px) { .login-brand-panel { min-height: 430px; padding: 25px 22px; }.login-brand-lockup img { width: 165px; }.login-message { padding: 55px 0 38px; }.login-message p { margin-bottom: 17px; font-size: 9px; }.login-message h1 { font-size: 40px; }.login-message > span { margin-top: 20px; font-size: 12px; }.login-brand-footer { align-items: flex-start; flex-direction: column; font-size: 8px; }.login-access-panel { padding: 44px 22px; }.login-card h2 { font-size: 32px; } }
