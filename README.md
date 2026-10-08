@@ -5,8 +5,9 @@ Aplicación de inventario, stock, movimientos, solicitudes, conciliación y audi
 ## Servicios de producción
 
 - Vercel: aplicación y API.
-- Neon PostgreSQL: datos e historial persistente.
-- Clerk: inicio de sesión con Google/Gmail.
+- Supabase PostgreSQL: datos e historial persistente.
+- Supabase Storage: fotos privadas de GR y tickets de envío.
+- Clerk: inicio de sesión e invitaciones por correo corporativo.
 - GitHub: código fuente y despliegue automático desde `main`.
 
 ## Variables de entorno
@@ -15,20 +16,23 @@ Copia `.env.example` a `.env.local` para desarrollo. En Vercel configura:
 
 ```text
 DATABASE_URL
+NEXT_PUBLIC_SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 CLERK_SECRET_KEY
 F1_ADMIN_EMAILS
 ```
 
-`F1_ADMIN_EMAILS` acepta uno o varios correos separados por comas. Esos correos ingresan inicialmente como Administrador y luego pueden registrar al resto del equipo en **Configuración → Usuarios y permisos**.
+`F1_ADMIN_EMAILS` acepta uno o varios correos separados por comas. Esas cuentas ingresan inicialmente como Administrador y luego pueden invitar usuarios `@f1.services` desde **Configuración → Usuarios y permisos**. La clave `SUPABASE_SERVICE_ROLE_KEY` es exclusivamente de servidor y nunca debe exponerse al navegador ni subirse al repositorio.
 
 ## Preparar producción en Vercel
 
 1. Conecta este repositorio al proyecto Vercel y usa `main` como rama de producción.
-2. Instala Neon desde Vercel Marketplace para que se cree `DATABASE_URL`.
-3. Instala/configura Clerk, activa el acceso con Google y agrega las dos variables de Clerk.
-4. Agrega `F1_ADMIN_EMAILS` con el Gmail del administrador.
-5. Vuelve a desplegar el proyecto. El build detecta `DATABASE_URL` y aplica automáticamente las migraciones pendientes antes de compilar.
+2. Configura `DATABASE_URL` con el Shared Pooler PostgreSQL del proyecto Supabase.
+3. Configura la URL y la clave de servicio de Supabase para guardar las evidencias fotográficas.
+4. Configura Clerk y agrega las dos variables de Clerk.
+5. Agrega `F1_ADMIN_EMAILS` con la cuenta inicial del administrador.
+6. Vuelve a desplegar el proyecto. El build detecta `DATABASE_URL` y aplica automáticamente las migraciones pendientes antes de compilar.
 
 Mientras falte alguna variable, la web mostrará una pantalla de configuración pendiente en lugar de fallar.
 
@@ -52,7 +56,7 @@ pnpm db:migrate   # aplica migraciones pendientes manualmente cuando sea necesar
 pnpm db:push      # sincronización directa, solo para desarrollo controlado
 ```
 
-Las migraciones PostgreSQL están en `drizzle-pg/`. Los datos de prueba del antiguo entorno D1 no se copian automáticamente a Neon.
+Las migraciones PostgreSQL están en `drizzle-pg/`. Para conservar los datos existentes se debe ejecutar una migración controlada antes de cambiar `DATABASE_URL`; la URL pública de Supabase por sí sola no permite copiar la base.
 
 ## Despliegue automático
 

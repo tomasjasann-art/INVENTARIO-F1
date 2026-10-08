@@ -1,4 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
+import { clerkClient } from "@clerk/nextjs/server";
 import { getDb } from "../../../db";
 import {
   appUsers,
@@ -10,8 +11,10 @@ import {
   movements,
   products,
   sourceRecords,
+  suppliers,
 } from "../../../db/schema";
 import { normalizeKardexDate } from "../../../lib/kardex-date";
+import { resolveEvidenceImage, storeEvidenceImage } from "../../../lib/supabase-storage";
 import { getAuthenticatedUser, isKardexAdminEmail } from "../../auth";
 import { missingDeploymentConfig } from "../../deployment-config";
 
@@ -59,6 +62,7 @@ type MovementInput = {
   owner?: string;
   region?: string;
   province?: string;
+  contractorDocument?: string;
   contractor?: string;
   consignee?: string;
   requesterEmail?: string;
@@ -74,6 +78,24 @@ type BulkInput = {
   action?: "bulk";
   source?: string;
   movementType?: "entrada" | "salida" | "maestro";
+  rows?: Array<Record<string, unknown>>;
+};
+
+type SupplierInput = {
+  action?: "supplier";
+  documentNumber?: string;
+  businessName?: string;
+  tradeName?: string;
+  active?: boolean;
+};
+
+type SupplierBulkInput = {
+  action?: "supplierBulk";
+  rows?: Array<Record<string, unknown>>;
+};
+
+type CoordinatorBulkInput = {
+  action?: "coordinatorBulk";
   rows?: Array<Record<string, unknown>>;
 };
 
@@ -155,6 +177,7 @@ type EquipmentRequestInput = {
   contractorRuc?: string;
   contractorBusinessName?: string;
   pickupPerson?: string;
+  pickupPerson2?: string;
   region?: string;
   city?: string;
   neededDate?: string;
@@ -203,6 +226,18 @@ type CleanupInput = {
   backupConfirmed?: boolean;
 };
 
+function normalizeDocumentNumber(value: unknown) {
+  return clean(value).replace(/\D/g, "");
+}
+
+function validSupplierDocument(value: string) {
+  return /^\d{8}$|^\d{11}$/.test(value);
+}
+
+function normalizeParty(value: unknown) {
+  return clean(value).toUpperCase().replace(/\s+/g, " ");
+}
+
 function clean(value: unknown) {
   if (typeof value === "string") return value.trim();
   if (typeof value === "number") return String(value);
@@ -241,6 +276,7 @@ function normalizeGrLink(value: unknown) {
 function normalizeEvidenceImage(value: unknown) {
   const image = clean(value);
   if (!image) return "";
+  if (image.startsWith("supabase://") || /^https?:\/\//i.test(image)) return image;
   if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(image)) {
     throw new Error("La evidencia debe ser una foto JPG, PNG o WEBP.");
   }
@@ -315,6 +351,35 @@ function sameControlGroup(
     && clean(movement.coordinator).toUpperCase() === coordinator.toUpperCase();
 }
 
+function movementParty(movement: { contractorDocument?: string; contractor?: string; origin?: string }) {
+  return normalizeDocumentNumber(movement.contractorDocument)
+    || normalizeParty(movement.contractor)
+    || normalizeParty(movement.origin);
+}
+
+function duplicatesOperationalDocument(
+  movement: { type: string; document: string; orderNumber: string; contractorDocument?: string; contractor?: string; origin?: string },
+  incoming: { type: string; document: string; orderNumber: string; contractorDocument?: string; contractor?: string; origin?: string },
+) {
+  const document = normalizeParty(incoming.document);
+  const orderNumber = normalizeParty(incoming.orderNumber);
+  const party = movementParty(incoming);
+  if (!document || !orderNumber || !party) return false;
+  return movement.type === incoming.type
+    && normalizeParty(movement.document) === document
+    && normalizeParty(movement.orderNumber) === orderNumber
+    && movementParty(movement) === party;
+}
+
+async function supplierFromDocument(db: ReturnType<typeof getDb>, value: unknown) {
+  const documentNumber = normalizeDocumentNumber(value);
+  if (!validSupplierDocument(documentNumber)) return null;
+  const [supplier] = await db.select().from(suppliers)
+    .where(and(eq(suppliers.documentNumber, documentNumber), eq(suppliers.active, true)))
+    .limit(1);
+  return supplier ?? null;
+}
+
 function trackedSeriesQuantity(serials: string, quantity: number, token: string) {
   const tokens = splitSeries(serials);
   if (!tokens.includes(token)) return 0;
@@ -348,22 +413,24 @@ export async function GET(request: Request) {
     if (!access?.active) return Response.json({ error: "Tu correo no está registrado o se encuentra inactivo. Comunícate con un administrador." }, { status: 403 });
     if (new URL(request.url).searchParams.get("backup") === "1") {
       if (!mayOperate(access.role)) return Response.json({ error: "Tu perfil no puede descargar respaldos operativos." }, { status: 403 });
-      const [productRows, movementRows, sourceRows, coordinatorRows, validationRows, importRows, recordRows, requestRows, userRows] = await Promise.all([
+      const [productRows, movementRows, sourceRows, coordinatorRows, supplierRows, validationRows, importRows, recordRows, requestRows, userRows] = await Promise.all([
         db.select().from(products),
         db.select().from(movements),
         db.select().from(sourceRecords),
         db.select().from(coordinators),
+        db.select().from(suppliers),
         db.select().from(installationValidations),
         db.select().from(auditImports),
         db.select().from(auditRecords),
         db.select().from(equipmentRequests),
         db.select().from(appUsers),
       ]);
-      return Response.json({ products: productRows, movements: movementRows, sourceRecords: sourceRows, coordinators: coordinatorRows, installationValidations: validationRows, auditImports: importRows, auditRecords: recordRows, equipmentRequests: requestRows, appUsers: userRows });
+      return Response.json({ products: productRows, movements: movementRows, sourceRecords: sourceRows, coordinators: coordinatorRows, suppliers: supplierRows, installationValidations: validationRows, auditImports: importRows, auditRecords: recordRows, equipmentRequests: requestRows, appUsers: userRows });
     }
     const productRows = await db.select().from(products).orderBy(products.description);
     const sourceRows = await db.select().from(sourceRecords).orderBy(desc(sourceRecords.id)).limit(3000);
     const coordinatorRows = await db.select().from(coordinators).orderBy(coordinators.organization, coordinators.name);
+    const supplierRows = await db.select().from(suppliers).orderBy(suppliers.businessName);
     const validationRows = await db.select().from(installationValidations).orderBy(desc(installationValidations.id));
     const requestRows = await db.select().from(equipmentRequests).orderBy(desc(equipmentRequests.id)).limit(1200);
     const userRows = access.role === "ADMINISTRADOR" ? await db.select().from(appUsers).orderBy(appUsers.displayName, appUsers.email) : [];
@@ -433,6 +500,7 @@ export async function GET(request: Request) {
         recordStatus: movements.recordStatus,
         region: movements.region,
         province: movements.province,
+        contractorDocument: movements.contractorDocument,
         contractor: movements.contractor,
         consignee: movements.consignee,
         requesterEmail: movements.requesterEmail,
@@ -477,6 +545,7 @@ export async function GET(request: Request) {
         movementDate: normalizeKardexDate(record.movementDate, record.movementDate),
       })),
       coordinators: coordinatorRows,
+      suppliers: supplierRows,
       installationValidations: validationRows.map((validation) => ({
         ...validation,
         managementDate: normalizeKardexDate(validation.managementDate, validation.managementDate),
@@ -485,7 +554,13 @@ export async function GET(request: Request) {
       auditImports: auditImportRows,
       auditRecords: auditRecordRows,
       auditHistoryRecords: [...historicalAuditMap.values()],
-      equipmentRequests: requestRows,
+      equipmentRequests: await Promise.all(requestRows.map(async (row) => ({
+        ...row,
+        outboundGuidePhotoStored: row.outboundGuidePhoto,
+        shippingTicketPhotoStored: row.shippingTicketPhoto,
+        outboundGuidePhoto: await resolveEvidenceImage(row.outboundGuidePhoto),
+        shippingTicketPhoto: await resolveEvidenceImage(row.shippingTicketPhoto),
+      }))),
       appUsers: userRows,
       currentUser: { email: user.email.toLowerCase(), displayName: user.displayName, role: access.role, active: access.active },
     });
@@ -502,8 +577,8 @@ export async function POST(request: Request) {
     if (!user) return Response.json({ error: "Debes iniciar sesión para modificar el Kardex." }, { status: 401 });
     const db = getDb();
     const access = await currentAccess(db, user.email);
-    if (!access) return Response.json({ error: "Tu correo no está registrado. Pide a un administrador que agregue tu Gmail exacto." }, { status: 403 });
-    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | CoordinatorInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | AppUserInput | CleanupInput;
+    if (!access) return Response.json({ error: "Tu correo no está registrado. Pide a un administrador que agregue tu cuenta @f1.services." }, { status: 403 });
+    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | AppUserInput | CleanupInput;
     const action = clean(payload.action);
     if (!access.active) return Response.json({ error: "Tu usuario está inactivo. Comunícate con un administrador." }, { status: 403 });
     if (action === "appUser" && access.role !== "ADMINISTRADOR") return Response.json({ error: "Solo un Administrador puede cambiar permisos." }, { status: 403 });
@@ -516,33 +591,122 @@ export async function POST(request: Request) {
       const email = clean(userPayload.email).toLowerCase();
       const roles: UserRole[] = ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA"];
       const role = roles.includes(userPayload.role as UserRole) ? userPayload.role as UserRole : "SOLO_LECTURA";
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return Response.json({ error: "Ingresa un correo válido, por ejemplo usuario@gmail.com." }, { status: 400 });
-      const values = { email, displayName: clean(userPayload.displayName), role, active: userPayload.active !== false, updatedAt: sql`CURRENT_TIMESTAMP` };
+      if (!/^[^\s@]+@f1\.services$/i.test(email)) return Response.json({ error: "Los usuarios del equipo deben usar un correo @f1.services." }, { status: 400 });
+      const [existingUser] = await db.select().from(appUsers).where(eq(appUsers.email, email)).limit(1);
+      let invitationStatus = existingUser?.invitationStatus || "PENDIENTE";
+      let invitedAt = existingUser?.invitedAt || "";
+      if (!existingUser && userPayload.active !== false) {
+        try {
+          const client = await clerkClient();
+          await client.invitations.createInvitation({
+            emailAddress: email,
+            redirectUrl: new URL("/sign-up", request.url).toString(),
+            publicMetadata: { role, application: "KARDEX_F1" },
+            ignoreExisting: true,
+          });
+          invitationStatus = "ENVIADA";
+          invitedAt = new Date().toISOString();
+        } catch (error) {
+          invitationStatus = "PENDIENTE_ENVIO";
+          console.error("No se pudo enviar la invitación Clerk", error);
+        }
+      }
+      const values = { email, displayName: clean(userPayload.displayName), role, active: userPayload.active !== false, invitationStatus, invitedAt, updatedAt: sql`CURRENT_TIMESTAMP` };
       const [savedUser] = await db.insert(appUsers).values(values).onConflictDoUpdate({ target: appUsers.email, set: values }).returning();
-      return Response.json({ ok: true, user: savedUser });
+      return Response.json({ ok: true, user: savedUser, invitationStatus });
     }
 
     if (payload.action === "cleanup") {
       const cleanupPayload = payload as CleanupInput;
       const scope = cleanupPayload.scope === "all" ? "all" : "operations";
       const requiredPhrase = scope === "all" ? "BORRAR TODO" : "LIMPIAR PRUEBAS";
-      if (!cleanupPayload.backupConfirmed || clean(cleanupPayload.confirmation).toUpperCase() !== requiredPhrase) {
-        return Response.json({ error: `Descarga el respaldo y escribe ${requiredPhrase} para confirmar.` }, { status: 400 });
+      if (clean(cleanupPayload.confirmation).toUpperCase() !== requiredPhrase) {
+        return Response.json({ error: `Escribe ${requiredPhrase} para confirmar.` }, { status: 400 });
       }
-      const statements: Array<ReturnType<typeof db.delete>> = [
-        db.delete(installationValidations),
-        db.delete(equipmentRequests),
-        db.delete(movements),
-        db.delete(sourceRecords),
-        db.delete(auditRecords),
-        db.delete(auditImports),
-      ];
-      if (scope === "all") {
-        statements.push(db.delete(products));
-        statements.push(db.delete(coordinators));
-      }
-      await db.batch(statements as [typeof statements[number], ...Array<typeof statements[number]>]);
+      await db.transaction(async (tx) => {
+        await tx.delete(installationValidations);
+        await tx.delete(equipmentRequests);
+        await tx.delete(movements);
+        await tx.delete(sourceRecords);
+        await tx.delete(auditRecords);
+        await tx.delete(auditImports);
+        if (scope === "all") {
+          await tx.delete(products);
+          await tx.delete(coordinators);
+          await tx.delete(suppliers);
+        }
+      });
       return Response.json({ ok: true, scope, cleaned: true });
+    }
+
+    if (payload.action === "supplier") {
+      const supplierPayload = payload as SupplierInput;
+      const documentNumber = normalizeDocumentNumber(supplierPayload.documentNumber);
+      const businessName = normalizeParty(supplierPayload.businessName);
+      if (!validSupplierDocument(documentNumber)) {
+        return Response.json({ error: "Ingresa un DNI de 8 dígitos o un RUC de 11 dígitos." }, { status: 400 });
+      }
+      if (!businessName) return Response.json({ error: "La razón social o nombre completo es obligatorio." }, { status: 400 });
+      const values = {
+        documentType: documentNumber.length === 11 ? "RUC" as const : "DNI" as const,
+        documentNumber,
+        businessName,
+        tradeName: normalizeParty(supplierPayload.tradeName),
+        source: "MANUAL",
+        active: supplierPayload.active !== false,
+        updatedAt: sql`CURRENT_TIMESTAMP`,
+      };
+      const [supplier] = await db.insert(suppliers).values(values)
+        .onConflictDoUpdate({ target: suppliers.documentNumber, set: values })
+        .returning();
+      return Response.json({ ok: true, supplier }, { status: 201 });
+    }
+
+    if (payload.action === "supplierBulk") {
+      const rows = Array.isArray((payload as SupplierBulkInput).rows) ? (payload as SupplierBulkInput).rows!.slice(0, 1000) : [];
+      let imported = 0;
+      const rejected: Array<{ row: number; sku: string; reason: string }> = [];
+      for (const [index, row] of rows.entries()) {
+        const documentNumber = normalizeDocumentNumber(rowValue(row, "RUC", "DNI", "RUC/DNI", "Documento", "N° Documento", "Numero Documento"));
+        const businessName = normalizeParty(rowValue(row, "Razón Social", "Razon Social", "Nombre", "Proveedor", "Contrata"));
+        if (!validSupplierDocument(documentNumber) || !businessName) {
+          rejected.push({ row: index + 2, sku: documentNumber || "—", reason: "Falta RUC/DNI válido o razón social." });
+          continue;
+        }
+        const values = {
+          documentType: documentNumber.length === 11 ? "RUC" as const : "DNI" as const,
+          documentNumber,
+          businessName,
+          tradeName: normalizeParty(rowValue(row, "Nombre Comercial", "Nombre de Fantasía")),
+          source: "CARGA_MASIVA",
+          active: true,
+          updatedAt: sql`CURRENT_TIMESTAMP`,
+        };
+        await db.insert(suppliers).values(values).onConflictDoUpdate({ target: suppliers.documentNumber, set: values });
+        imported += 1;
+      }
+      return Response.json({ ok: true, imported, rejected: rejected.length, rejectionDetails: rejected.slice(0, 25) }, { status: 201 });
+    }
+
+    if (payload.action === "coordinatorBulk") {
+      const rows = Array.isArray((payload as CoordinatorBulkInput).rows) ? (payload as CoordinatorBulkInput).rows!.slice(0, 1000) : [];
+      let imported = 0;
+      const rejected: Array<{ row: number; sku: string; reason: string }> = [];
+      for (const [index, row] of rows.entries()) {
+        const organization = normalizeParty(rowValue(row, "Empresa", "Organización", "Organizacion")).includes("F1") ? "F1" as const : "ENTEL" as const;
+        const name = normalizeParty(rowValue(row, "Nombre", "Coordinador", "Nombre completo"));
+        const email = clean(rowValue(row, "Correo", "Email")).toLowerCase();
+        const status = normalizeParty(rowValue(row, "Estado", "Activo"));
+        if (!name) {
+          rejected.push({ row: index + 2, sku: "—", reason: "Falta el nombre del coordinador." });
+          continue;
+        }
+        const values = { organization, name, email, active: !["INACTIVO", "NO", "0", "FALSE"].includes(status) };
+        await db.insert(coordinators).values(values)
+          .onConflictDoUpdate({ target: [coordinators.organization, coordinators.name], set: { email, active: values.active } });
+        imported += 1;
+      }
+      return Response.json({ ok: true, imported, rejected: rejected.length, rejectionDetails: rejected.slice(0, 25) }, { status: 201 });
     }
 
     if (payload.action === "request") {
@@ -550,8 +714,10 @@ export async function POST(request: Request) {
       const coordinatorName = clean(requestPayload.coordinatorName).toUpperCase();
       const orderNumber = clean(requestPayload.orderNumber);
       const contractorRuc = clean(requestPayload.contractorRuc).replace(/\D/g, "");
-      const contractorBusinessName = clean(requestPayload.contractorBusinessName).toUpperCase();
+      const supplierMatch = await supplierFromDocument(db, contractorRuc);
+      const contractorBusinessName = supplierMatch?.businessName || clean(requestPayload.contractorBusinessName).toUpperCase();
       const pickupPerson = clean(requestPayload.pickupPerson).toUpperCase();
+      const pickupPerson2 = clean(requestPayload.pickupPerson2).toUpperCase();
       const region = clean(requestPayload.region).toUpperCase();
       const city = clean(requestPayload.city).toUpperCase();
       const items = Array.isArray(requestPayload.items) ? requestPayload.items.slice(0, 30) : [];
@@ -611,6 +777,7 @@ export async function POST(request: Request) {
         contractorRuc,
         contractorBusinessName,
         pickupPerson,
+        pickupPerson2,
         region,
         city,
         neededDate: normalizeKardexDate(requestPayload.neededDate),
@@ -636,13 +803,19 @@ export async function POST(request: Request) {
       const allowed: RequestStatus[] = ["PENDIENTE", "VALIDADA", "DESPACHADA", "EN_TRANSITO", "LISTA_RECOJO", "RECOGIDA", "CERRADA", "RECHAZADA"];
       const status = allowed.includes(logisticsPayload.status as RequestStatus) ? logisticsPayload.status as RequestStatus : "PENDIENTE";
       if (!requestCode) return Response.json({ error: "La solicitud es obligatoria." }, { status: 400 });
+      const outboundGuidePhoto = logisticsPayload.outboundGuidePhoto === undefined
+        ? undefined
+        : await storeEvidenceImage(normalizeEvidenceImage(logisticsPayload.outboundGuidePhoto), `${requestCode}/gr-despacho`);
+      const shippingTicketPhoto = logisticsPayload.shippingTicketPhoto === undefined
+        ? undefined
+        : await storeEvidenceImage(normalizeEvidenceImage(logisticsPayload.shippingTicketPhoto), `${requestCode}/ticket-envio`);
       const updated = await db.update(equipmentRequests).set({
         status,
         outboundGuide: clean(logisticsPayload.outboundGuide),
         outboundGuideLink: normalizeGrLink(logisticsPayload.outboundGuideLink),
-        outboundGuidePhoto: logisticsPayload.outboundGuidePhoto === undefined ? undefined : normalizeEvidenceImage(logisticsPayload.outboundGuidePhoto),
+        outboundGuidePhoto,
         shippingTicket: clean(logisticsPayload.shippingTicket),
-        shippingTicketPhoto: logisticsPayload.shippingTicketPhoto === undefined ? undefined : normalizeEvidenceImage(logisticsPayload.shippingTicketPhoto),
+        shippingTicketPhoto,
         shippingKey: clean(logisticsPayload.shippingKey),
         sentDate: normalizeKardexDate(logisticsPayload.sentDate),
         arrivalDate: normalizeKardexDate(logisticsPayload.arrivalDate),
@@ -724,21 +897,24 @@ export async function POST(request: Request) {
         const statements = statementGroups.slice(index, index + 80).map((group) =>
           db.insert(auditRecords).values(group.map((row) => ({ ...row, importId: auditImport.id }))),
         );
-        if (statements.length) {
-          await db.batch(statements as [typeof statements[number], ...Array<typeof statements[number]>]);
-        }
+        for (const statement of statements) await statement;
       }
       await db.update(auditImports).set({ status: "READY" }).where(eq(auditImports.id, auditImport.id));
 
       if (source === "ENTEL") {
         const costs = auditUnitCosts(normalized);
-        const updates = [...costs].map(([sku, unitCostCents]) => db.update(products)
-          .set({ unitCostCents })
-          .where(and(eq(products.sku, sku), eq(products.unitCostCents, 0))));
-        for (let index = 0; index < updates.length; index += 80) {
-          const group = updates.slice(index, index + 80);
-          if (group.length) await db.batch(group as [typeof group[number], ...Array<typeof group[number]>]);
+        const updates = [];
+        for (const [sku, unitCostCents] of costs) {
+          const [product] = await db.select().from(products).where(eq(products.sku, sku)).limit(1);
+          if (!product) continue;
+          updates.push(db.update(products)
+            .set({ unitCostCents })
+            .where(and(eq(products.id, product.id), eq(products.unitCostCents, 0))));
+          updates.push(db.update(movements)
+            .set({ unitCostCents })
+            .where(and(eq(movements.productId, product.id), eq(movements.unitCostCents, 0))));
         }
+        for (const update of updates) await update;
       }
 
       return Response.json({
@@ -837,15 +1013,17 @@ export async function POST(request: Request) {
       if (!sku || !description) {
         return Response.json({ error: "SKU y descripción son obligatorios." }, { status: 400 });
       }
+      const [existingProduct] = await db.select().from(products).where(eq(products.sku, sku)).limit(1);
       const requestedCostCents = Math.max(0, Math.round((Number(productPayload.unitCost) || 0) * 100));
       const entelCostCents = requestedCostCents ? 0 : (await latestEntelUnitCosts(db)).get(sku) || 0;
+      const category = normalizeParty(productPayload.category).includes("LOTE") ? "LOTE" : "EQUIPO";
 
       const [product] = await db
         .insert(products)
         .values({
           sku,
           description,
-          category: clean(productPayload.category) || "Equipos",
+          category,
           unit: clean(productPayload.unit).toUpperCase() || "UND",
           location: clean(productPayload.location) || "MO Company",
           minStock: Math.max(0, Number(productPayload.minStock) || 0),
@@ -854,10 +1032,24 @@ export async function POST(request: Request) {
           owner: clean(productPayload.owner) || "F1 SERVICES",
           defaultProject: clean(productPayload.defaultProject),
         })
+        .onConflictDoUpdate({
+          target: products.sku,
+          set: {
+            description,
+            category,
+            unit: clean(productPayload.unit).toUpperCase() || existingProduct?.unit || "UND",
+            location: clean(productPayload.location) || existingProduct?.location || "MO Company",
+            minStock: Math.max(0, Number(productPayload.minStock) || existingProduct?.minStock || 0),
+            unitCostCents: requestedCostCents || existingProduct?.unitCostCents || entelCostCents,
+            client: clean(productPayload.client) || existingProduct?.client || "ENTEL",
+            owner: clean(productPayload.owner) || existingProduct?.owner || "F1 SERVICES",
+            defaultProject: clean(productPayload.defaultProject) || existingProduct?.defaultProject || "",
+          },
+        })
         .returning();
 
       const initialStock = Math.max(0, Number(productPayload.initialStock) || 0);
-      if (initialStock > 0) {
+      if (!existingProduct && initialStock > 0) {
         await db.insert(movements).values({
           productId: product.id,
           type: "entrada",
@@ -881,7 +1073,12 @@ export async function POST(request: Request) {
           : "entrada";
       const rows = Array.isArray(bulkPayload.rows) ? bulkPayload.rows.slice(0, 500) : [];
       if (!rows.length) return Response.json({ error: "El archivo no contiene filas válidas." }, { status: 400 });
-      const entelCostBySku = await latestEntelUnitCosts(db);
+      const [entelCostBySku, existingBeforeImport, supplierRows] = await Promise.all([
+        latestEntelUnitCosts(db),
+        db.select().from(movements),
+        db.select().from(suppliers).where(eq(suppliers.active, true)),
+      ]);
+      const suppliersByDocument = new Map(supplierRows.map((row) => [row.documentNumber, row]));
 
       let imported = 0;
       const rejected: Array<{ row: number; sku: string; reason: string }> = [];
@@ -893,7 +1090,7 @@ export async function POST(request: Request) {
         const unitMeasure = clean(rowValue(row, "Unidad de Medida", "UnidadMedida", "Unidad", "unit")) || "UND";
         const unitCost = Math.max(0, numeric(rowValue(row, "Costo", "Cost", "unitCost")));
         const equipmentTypeFromFile = clean(rowValue(row, "Tipo de Equipo", "Categoría", "category"));
-        const equipmentType = equipmentTypeFromFile || "Equipos";
+        const equipmentType = normalizeParty(equipmentTypeFromFile).includes("LOTE") ? "LOTE" : "EQUIPO";
         const project = clean(rowValue(row, "Proyecto", "ProyectoFinal", "project"));
         const origin = clean(rowValue(row, "Proviene", "Origen")) || "MO COMPANY";
         const requestedLotMode = clean(rowValue(row, "Modo de Lote", "Modo Lote", "Asignación de Lote", "Asignacion de Lote")).toUpperCase();
@@ -907,6 +1104,9 @@ export async function POST(request: Request) {
           new Date().toISOString().slice(0, 10),
         );
         const document = clean(rowValue(row, movementType === "entrada" ? "GR. de Ingreso" : "NroGRSalida", "GR. de Salida", "GR Ingreso", "GR Salida", "Guía", "document"));
+        const contractorDocument = normalizeDocumentNumber(rowValue(row, "RUC", "DNI", "RUC/DNI", "Documento Contrata", "Documento Proveedor"));
+        const supplierMatch = suppliersByDocument.get(contractorDocument);
+        const contractor = supplierMatch?.businessName || normalizeParty(rowValue(row, "Razón Social", "Razon Social", "Contrata", "Proveedor"));
         const sourceRow = clean(rowValue(row, "Fila", "ITEM"));
         let lotAssignment = "ORIGINAL";
         if (movementType === "entrada" && !seriesLot && requestedLotMode.includes("MANUAL")) {
@@ -961,6 +1161,34 @@ export async function POST(request: Request) {
 
         if (source === "F1" && (!orderNumber || !coordinator)) {
           rejected.push({ row: rowIndex + 2, sku, reason: "Faltan N° Pedido o Coordinador Entel." });
+          continue;
+        }
+
+        if (source === "F1" && !document) {
+          rejected.push({ row: rowIndex + 2, sku, reason: movementType === "entrada" ? "Falta la GR. de Ingreso." : "Falta el Nro. de GR de Salida." });
+          continue;
+        }
+
+        if (source === "F1" && movementType === "salida" && !validSupplierDocument(contractorDocument)) {
+          rejected.push({ row: rowIndex + 2, sku, reason: "Falta RUC de 11 dígitos o DNI de 8 dígitos de la contrata." });
+          continue;
+        }
+
+        if (source === "F1" && !contractor && !origin) {
+          rejected.push({ row: rowIndex + 2, sku, reason: "Falta la razón social, proveedor o contrata del documento." });
+          continue;
+        }
+
+        const duplicatedDocument = source === "F1" && existingBeforeImport.some((movement) => duplicatesOperationalDocument(movement, {
+          type: movementType,
+          document,
+          orderNumber,
+          contractorDocument,
+          contractor,
+          origin,
+        }));
+        if (duplicatedDocument) {
+          rejected.push({ row: rowIndex + 2, sku, reason: `La GR ${document} y el pedido ${orderNumber} ya fueron cargados para ${contractor || origin}. Solo se admite si pertenecen a otra razón social.` });
           continue;
         }
 
@@ -1076,7 +1304,8 @@ export async function POST(request: Request) {
             recordStatus: movementType === "salida" ? "Despachado" : "Disponible",
             region: clean(rowValue(row, "Region", "Región")),
             province: clean(rowValue(row, "Provincia")),
-            contractor: clean(rowValue(row, "Contrata")),
+            contractorDocument,
+            contractor,
             consignee: clean(rowValue(row, "Consignatario")),
             requesterEmail: clean(rowValue(row, "CorreoSolicitante", "Correo Solicitante")).toLowerCase(),
             emailStatus: clean(rowValue(row, "Estado Correo")),
@@ -1133,10 +1362,33 @@ export async function POST(request: Request) {
     const [product] = await db.select().from(products).where(eq(products.id, productId)).limit(1);
     if (!product) return Response.json({ error: "Producto no encontrado." }, { status: 404 });
 
-    const productMovements = await db.select().from(movements).where(eq(movements.productId, productId));
+    const allMovements = await db.select().from(movements);
+    const productMovements = allMovements.filter((row) => row.productId === productId);
     const movementDate = normalizeKardexDate(movementPayload.movementDate, new Date().toISOString().slice(0, 10));
     const document = clean(movementPayload.document);
     const origin = clean(movementPayload.origin) || "MO COMPANY";
+    const contractorDocument = normalizeDocumentNumber(movementPayload.contractorDocument);
+    const supplierMatch = await supplierFromDocument(db, contractorDocument);
+    const contractor = supplierMatch?.businessName || normalizeParty(movementPayload.contractor);
+    if ((type === "entrada" || type === "salida") && !document) {
+      return Response.json({ error: type === "entrada" ? "La GR. de Ingreso es obligatoria." : "El Nro. de GR de Salida es obligatorio." }, { status: 400 });
+    }
+    if (type === "salida" && !validSupplierDocument(contractorDocument)) {
+      return Response.json({ error: "Selecciona el RUC o DNI de la contrata que recibe el despacho." }, { status: 400 });
+    }
+    if ((type === "entrada" || type === "salida") && !contractor && !origin) {
+      return Response.json({ error: "La razón social vinculada a la GR es obligatoria." }, { status: 400 });
+    }
+    if ((type === "entrada" || type === "salida") && allMovements.some((row) => duplicatesOperationalDocument(row, {
+      type,
+      document,
+      orderNumber,
+      contractorDocument,
+      contractor,
+      origin,
+    }))) {
+      return Response.json({ error: `La GR ${document} y el pedido ${orderNumber} ya fueron registrados para ${contractor || origin}. Solo se admite si corresponden a otra razón social.` }, { status: 409 });
+    }
     const sourceRow = clean(movementPayload.sourceRow);
     let serials = clean(movementPayload.serials).toUpperCase();
     let lotAssignment = clean(movementPayload.lotAssignment).toUpperCase();
@@ -1244,7 +1496,8 @@ export async function POST(request: Request) {
         recordStatus: type === "salida" ? "Despachado" : type === "baja" ? "Baja" : "Disponible",
         region: clean(movementPayload.region),
         province: clean(movementPayload.province),
-        contractor: clean(movementPayload.contractor),
+        contractorDocument,
+        contractor,
         consignee: clean(movementPayload.consignee),
         requesterEmail: clean(movementPayload.requesterEmail).toLowerCase(),
         emailStatus: clean(movementPayload.emailStatus),

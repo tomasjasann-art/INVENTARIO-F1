@@ -83,6 +83,7 @@ type Movement = {
   recordStatus: string;
   region: string;
   province: string;
+  contractorDocument: string;
   contractor: string;
   consignee: string;
   requesterEmail: string;
@@ -115,6 +116,16 @@ type Coordinator = {
   organization: "F1" | "ENTEL";
   name: string;
   email: string;
+  active: boolean;
+};
+
+type Supplier = {
+  id: number;
+  documentType: "RUC" | "DNI";
+  documentNumber: string;
+  businessName: string;
+  tradeName: string;
+  source: string;
   active: boolean;
 };
 
@@ -152,6 +163,7 @@ type EquipmentRequest = {
   contractorRuc: string;
   contractorBusinessName: string;
   pickupPerson: string;
+  pickupPerson2: string;
   region: string;
   city: string;
   neededDate: string;
@@ -159,8 +171,10 @@ type EquipmentRequest = {
   outboundGuide: string;
   outboundGuideLink: string;
   outboundGuidePhoto: string;
+  outboundGuidePhotoStored?: string;
   shippingTicket: string;
   shippingTicketPhoto: string;
+  shippingTicketPhotoStored?: string;
   shippingKey: string;
   sentDate: string;
   arrivalDate: string;
@@ -179,6 +193,8 @@ type AppUser = {
   displayName: string;
   role: UserRole;
   active: boolean;
+  invitationStatus: string;
+  invitedAt: string;
 };
 
 type KardexData = {
@@ -186,6 +202,7 @@ type KardexData = {
   movements: Movement[];
   sourceRecords: SourceRecord[];
   coordinators: Coordinator[];
+  suppliers: Supplier[];
   installationValidations: InstallationValidation[];
   auditImports: AuditImportRow[];
   auditRecords: AuditRecord[];
@@ -194,7 +211,7 @@ type KardexData = {
   appUsers: AppUser[];
   currentUser?: { email: string; displayName: string; role: UserRole; active: boolean };
 };
-type View = "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "conciliacion" | "auditoria" | "coordinadores" | "carga" | "configuracion";
+type View = "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
 
 const money = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" });
 const number = new Intl.NumberFormat("es-PE");
@@ -214,6 +231,7 @@ const SALIDA_BULK_HEADERS = [
   "Provincia",
   "ProyectoFinal",
   "CordF1",
+  "RUC",
   "Contrata",
   "Consignatario",
   "Serie/Lote",
@@ -246,6 +264,45 @@ function bulkNumberValue(row: Record<string, unknown>, ...headers: string[]) {
     ? (raw.lastIndexOf(",") > raw.lastIndexOf(".") ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, ""))
     : raw.replace(",", ".");
   return Number(normalized) || 0;
+}
+
+function parseDelimitedRows(text: string, limit = 2000) {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim());
+  if (lines.length < 2) return [];
+  const delimiter = (lines[0].match(/;/g)?.length ?? 0) > (lines[0].match(/,/g)?.length ?? 0) ? ";" : ",";
+  const parseLine = (line: string) => {
+    const values: string[] = [];
+    let value = "";
+    let quoted = false;
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index];
+      if (char === '"' && line[index + 1] === '"') { value += '"'; index += 1; }
+      else if (char === '"') quoted = !quoted;
+      else if (char === delimiter && !quoted) { values.push(value.trim()); value = ""; }
+      else value += char;
+    }
+    values.push(value.trim());
+    return values;
+  };
+  const headers = parseLine(lines[0]);
+  return lines.slice(1, limit + 1).map((line) => Object.fromEntries(parseLine(line).map((value, index) => [headers[index] || `columna_${index + 1}`, value])));
+}
+
+async function readTabularFile(file: File, limit = 2000) {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  if (extension === "csv") return parseDelimitedRows(await file.text(), limit);
+  if (extension !== "xlsx" && extension !== "xls") throw new Error("Usa un archivo Excel (.xlsx o .xls) o CSV.");
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+  return (XLSX.utils.sheet_to_json(firstSheet, { defval: "", raw: false }) as Array<Record<string, unknown>>).slice(0, limit);
+}
+
+async function downloadTableTemplate(fileName: string, sheetName: string, row: Record<string, unknown>) {
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([row]), sheetName);
+  XLSX.writeFile(workbook, fileName);
 }
 
 function automaticPreviewLotCode({ movementDate, orderNumber, sku, sourceRow }: { movementDate: string; orderNumber: string; sku: string; sourceRow: string }) {
@@ -309,7 +366,7 @@ function userInitials(value: string) {
 }
 
 export default function KardexApp({ user, signOutPath }: { user: KardexUser; signOutPath: string }) {
-  const [data, setData] = useState<KardexData>({ products: [], movements: [], sourceRecords: [], coordinators: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], appUsers: [] });
+  const [data, setData] = useState<KardexData>({ products: [], movements: [], sourceRecords: [], coordinators: [], suppliers: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], appUsers: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -336,6 +393,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
         movements: body.movements ?? [],
         sourceRecords: body.sourceRecords ?? [],
         coordinators: body.coordinators ?? [],
+        suppliers: body.suppliers ?? [],
         installationValidations: body.installationValidations ?? [],
         auditImports: body.auditImports ?? [],
         auditRecords: body.auditRecords ?? [],
@@ -416,7 +474,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
   };
 
   function exportCsv() {
-    const header = ["Fecha", "Tipo", "SKU", "Descripción", "Serie/Lote", "Cantidad", "Unidad", "Costo unitario", "Costo total", "Fuente costo", "N° Pedido", "Documento", "Proyecto", "Site", "Coordinador", "Estado de Equipo", "Condición", "Región", "Provincia", "Contrata", "Consignatario", "Correo solicitante", "Estado correo", "ID despacho", "Fecha envío correo", "Persona que registra"];
+    const header = ["Fecha", "Tipo", "SKU", "Descripción", "Serie/Lote", "Cantidad", "Unidad", "Costo unitario", "Costo total", "Fuente costo", "N° Pedido", "Documento", "Proyecto", "Site", "Coordinador", "Estado de Equipo", "Condición", "Región", "Provincia", "RUC/DNI", "Contrata", "Consignatario", "Correo solicitante", "Estado correo", "ID despacho", "Fecha envío correo", "Persona que registra"];
     const rows = filteredMovements.map((movement) => [
       movement.movementDate,
       movement.type,
@@ -437,6 +495,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
       movement.condition,
       movement.region,
       movement.province,
+      movement.contractorDocument,
       movement.contractor,
       movement.consignee,
       movement.requesterEmail,
@@ -513,8 +572,9 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           <button className={view === "conciliacion" ? "active" : ""} onClick={() => { setView("conciliacion"); setSidebarOpen(false); }}><Scale size={19} />Conciliación</button>
           <button className={view === "auditoria" ? "active" : ""} onClick={() => { setView("auditoria"); setSidebarOpen(false); }}><Database size={19} />Auditoría Entel</button>
           {canOperate && <button className={view === "coordinadores" ? "active" : ""} onClick={() => { setView("coordinadores"); setSidebarOpen(false); }}><Users size={19} />Coordinadores</button>}
+          {canOperate && <button className={view === "proveedores" ? "active" : ""} onClick={() => { setView("proveedores"); setSidebarOpen(false); }}><Warehouse size={19} />Proveedores</button>}
           <button className={view === "movimientos" ? "active" : ""} onClick={() => { setView("movimientos"); setSidebarOpen(false); }}><ClipboardList size={19} />Historial</button>
-          <button disabled><BarChart3 size={19} />Reportes <span className="soon">Pronto</span></button>
+          <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>
         </nav>
         <div className="sidebar-bottom">
           {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
@@ -528,17 +588,15 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>
           <div className="top-actions">
             {!(["solicitudes", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
-            {canOperate && (["resumen", "ingresos", "salidas", "stock", "lotes", "movimientos"] as View[]).includes(view) && <>
-              <button className="secondary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Ingreso 1 und.</button>
-              <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Salida 1 und.</button>
-            </>}
+            {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
+            {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
             {canOperate && view === "carga" && <button className="secondary-button product-button" onClick={() => setModal("product")}><PackagePlus size={17} />Nuevo SKU</button>}
           </div>
         </header>
 
         <div className="content">
           <section className="page-heading">
-            <div><p className="eyebrow">SISTEMA INVENTARIO F1 · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? "Resumen del Kardex" : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? "Stock y trazabilidad" : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes de equipos" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? "Control centralizado por SKU, Serie/Lote, pedido y proyecto." : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie y pedido; busca el site por código o nombre." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU." : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Los coordinadores F1 seleccionan equipos por pedido para que MO Company prepare la salida." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el Kardex interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual para responsables F1 y Entel, incluyendo su correo." : view === "configuracion" ? "Respalda y limpia datos de prueba de forma controlada antes de la carga real." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
+            <div><p className="eyebrow">SISTEMA INVENTARIO F1 · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? "Resumen del Kardex" : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? "Stock y trazabilidad" : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes de equipos" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Proveedores y contratas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? "Control centralizado por SKU, Serie/Lote, pedido y proyecto." : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU." : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Los coordinadores F1 seleccionan equipos por pedido para que MO Company prepare la salida." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el Kardex interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC o DNI con la razón social usada en ingresos, salidas y solicitudes." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
           </section>
 
@@ -579,17 +637,19 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           {view === "salidas" && <OperationalMovementTable mode="salida" movements={filteredMovements.filter((movement) => ["salida", "baja"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
           {view === "stock" && <StockTable products={filteredProducts} movements={data.movements} loading={loading} />}
           {view === "lotes" && <LotView movements={filteredMovements} loading={loading} />}
-          {view === "solicitudes" && <RequestView products={data.products} movements={data.movements} coordinators={data.coordinators} requests={data.equipmentRequests} warehouse={warehouse} loading={loading} saving={saving} canRequest={canRequest} canOperate={canOperate} onSave={save} />}
+          {view === "solicitudes" && <RequestView products={data.products} movements={data.movements} coordinators={data.coordinators} suppliers={data.suppliers} requests={data.equipmentRequests} warehouse={warehouse} loading={loading} saving={saving} canRequest={canRequest} canOperate={canOperate} onSave={save} />}
           {view === "conciliacion" && <ConciliationView movements={data.movements} validations={data.installationValidations} auditImports={data.auditImports} auditRecords={data.auditRecords} auditHistoryRecords={data.auditHistoryRecords} loading={loading} saving={saving} onSave={(payload) => void save(payload, "Validación de instalación guardada.")} onOpenAudit={() => setView("auditoria")} />}
           {view === "auditoria" && <AuditView imports={data.auditImports} records={data.auditRecords} movements={data.movements} loading={loading} saving={saving} onSave={save} />}
           {view === "coordinadores" && <CoordinatorView coordinators={data.coordinators} loading={loading} saving={saving} onSave={(payload) => save(payload, "Coordinador actualizado correctamente.")} />}
-          {view === "carga" && <BulkUpload products={data.products} movements={data.movements} saving={saving} onSave={(payload) => save(payload, "Carga procesada correctamente.")} />}
+          {view === "proveedores" && <SupplierView suppliers={data.suppliers} loading={loading} saving={saving} onSave={(payload) => save(payload, "Proveedor actualizado correctamente.")} />}
+          {view === "reportes" && <ReportsView products={data.products} movements={filteredMovements} requests={data.equipmentRequests} />}
+          {view === "carga" && <BulkUpload products={data.products} movements={data.movements} suppliers={data.suppliers} saving={saving} onSave={(payload) => save(payload, "Carga procesada correctamente.")} />}
           {view === "configuracion" && role === "ADMINISTRADOR" && <SettingsView data={data} saving={saving} onSave={save} />}
         </div>
       </main>
 
-      {modal === "movement" && <MovementModal products={data.products} coordinators={data.coordinators} initialType={movementType} warehouse={warehouse} saving={saving} onClose={() => setModal(null)} onSave={(payload) => void save(payload, "Movimiento registrado correctamente.")} onNewProduct={() => setModal("product")} />}
-      {modal === "product" && <ProductModal saving={saving} onClose={() => setModal(null)} onSave={(payload) => void save(payload, "Producto creado correctamente.")} />}
+      {modal === "movement" && <MovementModal products={data.products} coordinators={data.coordinators} suppliers={data.suppliers} initialType={movementType} warehouse={warehouse} saving={saving} onClose={() => setModal(null)} onSave={(payload) => void save(payload, "Movimiento registrado correctamente.")} onNewProduct={() => setModal("product")} />}
+      {modal === "product" && <ProductModal products={data.products} saving={saving} onClose={() => setModal(null)} onSave={(payload) => void save(payload, "SKU guardado correctamente.")} />}
       {message && <div className="toast"><span>✓</span>{message}</div>}
       {sidebarOpen && <button className="overlay" onClick={() => setSidebarOpen(false)} aria-label="Cerrar menú" />}
     </div>
@@ -657,7 +717,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
   const [filterBy, setFilterBy] = useState<"pedido" | "gr" | "site" | "serie">("pedido");
   const [filterQuery, setFilterQuery] = useState("");
   const entry = mode === "entrada";
-  const columns = entry ? 16 : 17;
+  const columns = entry ? 16 : 18;
   const filterLabel = filterBy === "pedido" ? "N° Pedido/Cod. Oracle" : filterBy === "gr" ? "GR" : filterBy === "site" ? "Site" : "Serie/Lote";
   const filterOptions = useMemo(() => [...new Set(movements.flatMap((movement) => {
     const raw = filterBy === "pedido"
@@ -727,6 +787,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
         Provincia: movement.province,
         "Proyecto Final": movement.project,
         "Cord. F1": movement.coordinatorF1,
+        "RUC/DNI": movement.contractorDocument,
         Contrata: movement.contractor,
         Consignatario: movement.consignee,
         "N° Pedido/Cod. Oracle": movement.orderNumber,
@@ -755,7 +816,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
       </div>
       <div className="table-wrap"><table className={`operational-table ${entry ? "entry-table" : "exit-table"}`}><thead><tr>
         <th>SKU</th><th>Descripción Sku</th><th>Serie / Lote</th>
-        {entry ? <><th>Proceso de equipo</th><th>Estado de Equipo</th><th>Condición</th><th>Proyecto</th><th>Proviene</th><th>Fecha de Ingreso</th><th>GR. de Ingreso</th><th>Link de GR. de Ingreso</th><th>N° Pedido/Cod. Oracle</th><th>Coordinador Entel</th><th>Site Origen</th></> : <><th>Fecha Salida</th><th>Nro. de GR de Salida</th><th>Link de GR</th><th>Cord. Entel Final</th><th>Site Destino</th><th>Región</th><th>Provincia</th><th>Proyecto Final</th><th>Cord. F1</th><th>Contrata</th><th>Consignatario</th><th>N° Pedido/Cod. Oracle</th></>}
+        {entry ? <><th>Proceso de equipo</th><th>Estado de Equipo</th><th>Condición</th><th>Proyecto</th><th>Proviene</th><th>Fecha de Ingreso</th><th>GR. de Ingreso</th><th>Link de GR. de Ingreso</th><th>N° Pedido/Cod. Oracle</th><th>Coordinador Entel</th><th>Site Origen</th></> : <><th>Fecha Salida</th><th>Nro. de GR de Salida</th><th>Link de GR</th><th>Cord. Entel Final</th><th>Site Destino</th><th>Región</th><th>Provincia</th><th>Proyecto Final</th><th>Cord. F1</th><th>RUC/DNI</th><th>Contrata</th><th>Consignatario</th><th>N° Pedido/Cod. Oracle</th></>}
         <th className="align-right">Costo</th><th>Trazabilidad</th>
       </tr></thead><tbody>
         {loading ? <tr><td colSpan={columns}><Empty text={`Cargando ${entry ? "ingresos" : "salidas"}...`} /></td></tr> : !visibleMovements.length ? <tr><td colSpan={columns}><Empty text={filterQuery ? "No se encontraron movimientos con este filtro." : `Aún no hay ${entry ? "ingresos" : "salidas"} registrados.`} /></td></tr> : visibleMovements.map((movement) => {
@@ -766,7 +827,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
             {entry ? <>
               <td><span className={`type-badge type-${movement.type}`}>{movement.type}</span></td><td><strong>{movement.equipmentStatus || "NUEVO"}</strong></td><td><strong>{movement.condition || "OPERATIVO"}</strong></td><td><strong>{movement.project || "—"}</strong></td><td><strong>{movement.origin || "MO COMPANY"}</strong></td><td><span className="date-cell">{displayDate(movement.movementDate)}</span></td><td><strong>{movement.document || "SIN GR"}</strong></td><td><GrLinkCell link={movement.grLink} /></td><td><strong>{movement.orderNumber || "—"}</strong></td><td><strong>{movement.coordinator || "—"}</strong><small>{movement.coordinatorF1 ? `F1: ${movement.coordinatorF1}` : ""}</small></td><td><strong>{movement.originSite || "MO Company"}</strong></td>
             </> : <>
-              <td><span className="date-cell">{displayDate(movement.movementDate)}</span></td><td><strong>{movement.document || "SIN GR"}</strong></td><td><GrLinkCell link={movement.grLink} /></td><td><strong>{movement.coordinator || "—"}</strong></td><td><strong>{movement.destinationSite || "—"}</strong></td><td><strong>{movement.region || "—"}</strong></td><td><strong>{movement.province || "—"}</strong></td><td><strong>{movement.project || "—"}</strong></td><td><strong>{movement.coordinatorF1 || "—"}</strong></td><td><strong>{movement.contractor || "—"}</strong></td><td><strong>{movement.consignee || "—"}</strong></td><td><strong>{movement.orderNumber || "—"}</strong></td>
+              <td><span className="date-cell">{displayDate(movement.movementDate)}</span></td><td><strong>{movement.document || "SIN GR"}</strong></td><td><GrLinkCell link={movement.grLink} /></td><td><strong>{movement.coordinator || "—"}</strong></td><td><strong>{movement.destinationSite || "—"}</strong></td><td><strong>{movement.region || "—"}</strong></td><td><strong>{movement.province || "—"}</strong></td><td><strong>{movement.project || "—"}</strong></td><td><strong>{movement.coordinatorF1 || "—"}</strong></td><td><strong>{movement.contractorDocument || "—"}</strong></td><td><strong>{movement.contractor || "—"}</strong></td><td><strong>{movement.consignee || "—"}</strong></td><td><strong>{movement.orderNumber || "—"}</strong></td>
             </>}
             <td className="align-right"><strong>{money.format((unitCostCents * movement.quantity) / 100)}</strong><small>{money.format(unitCostCents / 100)} c/u · {movement.costSource || "KARDEX"}</small></td>
             <td><button type="button" className="secondary-button trace-button" onClick={() => setTrace(movement)}><ClipboardList size={14} />Ver historial</button></td>
@@ -783,7 +844,7 @@ function TraceHistoryModal({ selected, movements, onClose }: { selected: Movemen
     <div className="modal-head"><div><span className="modal-kicker">TRAZABILIDAD DEL EQUIPO</span><h2>{selected.sku} · {selected.serials || selected.orderNumber || "Sin serie"}</h2><p>Historial cronológico desde el ingreso hasta la salida.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div>
     <div className="trace-timeline">{movements.map((movement) => {
       const outgoing = movement.type === "salida" || movement.type === "baja";
-      return <article key={movement.id} className={outgoing ? "outgoing" : "incoming"}><span>{outgoing ? <ArrowUpRight size={16} /> : <ArrowDownLeft size={16} />}</span><div><small>{displayDate(movement.movementDate)} · {movement.type.toUpperCase()}</small><strong>{movement.document || "Sin GR"} · Pedido de ingreso: {movement.orderNumber || "Sin pedido"}</strong><p>{outgoing ? `Destino: ${movement.destinationSite || "—"}` : `Origen: ${movement.originSite || movement.origin || "MO Company"}`} · Región: {movement.region || "—"} · Contrata: {movement.contractor || "—"}</p><p>Coordinador Entel: {movement.coordinator || "—"} · Coordinador F1: {movement.coordinatorF1 || "—"} · Cantidad {movement.quantity} {movement.unitMeasure || movement.unit}</p><GrLinkCell link={movement.grLink} /></div></article>;
+      return <article key={movement.id} className={outgoing ? "outgoing" : "incoming"}><span>{outgoing ? <ArrowUpRight size={16} /> : <ArrowDownLeft size={16} />}</span><div><small>{displayDate(movement.movementDate)} · {movement.type.toUpperCase()}</small><strong>{movement.document || "Sin GR"} · Pedido de ingreso: {movement.orderNumber || "Sin pedido"}</strong><p>{outgoing ? `Destino: ${movement.destinationSite || "—"}` : `Origen: ${movement.originSite || movement.origin || "MO Company"}`} · Región: {movement.region || "—"} · Contrata: {movement.contractor || "—"} · RUC/DNI: {movement.contractorDocument || "—"}</p><p>Coordinador Entel: {movement.coordinator || "—"} · Coordinador F1: {movement.coordinatorF1 || "—"} · Cantidad {movement.quantity} {movement.unitMeasure || movement.unit}</p><GrLinkCell link={movement.grLink} /></div></article>;
     })}</div>
     <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cerrar trazabilidad</button></div>
   </div></div>;
@@ -1231,17 +1292,20 @@ function ReconciliationRow({ movement, serial, validation, entryMovement, entelA
   </tr>;
 }
 
-function RequestView({ products, movements, coordinators, requests, warehouse, loading, saving, canRequest, canOperate, onSave }: { products: Product[]; movements: Movement[]; coordinators: Coordinator[]; requests: EquipmentRequest[]; warehouse: string; loading: boolean; saving: boolean; canRequest: boolean; canOperate: boolean; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
+function RequestView({ products, movements, coordinators, suppliers, requests, warehouse, loading, saving, canRequest, canOperate, onSave }: { products: Product[]; movements: Movement[]; coordinators: Coordinator[]; suppliers: Supplier[]; requests: EquipmentRequest[]; warehouse: string; loading: boolean; saving: boolean; canRequest: boolean; canOperate: boolean; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
   const [selectedCoordinator, setSelectedCoordinator] = useState("");
   const [selectedOrder, setSelectedOrder] = useState("");
   const [productQuery, setProductQuery] = useState("");
   const [selectedSeriesLot, setSelectedSeriesLot] = useState("");
   const [quantity, setQuantity] = useState(1);
+  const [contractorDocument, setContractorDocument] = useState("");
+  const [contractorBusinessName, setContractorBusinessName] = useState("");
   const [items, setItems] = useState<Array<{ productId: number; quantity: number; seriesLot: string }>>([]);
   const [tracking, setTracking] = useState<EquipmentRequest | null>(null);
   const productMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const activeCoordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "F1").sort((a, b) => a.name.localeCompare(b.name));
   const coordinator = activeCoordinators.find((item) => item.name === selectedCoordinator);
+  const supplier = suppliers.find((item) => item.active && item.documentNumber === contractorDocument.trim());
   const orderStock = useMemo(() => {
     const map = new Map<string, Map<number, number>>();
     movements.filter((movement) => movement.orderNumber.trim()).forEach((movement) => {
@@ -1328,6 +1392,8 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
       setSelectedOrder("");
       setProductQuery("");
       setSelectedSeriesLot("");
+      setContractorDocument("");
+      setContractorBusinessName("");
       setItems([]);
     }
   }
@@ -1347,9 +1413,10 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
             <label className="field"><span>N° Pedido con ingreso *</span><select name="orderNumber" required value={selectedOrder} onChange={(event) => { setSelectedOrder(event.target.value); setItems([]); setProductQuery(""); setSelectedSeriesLot(""); }}><option value="" disabled>Selecciona un pedido ingresado</option>{orderOptions.map((order) => <option value={order} key={order}>{order}</option>)}</select><small>Solo aparecen pedidos con saldo disponible.</small></label>
             <label className="field"><span>Proyecto</span><input name="project" placeholder="Rollout, PEXT, PINT..." /></label>
             <label className="field"><span>Site destino</span><input name="site" placeholder="Código o nombre del site" /></label>
-            <label className="field"><span>RUC de la contrata *</span><input name="contractorRuc" inputMode="numeric" pattern="[0-9]{11}" maxLength={11} required placeholder="11 dígitos" /></label>
-            <label className="field"><span>Razón social *</span><input name="contractorBusinessName" required placeholder="Nombre legal de la contrata" /></label>
+            <label className="field"><span>RUC de la contrata *</span><input name="contractorRuc" inputMode="numeric" pattern="[0-9]{11}" maxLength={11} required value={contractorDocument} onChange={(event) => { const value = event.target.value.replace(/\D/g, "").slice(0, 11); setContractorDocument(value); const match = suppliers.find((item) => item.active && item.documentNumber === value); setContractorBusinessName(match?.businessName ?? ""); }} placeholder="11 dígitos" /><small>{supplier ? `Proveedor: ${supplier.businessName}` : contractorDocument.length === 11 ? "RUC no registrado; completa la razón social o agrégalo en Proveedores." : "La razón social se completará desde el maestro de proveedores."}</small></label>
+            <label className="field"><span>Razón social *</span><input name="contractorBusinessName" required value={contractorBusinessName} onChange={(event) => setContractorBusinessName(event.target.value)} readOnly={Boolean(supplier)} placeholder="Nombre legal de la contrata" /></label>
             <label className="field"><span>Persona que recoge *</span><input name="pickupPerson" required placeholder="Nombres y apellidos" /></label>
+            <label className="field"><span>Segunda persona que recoge</span><input name="pickupPerson2" placeholder="Opcional · nombres y apellidos" /></label>
             <label className="field"><span>Región de envío *</span><input name="region" required placeholder="Ej. Lima" /></label>
             <label className="field"><span>Ciudad de envío *</span><input name="city" required placeholder="Ej. Lima / Arequipa" /></label>
             <label className="field"><span>Almacén que atenderá</span><input name="warehouse" value={warehouse} readOnly /></label>
@@ -1375,7 +1442,7 @@ function RequestView({ products, movements, coordinators, requests, warehouse, l
 
     <section className="panel request-history">
       <div className="panel-title"><div><h2>Solicitudes registradas</h2><p>{number.format(groupedRequests.length)} solicitudes; seguimiento separado del Kardex.</p></div></div>
-      <div className="table-wrap"><table><thead><tr><th>Solicitud</th><th>Coordinador F1</th><th>Pedido / Destino</th><th>Contrata / Recojo</th><th>Equipos solicitados</th><th>GR / Ticket / Fotos</th><th>Envío / Llegada</th><th>Días pendientes</th><th>Estado</th><th>Seguimiento</th></tr></thead><tbody>{loading ? <tr><td colSpan={10}><Empty text="Cargando solicitudes..." /></td></tr> : !groupedRequests.length ? <tr><td colSpan={10}><Empty text="Las solicitudes de los coordinadores F1 aparecerán aquí." /></td></tr> : groupedRequests.map((group) => { const request = group[0]; const days = pendingDays(request); const closed = ["CERRADA", "RECOGIDA", "RECHAZADA"].includes(request.status); return <tr key={request.requestCode}><td><strong>{request.requestCode}</strong><small>{displayDate(request.createdAt)}</small></td><td><strong>{request.coordinatorName}</strong><small>{request.coordinatorEmail || "Sin correo"}</small></td><td><strong>{request.orderNumber}</strong><small>{request.site || request.project || "Sin site"}</small><small>{[request.region, request.city].filter(Boolean).join(" · ") || "Sin región/ciudad"}</small></td><td><strong>{request.contractorBusinessName || "Sin razón social"}</strong><small>RUC: {request.contractorRuc || "—"}</small><small>Recoge: {request.pickupPerson || "—"}</small></td><td>{group.map((row) => { const product = productMap.get(row.productId); return <span className="request-line" key={row.id}><strong>{product?.sku || `Producto ${row.productId}`}</strong><small>{row.quantity} {product?.unit || "UND"} · {product?.description}</small><small>Serie/Lote: {row.seriesLot || "Sin registro"}</small></span>; })}</td><td><strong>{request.outboundGuide || "Sin GR"}</strong><small>{request.shippingTicket ? `Ticket: ${request.shippingTicket}` : "Sin ticket de envío"}</small><GrLinkCell link={request.outboundGuideLink} /><span className="evidence-links">{request.outboundGuidePhoto && <a href={request.outboundGuidePhoto} target="_blank" rel="noreferrer">Foto GR</a>}{request.shippingTicketPhoto && <a href={request.shippingTicketPhoto} target="_blank" rel="noreferrer">Foto ticket</a>}</span></td><td><strong>{request.sentDate ? displayDate(request.sentDate) : "Sin fecha de envío"}</strong><small>{request.arrivalDate ? `Llegó: ${displayDate(request.arrivalDate)}` : "Llegada pendiente"}</small></td><td><span className={`pending-days ${!closed && days > 7 ? "danger" : !closed && days >= 3 ? "warning" : "ok"}`}>{closed ? "Cerrada" : `${days} días`}</span><small>{request.pickupDate ? `Recogido: ${displayDate(request.pickupDate)}` : "Pendiente de recojo"}</small></td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td><td><button className="secondary-button trace-button" disabled={!canOperate} onClick={() => setTracking(request)}><ClipboardList size={14} />Actualizar</button></td></tr>; })}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>Solicitud</th><th>Coordinador F1</th><th>Pedido / Destino</th><th>Contrata / Recojo</th><th>Equipos solicitados</th><th>GR / Ticket / Fotos</th><th>Envío / Llegada</th><th>Días pendientes</th><th>Estado</th><th>Seguimiento</th></tr></thead><tbody>{loading ? <tr><td colSpan={10}><Empty text="Cargando solicitudes..." /></td></tr> : !groupedRequests.length ? <tr><td colSpan={10}><Empty text="Las solicitudes de los coordinadores F1 aparecerán aquí." /></td></tr> : groupedRequests.map((group) => { const request = group[0]; const days = pendingDays(request); const closed = ["CERRADA", "RECOGIDA", "RECHAZADA"].includes(request.status); return <tr key={request.requestCode}><td><strong>{request.requestCode}</strong><small>{displayDate(request.createdAt)}</small></td><td><strong>{request.coordinatorName}</strong><small>{request.coordinatorEmail || "Sin correo"}</small></td><td><strong>{request.orderNumber}</strong><small>{request.site || request.project || "Sin site"}</small><small>{[request.region, request.city].filter(Boolean).join(" · ") || "Sin región/ciudad"}</small></td><td><strong>{request.contractorBusinessName || "Sin razón social"}</strong><small>RUC: {request.contractorRuc || "—"}</small><small>Recoge 1: {request.pickupPerson || "—"}</small>{request.pickupPerson2 && <small>Recoge 2: {request.pickupPerson2}</small>}</td><td>{group.map((row) => { const product = productMap.get(row.productId); return <span className="request-line" key={row.id}><strong>{product?.sku || `Producto ${row.productId}`}</strong><small>{row.quantity} {product?.unit || "UND"} · {product?.description}</small><small>Serie/Lote: {row.seriesLot || "Sin registro"}</small></span>; })}</td><td><strong>{request.outboundGuide || "Sin GR"}</strong><small>{request.shippingTicket ? `Ticket: ${request.shippingTicket}` : "Sin ticket de envío"}</small><GrLinkCell link={request.outboundGuideLink} /><span className="evidence-links">{request.outboundGuidePhoto && <a href={request.outboundGuidePhoto} target="_blank" rel="noreferrer">Foto GR</a>}{request.shippingTicketPhoto && <a href={request.shippingTicketPhoto} target="_blank" rel="noreferrer">Foto ticket</a>}</span></td><td><strong>{request.sentDate ? displayDate(request.sentDate) : "Sin fecha de envío"}</strong><small>{request.arrivalDate ? `Llegó: ${displayDate(request.arrivalDate)}` : "Llegada pendiente"}</small></td><td><span className={`pending-days ${!closed && days > 7 ? "danger" : !closed && days >= 3 ? "warning" : "ok"}`}>{closed ? "Cerrada" : `${days} días`}</span><small>{request.pickupDate ? `Recogido: ${displayDate(request.pickupDate)}` : "Pendiente de recojo"}</small></td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td><td><button className="secondary-button trace-button" disabled={!canOperate} onClick={() => setTracking(request)}><ClipboardList size={14} />Actualizar</button></td></tr>; })}</tbody></table></div>
     </section>
     {tracking && <RequestTrackingModal request={tracking} saving={saving} onClose={() => setTracking(null)} onSave={async (payload) => { const ok = await onSave(payload, "Seguimiento logístico actualizado."); if (ok) setTracking(null); }} />}
   </>;
@@ -1407,10 +1474,12 @@ async function compressEvidencePhoto(file: File) {
 }
 
 function RequestTrackingModal({ request, saving, onClose, onSave }: { request: EquipmentRequest; saving: boolean; onClose: () => void; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
-  const [outboundGuidePhoto, setOutboundGuidePhoto] = useState(request.outboundGuidePhoto || "");
-  const [shippingTicketPhoto, setShippingTicketPhoto] = useState(request.shippingTicketPhoto || "");
+  const [outboundGuidePhoto, setOutboundGuidePhoto] = useState(request.outboundGuidePhotoStored || request.outboundGuidePhoto || "");
+  const [shippingTicketPhoto, setShippingTicketPhoto] = useState(request.shippingTicketPhotoStored || request.shippingTicketPhoto || "");
   const [photoError, setPhotoError] = useState("");
   const [compressing, setCompressing] = useState(false);
+  const outboundGuidePhotoPreview = outboundGuidePhoto.startsWith("supabase://") ? request.outboundGuidePhoto : outboundGuidePhoto;
+  const shippingTicketPhotoPreview = shippingTicketPhoto.startsWith("supabase://") ? request.shippingTicketPhoto : shippingTicketPhoto;
 
   async function loadPhoto(file: File | undefined, setter: (value: string) => void) {
     if (!file) return;
@@ -1429,7 +1498,7 @@ function RequestTrackingModal({ request, saving, onClose, onSave }: { request: E
     event.preventDefault();
     void onSave({ ...Object.fromEntries(new FormData(event.currentTarget).entries()), outboundGuidePhoto, shippingTicketPhoto });
   }
-  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">SEGUIMIENTO LOGÍSTICO</span><h2>{request.requestCode}</h2><p>Estos datos no modifican stock ni crean movimientos.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="requestLogistics" /><input type="hidden" name="requestCode" value={request.requestCode} /><div className="form-grid"><label className="field"><span>Estado *</span><select name="status" defaultValue={request.status}><option>PENDIENTE</option><option>VALIDADA</option><option>DESPACHADA</option><option>EN_TRANSITO</option><option>LISTA_RECOJO</option><option>RECOGIDA</option><option>CERRADA</option><option>RECHAZADA</option></select></label><label className="field"><span>Nro. GR de salida</span><input name="outboundGuide" defaultValue={request.outboundGuide} /></label><label className="field field-wide"><span>Link GR de salida</span><input name="outboundGuideLink" defaultValue={request.outboundGuideLink} placeholder="Vínculo SharePoint o nombre del archivo" /></label><label className="field"><span>Foto de la GR de despacho</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setOutboundGuidePhoto)} /><small>{outboundGuidePhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{outboundGuidePhoto && <span className="photo-actions"><a href={outboundGuidePhoto} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setOutboundGuidePhoto("")}>Quitar</button></span>}</label><label className="field"><span>Ticket de envío</span><input name="shippingTicket" defaultValue={request.shippingTicket} /></label><label className="field"><span>Foto del ticket de envío</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setShippingTicketPhoto)} /><small>{shippingTicketPhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{shippingTicketPhoto && <span className="photo-actions"><a href={shippingTicketPhoto} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setShippingTicketPhoto("")}>Quitar</button></span>}</label><label className="field"><span>Clave</span><input name="shippingKey" defaultValue={request.shippingKey} /></label><label className="field"><span>Fecha de envío</span><input name="sentDate" type="date" defaultValue={request.sentDate} /></label><label className="field"><span>Fecha de llegada</span><input name="arrivalDate" type="date" defaultValue={request.arrivalDate} /></label><label className="field"><span>Fecha de recojo</span><input name="pickupDate" type="date" defaultValue={request.pickupDate} /></label><label className="field field-wide"><span>Notas de seguimiento</span><textarea name="logisticsNotes" rows={3} defaultValue={request.logisticsNotes} placeholder="Incidencias, contacto, recordatorio..." /></label></div>{photoError && <div className="inline-error">{photoError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || compressing}>{compressing ? "Procesando fotos..." : saving ? "Guardando..." : "Guardar seguimiento"}</button></div></form></div></div>;
+  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">SEGUIMIENTO LOGÍSTICO</span><h2>{request.requestCode}</h2><p>Estos datos no modifican stock ni crean movimientos.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="requestLogistics" /><input type="hidden" name="requestCode" value={request.requestCode} /><div className="form-grid"><label className="field"><span>Estado *</span><select name="status" defaultValue={request.status}><option>PENDIENTE</option><option>VALIDADA</option><option>DESPACHADA</option><option>EN_TRANSITO</option><option>LISTA_RECOJO</option><option>RECOGIDA</option><option>CERRADA</option><option>RECHAZADA</option></select></label><label className="field"><span>Nro. GR de salida</span><input name="outboundGuide" defaultValue={request.outboundGuide} /></label><label className="field field-wide"><span>Link GR de salida</span><input name="outboundGuideLink" defaultValue={request.outboundGuideLink} placeholder="Vínculo SharePoint o nombre del archivo" /></label><label className="field"><span>Foto de la GR de despacho</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setOutboundGuidePhoto)} /><small>{outboundGuidePhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{outboundGuidePhotoPreview && <span className="photo-actions"><a href={outboundGuidePhotoPreview} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setOutboundGuidePhoto("")}>Quitar</button></span>}</label><label className="field"><span>Ticket de envío</span><input name="shippingTicket" defaultValue={request.shippingTicket} /></label><label className="field"><span>Foto del ticket de envío</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setShippingTicketPhoto)} /><small>{shippingTicketPhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{shippingTicketPhotoPreview && <span className="photo-actions"><a href={shippingTicketPhotoPreview} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setShippingTicketPhoto("")}>Quitar</button></span>}</label><label className="field"><span>Clave</span><input name="shippingKey" defaultValue={request.shippingKey} /></label><label className="field"><span>Fecha de envío</span><input name="sentDate" type="date" defaultValue={request.sentDate} /></label><label className="field"><span>Fecha de llegada</span><input name="arrivalDate" type="date" defaultValue={request.arrivalDate} /></label><label className="field"><span>Fecha de recojo</span><input name="pickupDate" type="date" defaultValue={request.pickupDate} /></label><label className="field field-wide"><span>Notas de seguimiento</span><textarea name="logisticsNotes" rows={3} defaultValue={request.logisticsNotes} placeholder="Incidencias, contacto, recordatorio..." /></label></div>{photoError && <div className="inline-error">{photoError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || compressing}>{compressing ? "Procesando fotos..." : saving ? "Guardando..." : "Guardar seguimiento"}</button></div></form></div></div>;
 }
 
 function SettingsView({ data, saving, onSave }: { data: KardexData; saving: boolean; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
@@ -1444,14 +1513,14 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
     const backup = await response.json() as Record<string, Array<Record<string, unknown>>>;
     const XLSX = await import("xlsx");
     const workbook = XLSX.utils.book_new();
-    const sheets: Array<[string, string]> = [["products", "Maestro SKU"], ["movements", "Movimientos"], ["sourceRecords", "Fuentes externas"], ["coordinators", "Coordinadores"], ["installationValidations", "Conciliaciones"], ["auditImports", "Cortes auditoría"], ["auditRecords", "Detalle auditoría"], ["equipmentRequests", "Solicitudes"]];
+    const sheets: Array<[string, string]> = [["products", "Maestro SKU"], ["movements", "Movimientos"], ["sourceRecords", "Fuentes externas"], ["coordinators", "Coordinadores"], ["suppliers", "Proveedores"], ["installationValidations", "Conciliaciones"], ["auditImports", "Cortes auditoría"], ["auditRecords", "Detalle auditoría"], ["equipmentRequests", "Solicitudes"]];
     sheets.forEach(([key, name]) => XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(backup[key] ?? []), name));
     XLSX.writeFile(workbook, `respaldo-kardex-f1-${today()}.xlsx`, { compression: true });
     setBackupDownloaded(true);
   }
 
   async function cleanup() {
-    const ok = await onSave({ action: "cleanup", scope, confirmation, backupConfirmed: backupDownloaded }, scope === "all" ? "Reinicio total completado." : "Datos de prueba eliminados; maestros y coordinadores conservados.");
+    const ok = await onSave({ action: "cleanup", scope, confirmation }, scope === "all" ? "Reinicio total completado." : "Datos de prueba eliminados; maestros, proveedores y coordinadores conservados.");
     if (ok) { setConfirmation(""); setBackupDownloaded(false); }
   }
 
@@ -1464,22 +1533,36 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
   }
 
   return <section className="settings-grid">
-    <article className="panel backup-card"><span><Download size={23} /></span><div><small>PASO 1 · OBLIGATORIO</small><h2>Descargar respaldo completo</h2><p>Genera un Excel con maestro, movimientos, conciliaciones, auditorías, coordinadores y solicitudes antes de limpiar.</p><button className="secondary-button" onClick={() => void downloadBackup()}><Download size={16} />{backupDownloaded ? "Respaldo descargado" : "Descargar respaldo Excel"}</button></div></article>
+    <article className="panel backup-card"><span><Download size={23} /></span><div><small>RESPALDO · OPCIONAL Y RECOMENDADO</small><h2>Descargar respaldo completo</h2><p>Genera un Excel con maestro, movimientos, conciliaciones, auditorías, proveedores, coordinadores y solicitudes antes de limpiar.</p><button className="secondary-button" onClick={() => void downloadBackup()}><Download size={16} />{backupDownloaded ? "Respaldo descargado" : "Descargar respaldo Excel"}</button></div></article>
     <article className="panel cleanup-card"><div className="cleanup-head"><span><ShieldCheck size={23} /></span><div><small>PASO 2 · LIMPIEZA PROTEGIDA</small><h2>Preparar la carga real</h2><p>Selecciona exactamente qué deseas borrar.</p></div></div>
       <div className="cleanup-options"><label className={scope === "operations" ? "selected" : ""}><input type="radio" checked={scope === "operations"} onChange={() => { setScope("operations"); setConfirmation(""); }} /><strong>Limpiar operaciones de prueba</strong><span>Borra movimientos, conciliaciones, auditorías y solicitudes. Conserva maestro SKU y coordinadores.</span></label><label className={scope === "all" ? "selected danger" : "danger"}><input type="radio" checked={scope === "all"} onChange={() => { setScope("all"); setConfirmation(""); }} /><strong>Reinicio total</strong><span>También borra el maestro SKU y los coordinadores. El sistema quedará completamente vacío.</span></label></div>
-      <div className="cleanup-confirm"><label className="field"><span>Escribe <b>{phrase}</b> para confirmar</span><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={phrase} /></label><button className="danger-button cleanup-action" disabled={saving || !backupDownloaded || confirmation.trim().toUpperCase() !== phrase} onClick={() => void cleanup()}>{saving ? "Limpiando..." : "Ejecutar limpieza"}</button></div>
+      <div className="cleanup-confirm"><label className="field"><span>Escribe <b>{phrase}</b> para confirmar</span><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={phrase} /></label><button className="danger-button cleanup-action" disabled={saving || confirmation.trim().toUpperCase() !== phrase} onClick={() => void cleanup()}>{saving ? "Limpiando..." : "Ejecutar limpieza"}</button></div>
       <p className="cleanup-note">Estado actual: {number.format(data.movements.length)} movimientos · {number.format(data.installationValidations.length)} conciliaciones · {number.format(data.auditImports.length)} cortes · {number.format(data.equipmentRequests.length)} solicitudes.</p>
     </article>
-    <article className="panel access-card"><div className="panel-title"><div><h2>Usuarios y permisos</h2><p>Registra el Gmail exacto con el que cada persona entra a ChatGPT; el servidor aplica su rol en cada operación.</p></div><ShieldCheck size={21} /></div><form className="access-form" onSubmit={saveUser}><label className="field"><span>Nombre</span><input name="displayName" placeholder="Nombre del colaborador" /></label><label className="field"><span>Correo de acceso (Gmail) *</span><input name="email" type="email" autoComplete="email" required placeholder="usuario@gmail.com" /></label><label className="field"><span>Rol *</span><select name="role" defaultValue="SOLO_LECTURA"><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></label><button className="primary-button" type="submit" disabled={saving}><Plus size={15} />Agregar usuario</button></form><div className="role-guide"><span><b>Administrador</b> configura usuarios y limpia datos.</span><span><b>Logística</b> registra y carga operaciones.</span><span><b>Coordinador</b> crea solicitudes.</span><span><b>Solo lectura</b> consulta sin editar.</span></div><div className="table-wrap"><table><thead><tr><th>Usuario</th><th>Correo de acceso</th><th>Rol</th><th>Estado</th></tr></thead><tbody>{!data.appUsers.length ? <tr><td colSpan={4}><Empty text="Agrega el Gmail de cada integrante para asignar permisos." /></td></tr> : data.appUsers.map((appUser) => <tr key={appUser.id}><td><strong>{appUser.displayName || "Sin nombre"}</strong></td><td>{appUser.email}</td><td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", email: appUser.email, displayName: appUser.displayName, role: event.target.value, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></td><td><select value={appUser.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "appUser", email: appUser.email, displayName: appUser.displayName, role: appUser.role, active: event.target.value === "ACTIVO" }, "Estado del usuario actualizado.")}><option>ACTIVO</option><option>INACTIVO</option></select></td></tr>)}</tbody></table></div></article>
+    <article className="panel access-card"><div className="panel-title"><div><h2>Usuarios y permisos</h2><p>Crea o actualiza usuarios corporativos @f1.services. Al registrar uno nuevo se envía una invitación segura para que defina su acceso.</p></div><ShieldCheck size={21} /></div><form className="access-form" onSubmit={saveUser}><label className="field"><span>Nombre</span><input name="displayName" placeholder="Nombre del colaborador" /></label><label className="field"><span>Correo corporativo *</span><input name="email" type="email" autoComplete="email" required placeholder="nombre@f1.services" pattern=".+@f1\\.services" /></label><label className="field"><span>Rol *</span><select name="role" defaultValue="SOLO_LECTURA"><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></label><button className="primary-button" type="submit" disabled={saving}><Plus size={15} />Invitar usuario</button></form><div className="role-guide"><span><b>Administrador</b> configura usuarios y limpia datos.</span><span><b>Logística</b> registra y carga operaciones.</span><span><b>Coordinador</b> crea solicitudes.</span><span><b>Solo lectura</b> consulta sin editar.</span></div><div className="table-wrap"><table><thead><tr><th>Usuario</th><th>Correo de acceso</th><th>Rol</th><th>Estado</th><th>Invitación</th></tr></thead><tbody>{!data.appUsers.length ? <tr><td colSpan={5}><Empty text="Agrega el correo @f1.services de cada integrante para enviarle su invitación." /></td></tr> : data.appUsers.map((appUser) => <tr key={appUser.id}><td><strong>{appUser.displayName || "Sin nombre"}</strong></td><td>{appUser.email}</td><td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", email: appUser.email, displayName: appUser.displayName, role: event.target.value, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></td><td><select value={appUser.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "appUser", email: appUser.email, displayName: appUser.displayName, role: appUser.role, active: event.target.value === "ACTIVO" }, "Estado del usuario actualizado.")}><option>ACTIVO</option><option>INACTIVO</option></select></td><td><small>{appUser.invitationStatus || (appUser.invitedAt ? "ENVIADA" : "PENDIENTE")}</small></td></tr>)}</tbody></table></div></article>
   </section>;
 }
 
 function CoordinatorView({ coordinators, loading, saving, onSave }: { coordinators: Coordinator[]; loading: boolean; saving: boolean; onSave: (payload: Record<string, unknown>) => Promise<boolean> }) {
+  const [fileStatus, setFileStatus] = useState("");
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const ok = await onSave(Object.fromEntries(new FormData(form).entries()));
     if (ok) form.reset();
+  }
+
+  async function upload(file?: File) {
+    if (!file) return;
+    setFileStatus("Leyendo archivo...");
+    try {
+      const rows = await readTabularFile(file);
+      if (!rows.length) throw new Error("El archivo no contiene coordinadores.");
+      const ok = await onSave({ action: "coordinatorBulk", rows });
+      setFileStatus(ok ? `${rows.length} filas procesadas.` : "No se pudo completar la carga.");
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : "No se pudo leer el archivo.");
+    }
   }
 
   return <div className="coordinator-layout">
@@ -1492,6 +1575,7 @@ function CoordinatorView({ coordinators, loading, saving, onSave }: { coordinato
         <label className="field"><span>Correo</span><input name="email" type="email" placeholder="coordinador@empresa.com" /></label>
         <button className="primary-button" type="submit" disabled={saving}><Plus size={16} />{saving ? "Guardando..." : "Guardar coordinador"}</button>
       </form>
+      <div className="bulk-master-box"><strong>Recuperar lista anterior</strong><p>Carga un Excel o CSV con Empresa, Nombre, Correo y Estado.</p><label className="secondary-button"><Upload size={15} />Seleccionar archivo<input type="file" hidden accept=".xlsx,.xls,.csv" onChange={(event) => void upload(event.target.files?.[0])} /></label><button type="button" className="secondary-button" onClick={() => void downloadTableTemplate("plantilla_coordinadores_f1.xlsx", "Coordinadores", { Empresa: "F1", Nombre: "NOMBRE DEL COORDINADOR", Correo: "nombre@f1.services", Estado: "ACTIVO" })}><Download size={15} />Descargar plantilla</button>{fileStatus && <small>{fileStatus}</small>}</div>
     </section>
     <section className="panel table-panel coordinator-table-panel">
       <div className="panel-title"><div><h2>Tabla de coordinadores</h2><p>{coordinators.length} responsables disponibles para ingresos, salidas y correos.</p></div></div>
@@ -1500,7 +1584,103 @@ function CoordinatorView({ coordinators, loading, saving, onSave }: { coordinato
   </div>;
 }
 
-function BulkUpload({ products, movements, saving, onSave }: { products: Product[]; movements: Movement[]; saving: boolean; onSave: (payload: Record<string, unknown>) => Promise<boolean> }) {
+function SupplierView({ suppliers, loading, saving, onSave }: { suppliers: Supplier[]; loading: boolean; saving: boolean; onSave: (payload: Record<string, unknown>) => Promise<boolean> }) {
+  const [fileStatus, setFileStatus] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const ok = await onSave({ action: "supplier", ...Object.fromEntries(new FormData(form).entries()), active: true });
+    if (ok) form.reset();
+  }
+
+  async function upload(file?: File) {
+    if (!file) return;
+    setFileStatus("Leyendo archivo...");
+    try {
+      const rows = await readTabularFile(file);
+      if (!rows.length) throw new Error("El archivo no contiene proveedores.");
+      const ok = await onSave({ action: "supplierBulk", rows });
+      setFileStatus(ok ? `${rows.length} filas procesadas.` : "No se pudo completar la carga.");
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : "No se pudo leer el archivo.");
+    }
+  }
+
+  return <div className="coordinator-layout">
+    <section className="panel coordinator-form-panel">
+      <div className="panel-title"><div><h2>Proveedor o contrata</h2><p>El RUC/DNI completa automáticamente la razón social en solicitudes y salidas.</p></div></div>
+      <form onSubmit={submit}>
+        <input type="hidden" name="source" value="MANUAL" />
+        <label className="field"><span>Tipo de documento *</span><select name="documentType" defaultValue="RUC"><option value="RUC">RUC</option><option value="DNI">DNI</option></select></label>
+        <label className="field"><span>RUC o DNI *</span><input name="documentNumber" required inputMode="numeric" pattern="[0-9]{8}|[0-9]{11}" placeholder="8 u 11 dígitos" /></label>
+        <label className="field"><span>Razón social / nombre *</span><input name="businessName" required placeholder="Nombre legal" /></label>
+        <label className="field"><span>Nombre comercial</span><input name="tradeName" placeholder="Opcional" /></label>
+        <button className="primary-button" type="submit" disabled={saving}><Plus size={16} />Guardar proveedor</button>
+      </form>
+      <div className="bulk-master-box"><strong>Carga masiva</strong><p>Columnas: RUC/DNI, Razón Social y Nombre Comercial.</p><label className="secondary-button"><Upload size={15} />Seleccionar Excel o CSV<input type="file" hidden accept=".xlsx,.xls,.csv" onChange={(event) => void upload(event.target.files?.[0])} /></label><button type="button" className="secondary-button" onClick={() => void downloadTableTemplate("plantilla_proveedores_f1.xlsx", "Proveedores", { "RUC/DNI": "20123456789", "Razón Social": "CONTRATA EJEMPLO S.A.C.", "Nombre Comercial": "CONTRATA EJEMPLO" })}><Download size={15} />Descargar plantilla</button>{fileStatus && <small>{fileStatus}</small>}</div>
+    </section>
+    <section className="panel table-panel coordinator-table-panel">
+      <div className="panel-title"><div><h2>Maestro de proveedores</h2><p>{suppliers.length} registros disponibles. SUNAT podrá activarse cuando se configuren credenciales oficiales.</p></div></div>
+      <div className="table-wrap"><table><thead><tr><th>Documento</th><th>Razón social</th><th>Nombre comercial</th><th>Fuente</th><th>Estado</th></tr></thead><tbody>{loading ? <tr><td colSpan={5}><Empty text="Cargando proveedores..." /></td></tr> : !suppliers.length ? <tr><td colSpan={5}><Empty text="Carga tu base de proveedores o registra el primer RUC/DNI." /></td></tr> : suppliers.map((supplier) => <tr key={supplier.id}><td><strong>{supplier.documentNumber}</strong><small>{supplier.documentType}</small></td><td><strong>{supplier.businessName}</strong></td><td>{supplier.tradeName || "—"}</td><td>{supplier.source}</td><td><span className={`source-badge ${supplier.active ? "" : "inactive"}`}>{supplier.active ? "ACTIVO" : "INACTIVO"}</span></td></tr>)}</tbody></table></div>
+    </section>
+  </div>;
+}
+
+function ReportsView({ products, movements, requests }: { products: Product[]; movements: Movement[]; requests: EquipmentRequest[] }) {
+  const reportRows = useMemo(() => movements.map((movement) => ({
+    Fecha: movement.movementDate,
+    Tipo: movement.type.toUpperCase(),
+    SKU: movement.sku,
+    Descripción: movement.description,
+    "Serie/Lote": movement.serials,
+    Cantidad: movement.quantity,
+    Unidad: movement.unitMeasure || movement.unit,
+    "Costo unitario": (movement.unitCostCents || movement.productUnitCostCents || 0) / 100,
+    "Costo total": ((movement.unitCostCents || movement.productUnitCostCents || 0) * movement.quantity) / 100,
+    "N° Pedido": movement.orderNumber,
+    GR: movement.document,
+    "RUC/DNI": movement.contractorDocument,
+    "Razón social": movement.contractor,
+    "Coordinador Entel": movement.coordinator,
+    "Coordinador F1": movement.coordinatorF1,
+    Proyecto: movement.project,
+    Site: movement.destinationSite || movement.originSite,
+    Región: movement.region,
+    Provincia: movement.province,
+  })), [movements]);
+  const grouped = useMemo(() => {
+    const map = new Map<string, { lines: number; quantity: number; cost: number }>();
+    movements.forEach((movement) => {
+      const key = movement.coordinatorF1 || "SIN COORDINADOR F1";
+      const current = map.get(key) ?? { lines: 0, quantity: 0, cost: 0 };
+      current.lines += 1;
+      current.quantity += movement.quantity;
+      current.cost += (movement.unitCostCents || movement.productUnitCostCents || 0) * movement.quantity;
+      map.set(key, current);
+    });
+    return [...map].sort((a, b) => b[1].cost - a[1].cost);
+  }, [movements]);
+
+  async function exportReport() {
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(reportRows), "Movimientos");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(products), "Stock actual");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(requests), "Solicitudes");
+    XLSX.writeFile(workbook, `reporte-kardex-f1-${today()}.xlsx`, { compression: true });
+  }
+
+  const entries = movements.filter((movement) => movement.type === "entrada");
+  const exits = movements.filter((movement) => movement.type === "salida");
+  const value = exits.reduce((sum, movement) => sum + (movement.unitCostCents || movement.productUnitCostCents || 0) * movement.quantity, 0);
+  return <>
+    <section className="request-alert-strip"><article><small>INGRESOS</small><strong>{number.format(entries.length)}</strong><span>Líneas registradas</span></article><article><small>SALIDAS</small><strong>{number.format(exits.length)}</strong><span>Líneas despachadas</span></article><article><small>COSTO DESPACHADO</small><strong>{money.format(value / 100)}</strong><span>Según el filtro actual</span></article></section>
+    <section className="panel table-panel"><div className="panel-title"><div><h2>Despacho valorizado por Coordinador F1</h2><p>El buscador superior filtra el detalle antes de exportar.</p></div><button className="primary-button" onClick={() => void exportReport()}><Download size={16} />Descargar Excel completo</button></div><div className="table-wrap"><table><thead><tr><th>Coordinador F1</th><th>Líneas</th><th>Cantidad</th><th className="align-right">Costo total</th></tr></thead><tbody>{!grouped.length ? <tr><td colSpan={4}><Empty text="Los reportes se habilitan al registrar movimientos." /></td></tr> : grouped.map(([name, summary]) => <tr key={name}><td><strong>{name}</strong></td><td>{number.format(summary.lines)}</td><td>{number.format(summary.quantity)}</td><td className="align-right"><strong>{money.format(summary.cost / 100)}</strong></td></tr>)}</tbody></table></div></section>
+  </>;
+}
+
+function BulkUpload({ products, movements, suppliers, saving, onSave }: { products: Product[]; movements: Movement[]; suppliers: Supplier[]; saving: boolean; onSave: (payload: Record<string, unknown>) => Promise<boolean> }) {
   const source = "F1";
   const [movementType, setMovementType] = useState<"entrada" | "salida" | "maestro">("entrada");
   const [fileName, setFileName] = useState("");
@@ -1527,6 +1707,10 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       const orderNumber = bulkRowValue(row, "N° Pedido", "Pedido");
       const coordinator = bulkRowValue(row, "Coordinador Entel", "CordEntelFinal");
       const coordinatorF1 = bulkRowValue(row, "Coordinador F1", "CordF1");
+      const contractorDocument = bulkRowValue(row, "RUC", "RUC/DNI", "Documento").replace(/\D/g, "");
+      const suppliedContractor = bulkRowValue(row, "Razón Social", "Razon Social", "Contrata", "Proveedor");
+      const supplier = suppliers.find((item) => item.active && item.documentNumber === contractorDocument);
+      const contractor = supplier?.businessName || suppliedContractor;
       let serials = bulkRowValue(row, "Serie/Lote", "Serie").toUpperCase();
       const document = bulkRowValue(row, movementType === "entrada" ? "GR. de Ingreso" : "NroGRSalida", "GR. de Salida").toUpperCase();
       const sourceRow = bulkRowValue(row, "ITEM", "Fila").toUpperCase();
@@ -1551,8 +1735,11 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       if (!reason && !sku) reason = "Falta el SKU.";
       else if (movementType === "maestro" && !description) reason = "Falta la descripción del SKU.";
       else if (movementType === "maestro" && !equipmentType) reason = "Falta el tipo de equipo.";
+      else if (movementType !== "maestro" && !document) reason = "Falta la GR de ingreso o salida.";
       else if (movementType !== "maestro" && (!orderNumber || !coordinator)) reason = "Faltan N° Pedido o Coordinador Entel.";
       else if ((movementType === "entrada" || movementType === "salida") && !coordinatorF1) reason = "Falta Coordinador F1.";
+      else if (movementType === "salida" && !contractorDocument) reason = "Falta RUC/DNI de la contrata.";
+      else if (movementType !== "maestro" && !contractor) reason = "Falta razón social, contrata o proveedor.";
 
       if (!reason && movementType === "maestro" && product
         && product.description.trim().toUpperCase() === description.trim().toUpperCase()
@@ -1561,13 +1748,12 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       }
 
       if (!reason && movementType !== "maestro" && product) {
-        const duplicate = movements.some((movement) => movement.productId === product.id
-          && movement.type === movementType
+        const party = (contractorDocument || contractor || origin).trim().toUpperCase();
+        const duplicate = movements.some((movement) => movement.type === movementType
+          && movement.document.trim().toUpperCase() === document
           && movement.orderNumber.trim().toUpperCase() === orderNumber.trim().toUpperCase()
-          && movement.coordinator.trim().toUpperCase() === coordinator.trim().toUpperCase()
-          && (!document || movement.document.trim().toUpperCase() === document)
-          && (serials ? movement.serials.trim().toUpperCase() === serials : Boolean(sourceRow) && movement.sourceRow.trim().toUpperCase() === sourceRow));
-        if (duplicate) reason = "Esta línea ya fue cargada anteriormente.";
+          && (movement.contractorDocument || movement.contractor || movement.origin).trim().toUpperCase() === party);
+        if (duplicate) reason = "La misma GR y pedido ya fueron cargados para esta razón social.";
       }
 
       if (!reason && movementType === "entrada" && product && serials) {
@@ -1624,7 +1810,7 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
         reason: reason || (autoLotGenerated ? "Lote automático de transferencia; se generará al confirmar." : "Lista para cargar"),
       };
     });
-  }, [movements, movementType, products, rows]);
+  }, [movements, movementType, products, rows, suppliers]);
 
   const acceptedPreviewRows = previewRows.filter((row) => row.accepted);
   const rejectedPreviewRows = previewRows.filter((row) => !row.accepted);
@@ -1742,7 +1928,7 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
   async function downloadTemplate() {
     const XLSX = await import("xlsx");
     const row = movementType === "entrada" ? {
-      Fila: 1, Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Estado de Equipo": "NUEVO", Condición: "OPERATIVO", Proyecto: "ENTEL", Proviene: "MO COMPANY", "Fecha de Ingreso": today(), "GR. de Ingreso": "GR-ING-001", "Link de GR. de Ingreso": "https://ejemplo.com/gr-ingreso.pdf", "N° Pedido": "PED-001", "Coordinador Entel": "COORDINADOR ENTEL", "Coordinador F1": "COORDINADOR F1", "Site Origen": "MO COMPANY", Ubicación: "MO COMPANY", "Serie/Lote": "SERIE001", "Modo de Lote": "MANUAL", "Unidad de Medida": "UND", Cantidad: 1, Costo: 100, "Tipo de Equipo": "EQUIPO", "Cargar Gr": "SI",
+      Fila: 1, Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Estado de Equipo": "NUEVO", Condición: "OPERATIVO", Proyecto: "ENTEL", Proviene: "MO COMPANY", "Fecha de Ingreso": today(), "GR. de Ingreso": "GR-ING-001", "Link de GR. de Ingreso": "https://ejemplo.com/gr-ingreso.pdf", "N° Pedido": "PED-001", "Coordinador Entel": "COORDINADOR ENTEL", "Coordinador F1": "COORDINADOR F1", "RUC/DNI": "20123456789", "Razón Social": "PROVEEDOR EJEMPLO S.A.C.", "Site Origen": "MO COMPANY", Ubicación: "MO COMPANY", "Serie/Lote": "SERIE001", "Modo de Lote": "MANUAL", "Unidad de Medida": "UND", Cantidad: 1, Costo: 100, "Tipo de Equipo": "EQUIPO", "Cargar Gr": "SI",
     } : movementType === "salida" ? {
       ITEM: 1,
       "Fecha Salida": today(),
@@ -1756,6 +1942,7 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       Provincia: "LIMA",
       ProyectoFinal: "ENTEL",
       CordF1: "COORDINADOR F1",
+      RUC: "20123456789",
       Contrata: "CONTRATA",
       Consignatario: "RESPONSABLE DE RECEPCIÓN",
       "Serie/Lote": "SERIE001",
@@ -1838,7 +2025,7 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       <div className="upload-actions"><button className="secondary-button" onClick={() => void downloadTemplate()}><Download size={16} />Plantilla de {operationLabel}</button><button className={`primary-button ${movementType === "salida" ? "danger-button" : ""} ${loadComplete ? "load-complete-button" : ""}`} disabled={!acceptedPreviewRows.length || saving || loadComplete} onClick={() => void submitBulk()}>{saving ? "Procesando..." : loadComplete ? "✓ Carga completada" : `Cargar ${acceptedPreviewRows.length || ""} líneas aprobadas`}</button></div>
     </div>
     <aside className="panel mapping-panel">
-      <div className="panel-title"><div><h2>{movementType === "entrada" ? "21 campos de ingresos" : movementType === "salida" ? "26 campos de salidas" : "3 campos del maestro"}</h2><p>Plantilla diferenciada por proceso</p></div></div>
+      <div className="panel-title"><div><h2>{movementType === "entrada" ? "Campos de ingresos" : movementType === "salida" ? "27 campos de salidas" : "3 campos del maestro"}</h2><p>Plantilla diferenciada por proceso</p></div></div>
       <div className={`operation-summary ${movementType}`}><span>{movementType === "entrada" ? <ArrowDownLeft size={19} /> : movementType === "salida" ? <ArrowUpRight size={19} /> : <Boxes size={19} />}</span><div><strong>{movementType === "entrada" ? "Ingreso al inventario" : movementType === "salida" ? "Salida del inventario" : "Maestro de productos"}</strong><small>{movementType === "entrada" ? "Los SKU existentes conservan el nombre y tipo oficiales del maestro." : movementType === "salida" ? "Acepta exactamente la estructura de tu Excel de despachos." : "Carga SKU, descripción oficial y tipo de equipo."}</small></div></div>
       <ul>{movementType === "entrada" ? <>
         <li><b>Identificación</b><span>Fila, Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Estado y asignación</b><span>Estado de Equipo, Condición y Proyecto</span></li><li><b>Recepción</b><span>Proviene, Fecha de Ingreso y GR. de Ingreso</span></li><li><b>Responsables</b><span>Coordinador Entel y Coordinador F1</span></li><li><b>Trazabilidad</b><span>N° Pedido, Site Origen, Serie/Lote y Modo de Lote opcional</span></li><li><b>Transferencias</b><span>Si Serie/Lote está vacío y Proviene contiene “Transferencia”, el sistema genera un lote TRF automático.</span></li><li><b>Valorización</b><span>Unidad de Medida, Cantidad y costo opcional; si falta, usa Stock Contrata Entel</span></li><li><b>Evidencia</b><span>Cargar Gr y Link de GR. de Ingreso</span></li>
@@ -1852,7 +2039,7 @@ function BulkUpload({ products, movements, saving, onSave }: { products: Product
       </> : <>
         <li><b>Campos obligatorios</b><span>Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Fuente oficial</b><span>Ingresos y salidas se relacionan por SKU y muestran estos nombres.</span></li><li><b>Correcciones</b><span>Al actualizar el maestro, el nuevo nombre se refleja en todo el historial.</span></li>
       </>}</ul>
-      {movementType !== "maestro" && <div className="mapping-note"><ShieldCheck size={17} /><span><b>Control de duplicados:</b> una GR o pedido puede contener varias líneas. Solo se rechaza la misma combinación de SKU + pedido + coordinador + GR + serie/lote (o fila del archivo).</span></div>}
+      {movementType !== "maestro" && <div className="mapping-note"><ShieldCheck size={17} /><span><b>Control de duplicados:</b> una GR y pedido pueden contener varias líneas dentro de la primera carga. Se bloquea volver a cargar la misma GR + pedido para la misma razón social; otra razón social sí se admite.</span></div>}
       <div className="storage-note"><Database size={18} /><div><strong>¿Dónde se almacena?</strong><span>Maestro SKU en Productos; ingresos y salidas en el Historial de movimientos.</span></div></div>
       <div className="mapping-note"><AlertTriangle size={17} /><span>{movementType === "entrada" ? "Los ingresos suman stock y agrupan todos los SKU del mismo pedido/coordinador. Si el SKU ya existe, el Excel no reemplaza su descripción ni su tipo." : movementType === "salida" ? "Las salidas validan SKU + N° Pedido + CordEntelFinal + Serie/Lote antes de descontar." : "Usa esta plantilla como catálogo oficial. Los SKU faltantes todavía pueden crearse desde un ingreso y luego corregirse en el maestro."}</span></div>
     </aside>
@@ -1883,12 +2070,17 @@ function Empty({ text, compact = false }: { text: string; compact?: boolean }) {
   return <div className={`empty-state ${compact ? "compact" : ""}`}><Boxes size={compact ? 24 : 30} /><span>{text}</span></div>;
 }
 
-function MovementModal({ products, coordinators, initialType, warehouse, saving, onClose, onSave, onNewProduct }: { products: Product[]; coordinators: Coordinator[]; initialType: Movement["type"]; warehouse: string; saving: boolean; onClose: () => void; onSave: (payload: Record<string, unknown>) => void; onNewProduct: () => void }) {
-  const [type, setType] = useState<Movement["type"]>(initialType);
+function MovementModal({ products, coordinators, suppliers, initialType, warehouse, saving, onClose, onSave, onNewProduct }: { products: Product[]; coordinators: Coordinator[]; suppliers: Supplier[]; initialType: Movement["type"]; warehouse: string; saving: boolean; onClose: () => void; onSave: (payload: Record<string, unknown>) => void; onNewProduct: () => void }) {
+  const type = initialType;
   const [lotAssignment, setLotAssignment] = useState<"MANUAL" | "AUTOMATICO">("MANUAL");
+  const [productId, setProductId] = useState("");
+  const [contractorDocument, setContractorDocument] = useState("");
+  const [contractor, setContractor] = useState("");
   const singleUnit = type === "entrada" || type === "salida";
   const entelCoordinators = coordinators.filter((coordinator) => coordinator.organization === "ENTEL" && coordinator.active);
   const f1Coordinators = coordinators.filter((coordinator) => coordinator.organization === "F1" && coordinator.active);
+  const selectedProduct = products.find((product) => String(product.id) === productId);
+  const selectedSupplier = suppliers.find((supplier) => supplier.active && supplier.documentNumber === contractorDocument);
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -1898,29 +2090,28 @@ function MovementModal({ products, coordinators, initialType, warehouse, saving,
     <div className="modal-head"><div><span className="modal-kicker">SISTEMA INVENTARIO F1</span><h2>{type === "salida" ? "Registrar salida" : type === "entrada" ? "Registrar ingreso" : "Regularizar movimiento"}</h2><p>Control por SKU, Serie/Lote, pedido y documento de sustento.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div>
     <form onSubmit={submit}>
       <input type="hidden" name="action" value="movement" />
-      <div className="type-selector">
-        <label className={type === "entrada" ? "selected entry" : ""}><input type="radio" name="type" value="entrada" checked={type === "entrada"} onChange={() => setType("entrada")} /><ArrowDownLeft size={18} /><span><strong>Ingreso</strong><small>Recepción en almacén</small></span></label>
-        <label className={type === "salida" ? "selected exit" : ""}><input type="radio" name="type" value="salida" checked={type === "salida"} onChange={() => setType("salida")} /><ArrowUpRight size={18} /><span><strong>Salida</strong><small>Despacho a proyecto</small></span></label>
-        <label className={type === "regularizacion" ? "selected adjust" : ""}><input type="radio" name="type" value="regularizacion" checked={type === "regularizacion"} onChange={() => setType("regularizacion")} /><RefreshCw size={17} /><span><strong>Regularización</strong><small>Ajuste documentado</small></span></label>
-      </div>
+      <input type="hidden" name="type" value={type} />
+      <div className={`operation-summary ${type}`}><span>{type === "salida" ? <ArrowUpRight size={19} /> : <ArrowDownLeft size={19} />}</span><div><strong>{type === "salida" ? "Salida unitaria" : "Ingreso unitario"}</strong><small>Este formulario solo registra el proceso seleccionado. Para varias líneas usa Carga masiva.</small></div></div>
       {products.length === 0 ? <div className="no-products"><PackagePlus size={24} /><div><strong>Primero registra un SKU</strong><p>Necesitas un producto en Maestro_Equipos para crear movimientos.</p></div><button type="button" className="secondary-button" onClick={onNewProduct}>Crear producto</button></div> : <>
         <div className="form-grid">
-          <label className="field field-wide"><span>SKU / Producto *</span><select name="productId" required defaultValue=""><option value="" disabled>Selecciona un SKU</option>{products.map((product) => <option value={product.id} key={product.id}>{product.sku} — {product.description} (Disponible: {product.stock})</option>)}</select></label>
+          <label className="field field-wide"><span>SKU / Producto *</span><select name="productId" required value={productId} onChange={(event) => setProductId(event.target.value)}><option value="" disabled>Selecciona un SKU</option>{products.map((product) => <option value={product.id} key={product.id}>{product.sku} — {product.description} (Disponible: {product.stock})</option>)}</select></label>
+          <label className="field field-wide"><span>Descripción del equipo</span><input value={selectedProduct?.description ?? ""} readOnly placeholder="Se completa al seleccionar el SKU" /><small>{selectedProduct ? `${selectedProduct.category} · ${selectedProduct.unit}` : "La descripción oficial proviene del Maestro SKU."}</small></label>
           {type === "entrada" && <label className="field"><span>Asignación de Serie/Lote</span><select name="lotAssignment" value={lotAssignment} onChange={(event) => setLotAssignment(event.target.value as "MANUAL" | "AUTOMATICO")}><option value="MANUAL">Manual</option><option value="AUTOMATICO">Automática para transferencia</option></select><small>Automática genera un código TRF repetible para detectar duplicados.</small></label>}
           <label className="field"><span>Serie / Lote {type === "entrada" && lotAssignment === "MANUAL" ? "*" : ""}</span><input name="serials" required={type === "entrada" && lotAssignment === "MANUAL"} disabled={type === "entrada" && lotAssignment === "AUTOMATICO"} placeholder={type === "entrada" && lotAssignment === "AUTOMATICO" ? "Se generará al guardar" : "Serie única o lote"} /></label>
           <label className="field"><span>Cantidad *</span><input name="quantity" type="number" min="1" max={singleUnit ? 1 : undefined} step="1" required readOnly={singleUnit} defaultValue={1} /><small>{singleUnit ? "Registro unitario; para varias líneas usa Carga masiva." : "Cantidad solicitada."}</small></label>
           <label className="field"><span>Fecha *</span><input name="movementDate" type="date" required defaultValue={today()} /></label>
           <label className="field"><span>N° Pedido/Cod. Oracle {type === "entrada" || type === "salida" ? "*" : ""}</span><input name="orderNumber" required={type === "entrada" || type === "salida"} placeholder="Pedido Entel / código Oracle" /></label>
-          <label className="field"><span>{type === "salida" ? "Nro. de GR de Salida" : "GR. de Ingreso"}</span><input name="document" placeholder="GR-001-000123" /></label>
+          <label className="field"><span>{type === "salida" ? "Nro. de GR de Salida" : "GR. de Ingreso"} *</span><input name="document" required placeholder="GR-001-000123" /></label>
           <label className="field field-wide"><span>{type === "salida" ? "Link de GR" : "Link de GR. de Ingreso"}</span><input name="grLink" placeholder="Pega el vínculo de SharePoint, con o sin https://" /></label>
           <label className="field"><span>{type === "salida" ? "Proyecto Final" : "Proyecto"}</span><input name="project" defaultValue="ENTEL" placeholder="Proyecto" /></label>
           <label className="field"><span>{type === "salida" ? "Cord. Entel Final" : "Coordinador Entel"} {type === "entrada" || type === "salida" ? "*" : ""}</span><input name="coordinator" list="entel-coordinators" required={type === "entrada" || type === "salida"} placeholder="Responsable Entel del pedido" /><datalist id="entel-coordinators">{entelCoordinators.map((coordinator) => <option value={coordinator.name} label={coordinator.email} key={coordinator.id} />)}</datalist></label>
           <label className="field"><span>Coordinador F1 {type === "entrada" || type === "salida" ? "*" : ""}</span><input name="coordinatorF1" list="f1-coordinators" required={type === "entrada" || type === "salida"} placeholder="Responsable interno F1" /><datalist id="f1-coordinators">{f1Coordinators.map((coordinator) => <option value={coordinator.name} label={coordinator.email} key={coordinator.id} />)}</datalist></label>
+          <label className="field"><span>RUC/DNI {type === "salida" ? "*" : ""}</span><input name="contractorDocument" inputMode="numeric" pattern="[0-9]{8}|[0-9]{11}" required={type === "salida"} value={contractorDocument} onChange={(event) => { const value = event.target.value.replace(/\D/g, "").slice(0, 11); setContractorDocument(value); const match = suppliers.find((supplier) => supplier.active && supplier.documentNumber === value); setContractor(match?.businessName ?? ""); }} placeholder="8 u 11 dígitos" /><small>{selectedSupplier ? `Registrado: ${selectedSupplier.businessName}` : contractorDocument.length >= 8 ? "No está en el maestro; completa la razón social." : "Busca la razón social en Proveedores."}</small></label>
+          <label className="field"><span>Razón social / contrata *</span><input name="contractor" required value={contractor} onChange={(event) => setContractor(event.target.value)} readOnly={Boolean(selectedSupplier)} placeholder="Empresa vinculada a la GR" /></label>
           {type === "salida" ? <>
             <label className="field"><span>Site Destino</span><input name="destinationSite" placeholder="Código o nombre del site" /></label>
             <label className="field"><span>Región</span><input name="region" placeholder="Ej. Lima" /></label>
             <label className="field"><span>Provincia</span><input name="province" placeholder="Ej. Lima" /></label>
-            <label className="field"><span>Contrata</span><input name="contractor" placeholder="Contrata que recibe" /></label>
             <label className="field"><span>Consignatario</span><input name="consignee" placeholder="Persona que recibe" /></label>
           </> : <>
             <label className="field"><span>Proviene</span><input name="origin" defaultValue="MO COMPANY" /></label>
@@ -1939,10 +2130,23 @@ function MovementModal({ products, coordinators, initialType, warehouse, saving,
   </div></div>;
 }
 
-function ProductModal({ saving, onClose, onSave }: { saving: boolean; onClose: () => void; onSave: (payload: Record<string, unknown>) => void }) {
+function ProductModal({ products, saving, onClose, onSave }: { products: Product[]; saving: boolean; onClose: () => void; onSave: (payload: Record<string, unknown>) => void }) {
+  const [sku, setSku] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("EQUIPO");
+  const matchedProduct = products.find((product) => product.sku.trim().toUpperCase() === sku.trim().toUpperCase());
+
+  function selectSku(value: string) {
+    setSku(value);
+    const match = products.find((product) => product.sku.trim().toUpperCase() === value.trim().toUpperCase());
+    if (match) {
+      setDescription(match.description);
+      setCategory(match.category.toUpperCase().includes("LOT") ? "LOTE" : "EQUIPO");
+    }
+  }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     onSave(Object.fromEntries(new FormData(event.currentTarget).entries()));
   }
-  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">MAESTRO_EQUIPOS</span><h2>Registrar SKU</h2><p>Crea el maestro para controlar series, lotes y movimientos.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="product" /><div className="form-grid"><label className="field"><span>SKU *</span><input name="sku" required placeholder="ENT960051349" /></label><label className="field field-wide"><span>Descripción SKU *</span><input name="description" required placeholder="Ej. HUAWEI BASEBAND PROCESSING UNIT" /></label><label className="field"><span>Categoría</span><select name="category" defaultValue="Equipos"><option>Equipos</option><option>Materiales</option><option>Herramientas</option><option>EPP</option><option>Consumibles</option></select></label><label className="field"><span>Unidad</span><select name="unit" defaultValue="UND"><option>UND</option><option>MTS</option><option>GLN</option><option>PAR</option><option>KG</option><option>CJA</option></select></label><label className="field"><span>Cliente</span><select name="client" defaultValue="ENTEL"><option>ENTEL</option><option>WIN</option><option>PRONATEL</option><option>CLARO</option></select></label><label className="field"><span>Propietario</span><select name="owner" defaultValue="F1 SERVICES"><option>F1 SERVICES</option><option>ENTEL</option><option>WIN</option><option>PRONATEL</option></select></label><label className="field"><span>Proyecto predeterminado</span><input name="defaultProject" placeholder="Rollout, PEXT, PINT..." /></label><label className="field"><span>Ubicación</span><select name="location" defaultValue="MO COMPANY"><option value="MO COMPANY">MO Company</option><option value="F1 - TRÁNSITO">F1 - tránsito</option></select></label><label className="field"><span>Stock mínimo</span><input name="minStock" type="number" min="0" defaultValue="0" /></label><label className="field"><span>Costo unitario (S/)</span><input name="unitCost" type="number" min="0" step="0.01" placeholder="Automático desde Stock Contrata" /></label><label className="field"><span>Stock inicial</span><input name="initialStock" type="number" min="0" step="1" defaultValue="0" /></label></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : "Crear SKU"}</button></div></form></div></div>;
+  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">MAESTRO SKU</span><h2>Registrar o actualizar SKU</h2><p>El maestro solo define SKU, descripción oficial y si se controla como Equipo o Lote.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="product" /><div className="form-grid"><label className="field"><span>SKU *</span><input name="sku" list="master-sku-options" required value={sku} onChange={(event) => selectSku(event.target.value)} placeholder="ENT960051349" /><datalist id="master-sku-options">{products.map((product) => <option key={product.id} value={product.sku}>{product.description}</option>)}</datalist><small>{matchedProduct ? "SKU existente: puedes corregir su descripción o tipo." : "Si no existe, se creará como nuevo SKU."}</small></label><label className="field field-wide"><span>Descripción SKU *</span><input name="description" required value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Descripción oficial del equipo" /></label><label className="field"><span>Tipo de control *</span><select name="category" value={category} onChange={(event) => setCategory(event.target.value)}><option value="EQUIPO">Equipo (serie única)</option><option value="LOTE">Lote (cantidad)</option></select></label></div><div className="mapping-note"><Database size={17} /><span>GR, fecha de ingreso, proviene, estado, condición, link y coordinadores se completan al registrar el ingreso o salida; no pertenecen al Maestro SKU.</span></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : matchedProduct ? "Actualizar SKU" : "Crear SKU"}</button></div></form></div></div>;
 }

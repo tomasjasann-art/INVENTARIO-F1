@@ -26,18 +26,18 @@ export default function LoginScreen({ signInPath }: { signInPath: string }) {
           <Image className="login-client-logo" src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
           <div className="login-secure-label"><ShieldCheck size={15} /> ACCESO PRIVADO</div>
           <h2>Bienvenido</h2>
-          <p>Ingresa con el <strong>Google o Gmail que el Administrador registró</strong> en el Kardex.</p>
+          <p>Ingresa con el <strong>correo corporativo @f1.services que el Administrador registró</strong> en el Kardex.</p>
 
           <div className="login-access-steps">
             <strong>¿Cómo ingresar?</strong>
             <ol>
-              <li><b>1</b><span>Presiona el botón y selecciona tu cuenta de Google.</span></li>
-              <li><b>2</b><span>Elige exactamente el Gmail autorizado por F1.</span></li>
+              <li><b>1</b><span>Abre la invitación enviada a tu correo corporativo y crea tu acceso.</span></li>
+              <li><b>2</b><span>Luego ingresa con exactamente el mismo correo @f1.services.</span></li>
             </ol>
           </div>
 
           <a className="login-submit" href={signInPath} target="_top">
-            Ingresar con Google o Gmail <ArrowRight size={18} />
+            Ingresar con correo F1 <ArrowRight size={18} />
           </a>
 
           <div className="login-security-note">
@@ -61,13 +61,13 @@ export function DeploymentSetupScreen({ missing }: { missing: string[] }) {
       <div className="login-brand-lockup" aria-label="F1 Projects, Engineering and Services">
         <Image src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
       </div>
-      <div className="login-message"><p>CONFIGURACIÓN DE PRODUCCIÓN</p><h1>El código ya está<br />listo para Vercel.</h1><span>Falta conectar la base de datos y el acceso Gmail del proyecto.</span></div>
+      <div className="login-message"><p>CONFIGURACIÓN DE PRODUCCIÓN</p><h1>El código ya está<br />listo para Vercel.</h1><span>Falta conectar la base PostgreSQL y el acceso de usuarios del proyecto.</span></div>
       <div className="login-brand-footer"><span>F1 Services © 2026</span><span>Kardex F1 Logística</span></div>
     </section>
     <section className="login-access-panel"><div className="login-card access-denied-card">
       <div className="login-secure-label denied"><ShieldAlert size={15} /> CONFIGURACIÓN PENDIENTE</div>
       <h2>Faltan variables en Vercel</h2>
-      <p>Conecta Neon y Clerk al proyecto y agrega estas variables:</p>
+      <p>Conecta Supabase PostgreSQL y Clerk al proyecto y agrega estas variables:</p>
       <div className="login-security-note"><ShieldCheck size={18} /><span><b>{missing.join(", ")}</b></span></div>
       <p>Después vuelve a desplegar la rama <strong>main</strong>.</p>
     </div></section>
@@ -85,7 +85,7 @@ export function AccessDeniedScreen({ email, signOutPath }: { email: string; sign
     </section>
     <section className="login-access-panel"><div className="login-card access-denied-card">
       <div className="login-secure-label denied"><ShieldAlert size={15} /> ACCESO NO AUTORIZADO</div>
-      <h2>Gmail sin permiso</h2>
+      <h2>Correo sin permiso</h2>
       <p>La cuenta <strong>{email}</strong> no está registrada o se encuentra inactiva.</p>
       <div className="login-security-note"><ShieldCheck size={18} /><span>Pide al Administrador que registre este correo exacto en <b>Configuración → Usuarios y permisos</b>.</span></div>
       <a className="login-submit" href={signOutPath} target="_top"><LogOut size={18} />Cerrar sesión y cambiar cuenta</a>

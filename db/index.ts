@@ -1,5 +1,5 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import * as schema from "./schema";
 
 let database: ReturnType<typeof createDatabase> | undefined;
@@ -8,11 +8,18 @@ function createDatabase() {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error(
-      "DATABASE_URL no está configurada. Conecta una base Neon al proyecto de Vercel.",
+      "DATABASE_URL no está configurada. Conecta la base PostgreSQL de Supabase al proyecto de Vercel.",
     );
   }
 
-  return drizzle(neon(databaseUrl), { schema });
+  const client = postgres(databaseUrl, {
+    prepare: false,
+    max: 5,
+    idle_timeout: 20,
+    connect_timeout: 15,
+  });
+
+  return drizzle(client, { schema });
 }
 
 export function getDb() {

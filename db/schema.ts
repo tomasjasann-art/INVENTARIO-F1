@@ -50,6 +50,7 @@ export const movements = pgTable("movements", {
   recordStatus: text("record_status").notNull().default("Disponible"),
   region: text("region").notNull().default(""),
   province: text("province").notNull().default(""),
+  contractorDocument: text("contractor_document").notNull().default(""),
   contractor: text("contractor").notNull().default(""),
   consignee: text("consignee").notNull().default(""),
   requesterEmail: text("requester_email").notNull().default(""),
@@ -87,6 +88,25 @@ export const coordinators = pgTable(
   },
   (table) => [
     uniqueIndex("coordinators_organization_name_unique").on(table.organization, table.name),
+  ],
+);
+
+export const suppliers = pgTable(
+  "suppliers",
+  {
+    id: serial("id").primaryKey(),
+    documentType: text("document_type", { enum: ["RUC", "DNI"] }).notNull().default("RUC"),
+    documentNumber: text("document_number").notNull(),
+    businessName: text("business_name").notNull(),
+    tradeName: text("trade_name").notNull().default(""),
+    source: text("source").notNull().default("MANUAL"),
+    active: boolean("active").notNull().default(true),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("suppliers_document_number_unique").on(table.documentNumber),
+    index("suppliers_business_name_idx").on(table.businessName),
   ],
 );
 
@@ -194,6 +214,7 @@ export const equipmentRequests = pgTable(
     contractorRuc: text("contractor_ruc").notNull().default(""),
     contractorBusinessName: text("contractor_business_name").notNull().default(""),
     pickupPerson: text("pickup_person").notNull().default(""),
+    pickupPerson2: text("pickup_person_2").notNull().default(""),
     region: text("region").notNull().default(""),
     city: text("city").notNull().default(""),
     neededDate: text("needed_date").notNull().default(""),
@@ -226,6 +247,8 @@ export const appUsers = pgTable(
     displayName: text("display_name").notNull().default(""),
     role: text("role", { enum: ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA"] }).notNull().default("SOLO_LECTURA"),
     active: boolean("active").notNull().default(true),
+    invitationStatus: text("invitation_status").notNull().default("PENDIENTE"),
+    invitedAt: text("invited_at").notNull().default(""),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
