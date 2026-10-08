@@ -25,6 +25,8 @@ F1_ADMIN_EMAILS
 
 `F1_ADMIN_EMAILS` acepta uno o varios correos separados por comas. Esas cuentas ingresan inicialmente como Administrador y luego pueden invitar usuarios `@f1.services` desde **Configuración → Usuarios y permisos**. La clave `SUPABASE_SERVICE_ROLE_KEY` es exclusivamente de servidor y nunca debe exponerse al navegador ni subirse al repositorio.
 
+La aplicación acepta `DATABASE_URL` o `POSTGRES_URL` para PostgreSQL y `NEXT_PUBLIC_SUPABASE_URL` o `SUPABASE_URL` para Storage, por lo que funciona tanto con variables manuales como con la integración de Supabase en Vercel.
+
 ## Preparar producción en Vercel
 
 1. Conecta este repositorio al proyecto Vercel y usa `main` como rama de producción.

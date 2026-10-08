@@ -8,6 +8,9 @@ function run(args) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+const fallbackDatabaseUrl = process.env.POSTGRES_URL || process.env.SUPABASE_DB_URL;
+if (!process.env.DATABASE_URL && fallbackDatabaseUrl) process.env.DATABASE_URL = fallbackDatabaseUrl;
+
 if (process.env.DATABASE_URL?.trim()) {
   console.log("DATABASE_URL detectada: aplicando migraciones PostgreSQL pendientes…");
   run(["db:migrate"]);

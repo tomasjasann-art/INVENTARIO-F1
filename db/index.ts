@@ -5,7 +5,9 @@ import * as schema from "./schema";
 let database: ReturnType<typeof createDatabase> | undefined;
 
 function createDatabase() {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = process.env.DATABASE_URL
+    || process.env.POSTGRES_URL
+    || process.env.SUPABASE_DB_URL;
   if (!databaseUrl) {
     throw new Error(
       "DATABASE_URL no está configurada. Conecta la base PostgreSQL de Supabase al proyecto de Vercel.",
