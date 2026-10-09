@@ -176,7 +176,9 @@ type EquipmentRequestInput = {
   warehouse?: string;
   contractorRuc?: string;
   contractorBusinessName?: string;
+  pickupPersonDni?: string;
   pickupPerson?: string;
+  pickupPerson2Dni?: string;
   pickupPerson2?: string;
   region?: string;
   city?: string;
@@ -668,7 +670,7 @@ export async function POST(request: Request) {
       const rejected: Array<{ row: number; sku: string; reason: string }> = [];
       for (const [index, row] of rows.entries()) {
         const documentNumber = normalizeDocumentNumber(rowValue(row, "RUC", "DNI", "RUC/DNI", "Documento", "N° Documento", "Numero Documento"));
-        const businessName = normalizeParty(rowValue(row, "Razón Social", "Razon Social", "Nombre", "Proveedor", "Contrata"));
+        const businessName = normalizeParty(rowValue(row, "Razón Social o Nombre Completo", "Razón Social", "Razon Social", "Nombre Completo", "Nombre", "Proveedor", "Contrata"));
         if (!validSupplierDocument(documentNumber) || !businessName) {
           rejected.push({ row: index + 2, sku: documentNumber || "—", reason: "Falta RUC/DNI válido o razón social." });
           continue;
@@ -714,19 +716,30 @@ export async function POST(request: Request) {
       const coordinatorName = clean(requestPayload.coordinatorName).toUpperCase();
       const orderNumber = clean(requestPayload.orderNumber);
       const contractorRuc = clean(requestPayload.contractorRuc).replace(/\D/g, "");
-      const supplierMatch = await supplierFromDocument(db, contractorRuc);
-      const contractorBusinessName = supplierMatch?.businessName || clean(requestPayload.contractorBusinessName).toUpperCase();
-      const pickupPerson = clean(requestPayload.pickupPerson).toUpperCase();
-      const pickupPerson2 = clean(requestPayload.pickupPerson2).toUpperCase();
+      const contractorMatch = await supplierFromDocument(db, contractorRuc);
+      const contractorBusinessName = contractorMatch?.businessName || "";
+      const pickupPersonDni = normalizeDocumentNumber(requestPayload.pickupPersonDni);
+      const pickupPersonMatch = await supplierFromDocument(db, pickupPersonDni);
+      const pickupPerson = pickupPersonMatch?.businessName || "";
+      const pickupPerson2Dni = normalizeDocumentNumber(requestPayload.pickupPerson2Dni);
+      const pickupPerson2Match = pickupPerson2Dni ? await supplierFromDocument(db, pickupPerson2Dni) : null;
+      const pickupPerson2 = pickupPerson2Match?.businessName || "";
       const region = clean(requestPayload.region).toUpperCase();
       const city = clean(requestPayload.city).toUpperCase();
       const items = Array.isArray(requestPayload.items) ? requestPayload.items.slice(0, 30) : [];
       if (!coordinatorName || !orderNumber || !items.length) {
         return Response.json({ error: "Coordinador, N° Pedido y al menos un equipo son obligatorios." }, { status: 400 });
       }
-      if (!/^\d{11}$/.test(contractorRuc) || !contractorBusinessName || !pickupPerson || !region || !city) {
-        return Response.json({ error: "Completa RUC de 11 dígitos, razón social, persona que recoge, región y ciudad." }, { status: 400 });
+      if (!/^\d{11}$/.test(contractorRuc) || !contractorMatch || contractorMatch.documentType !== "RUC") {
+        return Response.json({ error: "El RUC de la contrata debe existir y estar activo en el maestro de Proveedores." }, { status: 400 });
       }
+      if (!/^\d{8}$/.test(pickupPersonDni) || !pickupPersonMatch || pickupPersonMatch.documentType !== "DNI") {
+        return Response.json({ error: "El DNI de la primera persona que recoge debe existir y estar activo en el maestro." }, { status: 400 });
+      }
+      if (pickupPerson2Dni && (!/^\d{8}$/.test(pickupPerson2Dni) || !pickupPerson2Match || pickupPerson2Match.documentType !== "DNI")) {
+        return Response.json({ error: "El DNI de la segunda persona debe existir y estar activo en el maestro." }, { status: 400 });
+      }
+      if (!region || !city) return Response.json({ error: "Completa región y ciudad de envío." }, { status: 400 });
       const normalizedItems = items.map((item) => ({
         productId: Number(item.productId),
         quantity: Math.max(1, Math.round(Number(item.quantity) || 1)),
@@ -776,7 +789,9 @@ export async function POST(request: Request) {
         seriesLot,
         contractorRuc,
         contractorBusinessName,
+        pickupPersonDni,
         pickupPerson,
+        pickupPerson2Dni,
         pickupPerson2,
         region,
         city,
@@ -1092,7 +1107,6 @@ export async function POST(request: Request) {
         const equipmentTypeFromFile = clean(rowValue(row, "Tipo de Equipo", "Categoría", "category"));
         const equipmentType = normalizeParty(equipmentTypeFromFile).includes("LOTE") ? "LOTE" : "EQUIPO";
         const project = clean(rowValue(row, "Proyecto", "ProyectoFinal", "project"));
-        const origin = clean(rowValue(row, "Proviene", "Origen")) || "MO COMPANY";
         const requestedLotMode = clean(rowValue(row, "Modo de Lote", "Modo Lote", "Asignación de Lote", "Asignacion de Lote")).toUpperCase();
         const originSite = clean(rowValue(row, "Site Origen", "originSite"));
         const stockLocation = normalizeStockLocation(rowValue(row, "Ubicación", "Ubicacion", "Almacén", "Almacen", "stockLocation"));
@@ -1106,7 +1120,8 @@ export async function POST(request: Request) {
         const document = clean(rowValue(row, movementType === "entrada" ? "GR. de Ingreso" : "NroGRSalida", "GR. de Salida", "GR Ingreso", "GR Salida", "Guía", "document"));
         const contractorDocument = normalizeDocumentNumber(rowValue(row, "RUC", "DNI", "RUC/DNI", "Documento Contrata", "Documento Proveedor"));
         const supplierMatch = suppliersByDocument.get(contractorDocument);
-        const contractor = supplierMatch?.businessName || normalizeParty(rowValue(row, "Razón Social", "Razon Social", "Contrata", "Proveedor"));
+        const origin = movementType === "entrada" ? supplierMatch?.businessName || "" : "MO COMPANY";
+        const contractor = movementType === "salida" ? supplierMatch?.businessName || "" : "";
         const sourceRow = clean(rowValue(row, "Fila", "ITEM"));
         let lotAssignment = "ORIGINAL";
         if (movementType === "entrada" && !seriesLot && requestedLotMode.includes("MANUAL")) {
@@ -1169,13 +1184,13 @@ export async function POST(request: Request) {
           continue;
         }
 
-        if (source === "F1" && movementType === "salida" && !validSupplierDocument(contractorDocument)) {
-          rejected.push({ row: rowIndex + 2, sku, reason: "Falta RUC de 11 dígitos o DNI de 8 dígitos de la contrata." });
+        if (source === "F1" && movementType === "entrada" && (!/^\d{11}$/.test(contractorDocument) || !supplierMatch || supplierMatch.documentType !== "RUC")) {
+          rejected.push({ row: rowIndex + 2, sku, reason: "El RUC de la empresa de origen no existe o está inactivo en el maestro." });
           continue;
         }
 
-        if (source === "F1" && !contractor && !origin) {
-          rejected.push({ row: rowIndex + 2, sku, reason: "Falta la razón social, proveedor o contrata del documento." });
+        if (source === "F1" && movementType === "salida" && (!validSupplierDocument(contractorDocument) || !supplierMatch)) {
+          rejected.push({ row: rowIndex + 2, sku, reason: "El RUC/DNI de la salida no existe o está inactivo en el maestro." });
           continue;
         }
 
@@ -1366,18 +1381,18 @@ export async function POST(request: Request) {
     const productMovements = allMovements.filter((row) => row.productId === productId);
     const movementDate = normalizeKardexDate(movementPayload.movementDate, new Date().toISOString().slice(0, 10));
     const document = clean(movementPayload.document);
-    const origin = clean(movementPayload.origin) || "MO COMPANY";
     const contractorDocument = normalizeDocumentNumber(movementPayload.contractorDocument);
     const supplierMatch = await supplierFromDocument(db, contractorDocument);
-    const contractor = supplierMatch?.businessName || normalizeParty(movementPayload.contractor);
+    const origin = type === "entrada" ? supplierMatch?.businessName || "" : "MO COMPANY";
+    const contractor = type === "salida" ? supplierMatch?.businessName || "" : "";
     if ((type === "entrada" || type === "salida") && !document) {
       return Response.json({ error: type === "entrada" ? "La GR. de Ingreso es obligatoria." : "El Nro. de GR de Salida es obligatorio." }, { status: 400 });
     }
-    if (type === "salida" && !validSupplierDocument(contractorDocument)) {
-      return Response.json({ error: "Selecciona el RUC o DNI de la contrata que recibe el despacho." }, { status: 400 });
+    if (type === "entrada" && (!/^\d{11}$/.test(contractorDocument) || !supplierMatch || supplierMatch.documentType !== "RUC")) {
+      return Response.json({ error: "El RUC de la empresa de origen debe existir y estar activo en el maestro." }, { status: 400 });
     }
-    if ((type === "entrada" || type === "salida") && !contractor && !origin) {
-      return Response.json({ error: "La razón social vinculada a la GR es obligatoria." }, { status: 400 });
+    if (type === "salida" && (!validSupplierDocument(contractorDocument) || !supplierMatch)) {
+      return Response.json({ error: "El RUC o DNI de la salida debe existir y estar activo en el maestro." }, { status: 400 });
     }
     if ((type === "entrada" || type === "salida") && allMovements.some((row) => duplicatesOperationalDocument(row, {
       type,

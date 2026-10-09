@@ -1,0 +1,2 @@
+CREATE INDEX "equipment_requests_product_id_idx" ON "equipment_requests" USING btree ("product_id");--> statement-breakpoint
+CREATE INDEX "movements_product_id_idx" ON "movements" USING btree ("product_id");

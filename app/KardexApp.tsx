@@ -162,7 +162,9 @@ type EquipmentRequest = {
   seriesLot: string;
   contractorRuc: string;
   contractorBusinessName: string;
+  pickupPersonDni: string;
   pickupPerson: string;
+  pickupPerson2Dni: string;
   pickupPerson2: string;
   region: string;
   city: string;
@@ -231,8 +233,7 @@ const SALIDA_BULK_HEADERS = [
   "Provincia",
   "ProyectoFinal",
   "CordF1",
-  "RUC",
-  "Contrata",
+  "RUC/DNI",
   "Consignatario",
   "Serie/Lote",
   "Cantidad",
@@ -447,7 +448,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
     const query = search.trim().toLowerCase();
     if (!query) return data.movements;
     return data.movements.filter((movement) =>
-      [movement.sku, movement.description, movement.serials, movement.orderNumber, movement.document, movement.project, movement.destinationSite, movement.originSite, movement.coordinator, movement.coordinatorF1, movement.region, movement.province, movement.contractor, movement.consignee, movement.dispatchId, movement.requesterEmail]
+      [movement.sku, movement.description, movement.serials, movement.orderNumber, movement.document, movement.project, movement.destinationSite, movement.originSite, movement.origin, movement.coordinator, movement.coordinatorF1, movement.region, movement.province, movement.contractorDocument, movement.contractor, movement.consignee, movement.dispatchId, movement.requesterEmail]
         .join(" ")
         .toLowerCase()
         .includes(query),
@@ -572,7 +573,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           <button className={view === "conciliacion" ? "active" : ""} onClick={() => { setView("conciliacion"); setSidebarOpen(false); }}><Scale size={19} />Conciliación</button>
           <button className={view === "auditoria" ? "active" : ""} onClick={() => { setView("auditoria"); setSidebarOpen(false); }}><Database size={19} />Auditoría Entel</button>
           {canOperate && <button className={view === "coordinadores" ? "active" : ""} onClick={() => { setView("coordinadores"); setSidebarOpen(false); }}><Users size={19} />Coordinadores</button>}
-          {canOperate && <button className={view === "proveedores" ? "active" : ""} onClick={() => { setView("proveedores"); setSidebarOpen(false); }}><Warehouse size={19} />Proveedores</button>}
+          {canOperate && <button className={view === "proveedores" ? "active" : ""} onClick={() => { setView("proveedores"); setSidebarOpen(false); }}><Warehouse size={19} />Empresas y personas</button>}
           <button className={view === "movimientos" ? "active" : ""} onClick={() => { setView("movimientos"); setSidebarOpen(false); }}><ClipboardList size={19} />Historial</button>
           <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>
         </nav>
@@ -596,7 +597,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
 
         <div className="content">
           <section className="page-heading">
-            <div><p className="eyebrow">SISTEMA INVENTARIO F1 · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? "Resumen del Kardex" : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? "Stock y trazabilidad" : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes de equipos" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Proveedores y contratas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? "Control centralizado por SKU, Serie/Lote, pedido y proyecto." : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU." : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Los coordinadores F1 seleccionan equipos por pedido para que MO Company prepare la salida." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el Kardex interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC o DNI con la razón social usada en ingresos, salidas y solicitudes." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
+            <div><p className="eyebrow">SISTEMA INVENTARIO F1 · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? "Resumen del Kardex" : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? "Stock y trazabilidad" : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes de equipos" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? "Control centralizado por SKU, Serie/Lote, pedido y proyecto." : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU." : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Los coordinadores F1 seleccionan equipos por pedido para que MO Company prepare la salida." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el Kardex interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el Kardex." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
           </section>
 
@@ -717,7 +718,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
   const [filterBy, setFilterBy] = useState<"pedido" | "gr" | "site" | "serie">("pedido");
   const [filterQuery, setFilterQuery] = useState("");
   const entry = mode === "entrada";
-  const columns = entry ? 16 : 18;
+  const columns = entry ? 17 : 18;
   const filterLabel = filterBy === "pedido" ? "N° Pedido/Cod. Oracle" : filterBy === "gr" ? "GR" : filterBy === "site" ? "Site" : "Serie/Lote";
   const filterOptions = useMemo(() => [...new Set(movements.flatMap((movement) => {
     const raw = filterBy === "pedido"
@@ -765,6 +766,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
         "Estado de Equipo": movement.equipmentStatus,
         Condición: movement.condition,
         Proyecto: movement.project,
+        "RUC origen": movement.contractorDocument,
         Proviene: movement.origin,
         "Fecha de Ingreso": movement.movementDate,
         "GR. de Ingreso": movement.document,
@@ -816,7 +818,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
       </div>
       <div className="table-wrap"><table className={`operational-table ${entry ? "entry-table" : "exit-table"}`}><thead><tr>
         <th>SKU</th><th>Descripción Sku</th><th>Serie / Lote</th>
-        {entry ? <><th>Proceso de equipo</th><th>Estado de Equipo</th><th>Condición</th><th>Proyecto</th><th>Proviene</th><th>Fecha de Ingreso</th><th>GR. de Ingreso</th><th>Link de GR. de Ingreso</th><th>N° Pedido/Cod. Oracle</th><th>Coordinador Entel</th><th>Site Origen</th></> : <><th>Fecha Salida</th><th>Nro. de GR de Salida</th><th>Link de GR</th><th>Cord. Entel Final</th><th>Site Destino</th><th>Región</th><th>Provincia</th><th>Proyecto Final</th><th>Cord. F1</th><th>RUC/DNI</th><th>Contrata</th><th>Consignatario</th><th>N° Pedido/Cod. Oracle</th></>}
+        {entry ? <><th>Proceso de equipo</th><th>Estado de Equipo</th><th>Condición</th><th>Proyecto</th><th>RUC origen</th><th>Proviene</th><th>Fecha de Ingreso</th><th>GR. de Ingreso</th><th>Link de GR. de Ingreso</th><th>N° Pedido/Cod. Oracle</th><th>Coordinador Entel</th><th>Site Origen</th></> : <><th>Fecha Salida</th><th>Nro. de GR de Salida</th><th>Link de GR</th><th>Cord. Entel Final</th><th>Site Destino</th><th>Región</th><th>Provincia</th><th>Proyecto Final</th><th>Cord. F1</th><th>RUC/DNI</th><th>Contrata</th><th>Consignatario</th><th>N° Pedido/Cod. Oracle</th></>}
         <th className="align-right">Costo</th><th>Trazabilidad</th>
       </tr></thead><tbody>
         {loading ? <tr><td colSpan={columns}><Empty text={`Cargando ${entry ? "ingresos" : "salidas"}...`} /></td></tr> : !visibleMovements.length ? <tr><td colSpan={columns}><Empty text={filterQuery ? "No se encontraron movimientos con este filtro." : `Aún no hay ${entry ? "ingresos" : "salidas"} registrados.`} /></td></tr> : visibleMovements.map((movement) => {
@@ -825,7 +827,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
             <td><strong>{movement.sku}</strong></td><td><strong>{movement.description}</strong><small>{movement.equipmentType || "Equipo"}</small></td>
             <td><strong>{movement.serials || "SIN SERIE"}</strong><small>{movement.quantity} {movement.unitMeasure || movement.unit}</small></td>
             {entry ? <>
-              <td><span className={`type-badge type-${movement.type}`}>{movement.type}</span></td><td><strong>{movement.equipmentStatus || "NUEVO"}</strong></td><td><strong>{movement.condition || "OPERATIVO"}</strong></td><td><strong>{movement.project || "—"}</strong></td><td><strong>{movement.origin || "MO COMPANY"}</strong></td><td><span className="date-cell">{displayDate(movement.movementDate)}</span></td><td><strong>{movement.document || "SIN GR"}</strong></td><td><GrLinkCell link={movement.grLink} /></td><td><strong>{movement.orderNumber || "—"}</strong></td><td><strong>{movement.coordinator || "—"}</strong><small>{movement.coordinatorF1 ? `F1: ${movement.coordinatorF1}` : ""}</small></td><td><strong>{movement.originSite || "MO Company"}</strong></td>
+              <td><span className={`type-badge type-${movement.type}`}>{movement.type}</span></td><td><strong>{movement.equipmentStatus || "NUEVO"}</strong></td><td><strong>{movement.condition || "OPERATIVO"}</strong></td><td><strong>{movement.project || "—"}</strong></td><td><strong>{movement.contractorDocument || "—"}</strong></td><td><strong>{movement.origin || "—"}</strong></td><td><span className="date-cell">{displayDate(movement.movementDate)}</span></td><td><strong>{movement.document || "SIN GR"}</strong></td><td><GrLinkCell link={movement.grLink} /></td><td><strong>{movement.orderNumber || "—"}</strong></td><td><strong>{movement.coordinator || "—"}</strong><small>{movement.coordinatorF1 ? `F1: ${movement.coordinatorF1}` : ""}</small></td><td><strong>{movement.originSite || "MO Company"}</strong></td>
             </> : <>
               <td><span className="date-cell">{displayDate(movement.movementDate)}</span></td><td><strong>{movement.document || "SIN GR"}</strong></td><td><GrLinkCell link={movement.grLink} /></td><td><strong>{movement.coordinator || "—"}</strong></td><td><strong>{movement.destinationSite || "—"}</strong></td><td><strong>{movement.region || "—"}</strong></td><td><strong>{movement.province || "—"}</strong></td><td><strong>{movement.project || "—"}</strong></td><td><strong>{movement.coordinatorF1 || "—"}</strong></td><td><strong>{movement.contractorDocument || "—"}</strong></td><td><strong>{movement.contractor || "—"}</strong></td><td><strong>{movement.consignee || "—"}</strong></td><td><strong>{movement.orderNumber || "—"}</strong></td>
             </>}
@@ -1300,12 +1302,16 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
   const [quantity, setQuantity] = useState(1);
   const [contractorDocument, setContractorDocument] = useState("");
   const [contractorBusinessName, setContractorBusinessName] = useState("");
+  const [pickupPersonDni, setPickupPersonDni] = useState("");
+  const [pickupPerson2Dni, setPickupPerson2Dni] = useState("");
   const [items, setItems] = useState<Array<{ productId: number; quantity: number; seriesLot: string }>>([]);
   const [tracking, setTracking] = useState<EquipmentRequest | null>(null);
   const productMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const activeCoordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "F1").sort((a, b) => a.name.localeCompare(b.name));
   const coordinator = activeCoordinators.find((item) => item.name === selectedCoordinator);
   const supplier = suppliers.find((item) => item.active && item.documentNumber === contractorDocument.trim());
+  const pickupPerson = suppliers.find((item) => item.active && item.documentType === "DNI" && item.documentNumber === pickupPersonDni);
+  const pickupPerson2 = suppliers.find((item) => item.active && item.documentType === "DNI" && item.documentNumber === pickupPerson2Dni);
   const orderStock = useMemo(() => {
     const map = new Map<string, Map<number, number>>();
     movements.filter((movement) => movement.orderNumber.trim()).forEach((movement) => {
@@ -1394,6 +1400,8 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
       setSelectedSeriesLot("");
       setContractorDocument("");
       setContractorBusinessName("");
+      setPickupPersonDni("");
+      setPickupPerson2Dni("");
       setItems([]);
     }
   }
@@ -1413,10 +1421,12 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
             <label className="field"><span>N° Pedido con ingreso *</span><select name="orderNumber" required value={selectedOrder} onChange={(event) => { setSelectedOrder(event.target.value); setItems([]); setProductQuery(""); setSelectedSeriesLot(""); }}><option value="" disabled>Selecciona un pedido ingresado</option>{orderOptions.map((order) => <option value={order} key={order}>{order}</option>)}</select><small>Solo aparecen pedidos con saldo disponible.</small></label>
             <label className="field"><span>Proyecto</span><input name="project" placeholder="Rollout, PEXT, PINT..." /></label>
             <label className="field"><span>Site destino</span><input name="site" placeholder="Código o nombre del site" /></label>
-            <label className="field"><span>RUC de la contrata *</span><input name="contractorRuc" inputMode="numeric" pattern="[0-9]{11}" maxLength={11} required value={contractorDocument} onChange={(event) => { const value = event.target.value.replace(/\D/g, "").slice(0, 11); setContractorDocument(value); const match = suppliers.find((item) => item.active && item.documentNumber === value); setContractorBusinessName(match?.businessName ?? ""); }} placeholder="11 dígitos" /><small>{supplier ? `Proveedor: ${supplier.businessName}` : contractorDocument.length === 11 ? "RUC no registrado; completa la razón social o agrégalo en Proveedores." : "La razón social se completará desde el maestro de proveedores."}</small></label>
-            <label className="field"><span>Razón social *</span><input name="contractorBusinessName" required value={contractorBusinessName} onChange={(event) => setContractorBusinessName(event.target.value)} readOnly={Boolean(supplier)} placeholder="Nombre legal de la contrata" /></label>
-            <label className="field"><span>Persona que recoge *</span><input name="pickupPerson" required placeholder="Nombres y apellidos" /></label>
-            <label className="field"><span>Segunda persona que recoge</span><input name="pickupPerson2" placeholder="Opcional · nombres y apellidos" /></label>
+            <label className="field"><span>RUC de la contrata *</span><input name="contractorRuc" inputMode="numeric" pattern="[0-9]{11}" maxLength={11} required value={contractorDocument} onChange={(event) => { const value = event.target.value.replace(/\D/g, "").slice(0, 11); setContractorDocument(value); const match = suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === value); setContractorBusinessName(match?.businessName ?? ""); }} placeholder="11 dígitos" /><small>{supplier?.documentType === "RUC" ? `Empresa: ${supplier.businessName}` : contractorDocument.length === 11 ? "RUC no registrado; agrégalo primero en Empresas y personas." : "La razón social se completará automáticamente."}</small></label>
+            <label className="field"><span>Razón social</span><input name="contractorBusinessName" value={contractorBusinessName} readOnly placeholder="Automático desde el RUC" /></label>
+            <label className="field"><span>DNI de persona que recoge *</span><input name="pickupPersonDni" inputMode="numeric" pattern="[0-9]{8}" maxLength={8} required value={pickupPersonDni} onChange={(event) => setPickupPersonDni(event.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="8 dígitos" /><small>{pickupPerson ? pickupPerson.businessName : pickupPersonDni.length === 8 ? "DNI no registrado; agrégalo en Proveedores/Personas." : "El nombre aparecerá automáticamente."}</small></label>
+            <label className="field"><span>Nombre de persona que recoge</span><input value={pickupPerson?.businessName ?? ""} readOnly placeholder="Automático desde el DNI" /></label>
+            <label className="field"><span>DNI de segunda persona</span><input name="pickupPerson2Dni" inputMode="numeric" pattern="[0-9]{8}" maxLength={8} value={pickupPerson2Dni} onChange={(event) => setPickupPerson2Dni(event.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="Opcional · 8 dígitos" /><small>{pickupPerson2 ? pickupPerson2.businessName : pickupPerson2Dni.length === 8 ? "DNI no registrado." : "Opcional."}</small></label>
+            <label className="field"><span>Nombre de segunda persona</span><input value={pickupPerson2?.businessName ?? ""} readOnly placeholder="Automático desde el DNI" /></label>
             <label className="field"><span>Región de envío *</span><input name="region" required placeholder="Ej. Lima" /></label>
             <label className="field"><span>Ciudad de envío *</span><input name="city" required placeholder="Ej. Lima / Arequipa" /></label>
             <label className="field"><span>Almacén que atenderá</span><input name="warehouse" value={warehouse} readOnly /></label>
@@ -1430,7 +1440,7 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
           </div>
           <div className="request-cart">{!items.length ? <p>Agrega uno o varios SKU seleccionando la serie o lote disponible.</p> : items.map((item) => { const product = productMap.get(item.productId); const itemKey = `${item.productId}::${item.seriesLot}`; return <div key={itemKey}><span><strong>{product?.sku}</strong><small>{product?.description} · {item.seriesLot || "Sin serie/lote"}</small></span><b>{item.quantity} {product?.unit}</b><button type="button" className="icon-button" onClick={() => setItems((current) => current.filter((row) => `${row.productId}::${row.seriesLot}` !== itemKey))} aria-label="Quitar"><X size={15} /></button></div>; })}</div>
           <label className="field"><span>Observación</span><textarea name="notes" rows={2} placeholder="Detalle para Logística" /></label>
-          <button className="primary-button request-submit" type="submit" disabled={saving || !items.length || !canRequest}>{saving ? "Registrando..." : canRequest ? `Registrar solicitud · ${items.length} SKU` : "Perfil de solo lectura"}</button>
+          <button className="primary-button request-submit" type="submit" disabled={saving || !items.length || !canRequest || supplier?.documentType !== "RUC" || !pickupPerson || Boolean(pickupPerson2Dni && !pickupPerson2)}>{saving ? "Registrando..." : canRequest ? `Registrar solicitud · ${items.length} SKU` : "Perfil de solo lectura"}</button>
         </div>
       </form>
 
@@ -1442,7 +1452,7 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
 
     <section className="panel request-history">
       <div className="panel-title"><div><h2>Solicitudes registradas</h2><p>{number.format(groupedRequests.length)} solicitudes; seguimiento separado del Kardex.</p></div></div>
-      <div className="table-wrap"><table><thead><tr><th>Solicitud</th><th>Coordinador F1</th><th>Pedido / Destino</th><th>Contrata / Recojo</th><th>Equipos solicitados</th><th>GR / Ticket / Fotos</th><th>Envío / Llegada</th><th>Días pendientes</th><th>Estado</th><th>Seguimiento</th></tr></thead><tbody>{loading ? <tr><td colSpan={10}><Empty text="Cargando solicitudes..." /></td></tr> : !groupedRequests.length ? <tr><td colSpan={10}><Empty text="Las solicitudes de los coordinadores F1 aparecerán aquí." /></td></tr> : groupedRequests.map((group) => { const request = group[0]; const days = pendingDays(request); const closed = ["CERRADA", "RECOGIDA", "RECHAZADA"].includes(request.status); return <tr key={request.requestCode}><td><strong>{request.requestCode}</strong><small>{displayDate(request.createdAt)}</small></td><td><strong>{request.coordinatorName}</strong><small>{request.coordinatorEmail || "Sin correo"}</small></td><td><strong>{request.orderNumber}</strong><small>{request.site || request.project || "Sin site"}</small><small>{[request.region, request.city].filter(Boolean).join(" · ") || "Sin región/ciudad"}</small></td><td><strong>{request.contractorBusinessName || "Sin razón social"}</strong><small>RUC: {request.contractorRuc || "—"}</small><small>Recoge 1: {request.pickupPerson || "—"}</small>{request.pickupPerson2 && <small>Recoge 2: {request.pickupPerson2}</small>}</td><td>{group.map((row) => { const product = productMap.get(row.productId); return <span className="request-line" key={row.id}><strong>{product?.sku || `Producto ${row.productId}`}</strong><small>{row.quantity} {product?.unit || "UND"} · {product?.description}</small><small>Serie/Lote: {row.seriesLot || "Sin registro"}</small></span>; })}</td><td><strong>{request.outboundGuide || "Sin GR"}</strong><small>{request.shippingTicket ? `Ticket: ${request.shippingTicket}` : "Sin ticket de envío"}</small><GrLinkCell link={request.outboundGuideLink} /><span className="evidence-links">{request.outboundGuidePhoto && <a href={request.outboundGuidePhoto} target="_blank" rel="noreferrer">Foto GR</a>}{request.shippingTicketPhoto && <a href={request.shippingTicketPhoto} target="_blank" rel="noreferrer">Foto ticket</a>}</span></td><td><strong>{request.sentDate ? displayDate(request.sentDate) : "Sin fecha de envío"}</strong><small>{request.arrivalDate ? `Llegó: ${displayDate(request.arrivalDate)}` : "Llegada pendiente"}</small></td><td><span className={`pending-days ${!closed && days > 7 ? "danger" : !closed && days >= 3 ? "warning" : "ok"}`}>{closed ? "Cerrada" : `${days} días`}</span><small>{request.pickupDate ? `Recogido: ${displayDate(request.pickupDate)}` : "Pendiente de recojo"}</small></td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td><td><button className="secondary-button trace-button" disabled={!canOperate} onClick={() => setTracking(request)}><ClipboardList size={14} />Actualizar</button></td></tr>; })}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>Solicitud</th><th>Coordinador F1</th><th>Pedido / Destino</th><th>Contrata / Recojo</th><th>Equipos solicitados</th><th>GR / Ticket / Fotos</th><th>Envío / Llegada</th><th>Días pendientes</th><th>Estado</th><th>Seguimiento</th></tr></thead><tbody>{loading ? <tr><td colSpan={10}><Empty text="Cargando solicitudes..." /></td></tr> : !groupedRequests.length ? <tr><td colSpan={10}><Empty text="Las solicitudes de los coordinadores F1 aparecerán aquí." /></td></tr> : groupedRequests.map((group) => { const request = group[0]; const days = pendingDays(request); const closed = ["CERRADA", "RECOGIDA", "RECHAZADA"].includes(request.status); return <tr key={request.requestCode}><td><strong>{request.requestCode}</strong><small>{displayDate(request.createdAt)}</small></td><td><strong>{request.coordinatorName}</strong><small>{request.coordinatorEmail || "Sin correo"}</small></td><td><strong>{request.orderNumber}</strong><small>{request.site || request.project || "Sin site"}</small><small>{[request.region, request.city].filter(Boolean).join(" · ") || "Sin región/ciudad"}</small></td><td><strong>{request.contractorBusinessName || "Sin razón social"}</strong><small>RUC: {request.contractorRuc || "—"}</small><small>Recoge 1: {request.pickupPerson || "—"} · DNI {request.pickupPersonDni || "—"}</small>{request.pickupPerson2 && <small>Recoge 2: {request.pickupPerson2} · DNI {request.pickupPerson2Dni || "—"}</small>}</td><td>{group.map((row) => { const product = productMap.get(row.productId); return <span className="request-line" key={row.id}><strong>{product?.sku || `Producto ${row.productId}`}</strong><small>{row.quantity} {product?.unit || "UND"} · {product?.description}</small><small>Serie/Lote: {row.seriesLot || "Sin registro"}</small></span>; })}</td><td><strong>{request.outboundGuide || "Sin GR"}</strong><small>{request.shippingTicket ? `Ticket: ${request.shippingTicket}` : "Sin ticket de envío"}</small><GrLinkCell link={request.outboundGuideLink} /><span className="evidence-links">{request.outboundGuidePhoto && <a href={request.outboundGuidePhoto} target="_blank" rel="noreferrer">Foto GR</a>}{request.shippingTicketPhoto && <a href={request.shippingTicketPhoto} target="_blank" rel="noreferrer">Foto ticket</a>}</span></td><td><strong>{request.sentDate ? displayDate(request.sentDate) : "Sin fecha de envío"}</strong><small>{request.arrivalDate ? `Llegó: ${displayDate(request.arrivalDate)}` : "Llegada pendiente"}</small></td><td><span className={`pending-days ${!closed && days > 7 ? "danger" : !closed && days >= 3 ? "warning" : "ok"}`}>{closed ? "Cerrada" : `${days} días`}</span><small>{request.pickupDate ? `Recogido: ${displayDate(request.pickupDate)}` : "Pendiente de recojo"}</small></td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td><td><button className="secondary-button trace-button" disabled={!canOperate} onClick={() => setTracking(request)}><ClipboardList size={14} />Actualizar</button></td></tr>; })}</tbody></table></div>
     </section>
     {tracking && <RequestTrackingModal request={tracking} saving={saving} onClose={() => setTracking(null)} onSave={async (payload) => { const ok = await onSave(payload, "Seguimiento logístico actualizado."); if (ok) setTracking(null); }} />}
   </>;
@@ -1609,19 +1619,19 @@ function SupplierView({ suppliers, loading, saving, onSave }: { suppliers: Suppl
 
   return <div className="coordinator-layout">
     <section className="panel coordinator-form-panel">
-      <div className="panel-title"><div><h2>Proveedor o contrata</h2><p>El RUC/DNI completa automáticamente la razón social en solicitudes y salidas.</p></div></div>
+      <div className="panel-title"><div><h2>Empresa o persona</h2><p>Registra una vez el RUC de la empresa o el DNI de la persona; después el nombre se completa automáticamente.</p></div></div>
       <form onSubmit={submit}>
         <input type="hidden" name="source" value="MANUAL" />
         <label className="field"><span>Tipo de documento *</span><select name="documentType" defaultValue="RUC"><option value="RUC">RUC</option><option value="DNI">DNI</option></select></label>
         <label className="field"><span>RUC o DNI *</span><input name="documentNumber" required inputMode="numeric" pattern="[0-9]{8}|[0-9]{11}" placeholder="8 u 11 dígitos" /></label>
-        <label className="field"><span>Razón social / nombre *</span><input name="businessName" required placeholder="Nombre legal" /></label>
+        <label className="field"><span>Razón social / nombre completo *</span><input name="businessName" required placeholder="Nombre legal o nombre completo" /></label>
         <label className="field"><span>Nombre comercial</span><input name="tradeName" placeholder="Opcional" /></label>
-        <button className="primary-button" type="submit" disabled={saving}><Plus size={16} />Guardar proveedor</button>
+        <button className="primary-button" type="submit" disabled={saving}><Plus size={16} />Guardar registro</button>
       </form>
-      <div className="bulk-master-box"><strong>Carga masiva</strong><p>Columnas: RUC/DNI, Razón Social y Nombre Comercial.</p><label className="secondary-button"><Upload size={15} />Seleccionar Excel o CSV<input type="file" hidden accept=".xlsx,.xls,.csv" onChange={(event) => void upload(event.target.files?.[0])} /></label><button type="button" className="secondary-button" onClick={() => void downloadTableTemplate("plantilla_proveedores_f1.xlsx", "Proveedores", { "RUC/DNI": "20123456789", "Razón Social": "CONTRATA EJEMPLO S.A.C.", "Nombre Comercial": "CONTRATA EJEMPLO" })}><Download size={15} />Descargar plantilla</button>{fileStatus && <small>{fileStatus}</small>}</div>
+      <div className="bulk-master-box"><strong>Carga masiva</strong><p>Columnas: RUC/DNI, Razón Social o Nombre Completo, y Nombre Comercial opcional.</p><label className="secondary-button"><Upload size={15} />Seleccionar Excel o CSV<input type="file" hidden accept=".xlsx,.xls,.csv" onChange={(event) => void upload(event.target.files?.[0])} /></label><button type="button" className="secondary-button" onClick={() => void downloadTableTemplate("plantilla_empresas_personas_f1.xlsx", "Empresas y Personas", { "RUC/DNI": "20123456789", "Razón Social o Nombre Completo": "CONTRATA EJEMPLO S.A.C.", "Nombre Comercial": "CONTRATA EJEMPLO" })}><Download size={15} />Descargar plantilla</button>{fileStatus && <small>{fileStatus}</small>}</div>
     </section>
     <section className="panel table-panel coordinator-table-panel">
-      <div className="panel-title"><div><h2>Maestro de proveedores</h2><p>{suppliers.length} registros disponibles. SUNAT podrá activarse cuando se configuren credenciales oficiales.</p></div></div>
+      <div className="panel-title"><div><h2>Maestro de empresas y personas</h2><p>{suppliers.length} registros disponibles. SUNAT podrá activarse para validar RUC cuando se configuren credenciales oficiales.</p></div></div>
       <div className="table-wrap"><table><thead><tr><th>Documento</th><th>Razón social</th><th>Nombre comercial</th><th>Fuente</th><th>Estado</th></tr></thead><tbody>{loading ? <tr><td colSpan={5}><Empty text="Cargando proveedores..." /></td></tr> : !suppliers.length ? <tr><td colSpan={5}><Empty text="Carga tu base de proveedores o registra el primer RUC/DNI." /></td></tr> : suppliers.map((supplier) => <tr key={supplier.id}><td><strong>{supplier.documentNumber}</strong><small>{supplier.documentType}</small></td><td><strong>{supplier.businessName}</strong></td><td>{supplier.tradeName || "—"}</td><td>{supplier.source}</td><td><span className={`source-badge ${supplier.active ? "" : "inactive"}`}>{supplier.active ? "ACTIVO" : "INACTIVO"}</span></td></tr>)}</tbody></table></div>
     </section>
   </div>;
@@ -1708,13 +1718,10 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       const coordinator = bulkRowValue(row, "Coordinador Entel", "CordEntelFinal");
       const coordinatorF1 = bulkRowValue(row, "Coordinador F1", "CordF1");
       const contractorDocument = bulkRowValue(row, "RUC", "RUC/DNI", "Documento").replace(/\D/g, "");
-      const suppliedContractor = bulkRowValue(row, "Razón Social", "Razon Social", "Contrata", "Proveedor");
       const supplier = suppliers.find((item) => item.active && item.documentNumber === contractorDocument);
-      const contractor = supplier?.businessName || suppliedContractor;
       let serials = bulkRowValue(row, "Serie/Lote", "Serie").toUpperCase();
       const document = bulkRowValue(row, movementType === "entrada" ? "GR. de Ingreso" : "NroGRSalida", "GR. de Salida").toUpperCase();
       const sourceRow = bulkRowValue(row, "ITEM", "Fila").toUpperCase();
-      const origin = bulkRowValue(row, "Proviene", "Origen");
       const requestedLotMode = bulkRowValue(row, "Modo de Lote", "Modo Lote", "Asignación de Lote", "Asignacion de Lote").toUpperCase();
       const movementDate = normalizeKardexDate(bulkRowValue(row, movementType === "entrada" ? "Fecha de Ingreso" : "Fecha Salida", "Fecha de Salida", "Fecha"), today());
       const quantity = Math.max(1, bulkNumberValue(row, "Cantidad") || 1);
@@ -1727,7 +1734,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
 
       if (movementType === "entrada" && !serials && requestedLotMode.includes("MANUAL")) {
         reason = "Elegiste lote manual, pero falta Serie/Lote.";
-      } else if (movementType === "entrada" && !serials && (requestedLotMode.includes("AUTO") || origin.toUpperCase().includes("TRANSFER"))) {
+      } else if (movementType === "entrada" && !serials && requestedLotMode.includes("AUTO")) {
         serials = automaticPreviewLotCode({ movementDate, orderNumber, sku, sourceRow: sourceRow || rowNumber });
         autoLotGenerated = true;
       }
@@ -1738,8 +1745,8 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       else if (movementType !== "maestro" && !document) reason = "Falta la GR de ingreso o salida.";
       else if (movementType !== "maestro" && (!orderNumber || !coordinator)) reason = "Faltan N° Pedido o Coordinador Entel.";
       else if ((movementType === "entrada" || movementType === "salida") && !coordinatorF1) reason = "Falta Coordinador F1.";
-      else if (movementType === "salida" && !contractorDocument) reason = "Falta RUC/DNI de la contrata.";
-      else if (movementType !== "maestro" && !contractor) reason = "Falta razón social, contrata o proveedor.";
+      else if (movementType === "entrada" && (!/^\d{11}$/.test(contractorDocument) || supplier?.documentType !== "RUC")) reason = "El RUC de la empresa de origen no existe o está inactivo en el maestro.";
+      else if (movementType === "salida" && (!/^(\d{8}|\d{11})$/.test(contractorDocument) || !supplier)) reason = "El RUC/DNI de destino no existe o está inactivo en el maestro.";
 
       if (!reason && movementType === "maestro" && product
         && product.description.trim().toUpperCase() === description.trim().toUpperCase()
@@ -1748,11 +1755,11 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       }
 
       if (!reason && movementType !== "maestro" && product) {
-        const party = (contractorDocument || contractor || origin).trim().toUpperCase();
+        const party = contractorDocument.trim().toUpperCase();
         const duplicate = movements.some((movement) => movement.type === movementType
           && movement.document.trim().toUpperCase() === document
           && movement.orderNumber.trim().toUpperCase() === orderNumber.trim().toUpperCase()
-          && (movement.contractorDocument || movement.contractor || movement.origin).trim().toUpperCase() === party);
+          && movement.contractorDocument.trim().toUpperCase() === party);
         if (duplicate) reason = "La misma GR y pedido ya fueron cargados para esta razón social.";
       }
 
@@ -1883,7 +1890,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       const availableHeaders = new Set(Object.keys(first).map(normalize));
       if (!availableHeaders.has(normalize("Sku"))) throw new Error("No se encontró la columna Sku en la primera hoja.");
       if (source === "F1" && movementType === "entrada") {
-        const requiredHeaders = ["Fila", "Sku", "Descripción Sku", "Estado de Equipo", "Condición", "Proyecto", "Proviene", "Fecha de Ingreso", "GR. de Ingreso", "N° Pedido", "Coordinador Entel", "Coordinador F1", "Site Origen", "Serie/Lote", "Unidad de Medida", "Cantidad", "Tipo de Equipo", "Cargar Gr"];
+        const requiredHeaders = ["Fila", "Sku", "Descripción Sku", "Estado de Equipo", "Condición", "Proyecto", "RUC", "Fecha de Ingreso", "GR. de Ingreso", "N° Pedido", "Coordinador Entel", "Coordinador F1", "Site Origen", "Serie/Lote", "Unidad de Medida", "Cantidad", "Tipo de Equipo", "Cargar Gr"];
         const missing = requiredHeaders.filter((header) => !availableHeaders.has(normalize(header)));
         if (!availableHeaders.has(normalize("Link de GR")) && !availableHeaders.has(normalize("Link de GR. de Ingreso"))) missing.push("Link de GR. de Ingreso");
         if (missing.length) throw new Error(`Faltan columnas de ingreso: ${missing.join(", ")}.`);
@@ -1928,7 +1935,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
   async function downloadTemplate() {
     const XLSX = await import("xlsx");
     const row = movementType === "entrada" ? {
-      Fila: 1, Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Estado de Equipo": "NUEVO", Condición: "OPERATIVO", Proyecto: "ENTEL", Proviene: "MO COMPANY", "Fecha de Ingreso": today(), "GR. de Ingreso": "GR-ING-001", "Link de GR. de Ingreso": "https://ejemplo.com/gr-ingreso.pdf", "N° Pedido": "PED-001", "Coordinador Entel": "COORDINADOR ENTEL", "Coordinador F1": "COORDINADOR F1", "RUC/DNI": "20123456789", "Razón Social": "PROVEEDOR EJEMPLO S.A.C.", "Site Origen": "MO COMPANY", Ubicación: "MO COMPANY", "Serie/Lote": "SERIE001", "Modo de Lote": "MANUAL", "Unidad de Medida": "UND", Cantidad: 1, Costo: 100, "Tipo de Equipo": "EQUIPO", "Cargar Gr": "SI",
+      Fila: 1, Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Estado de Equipo": "NUEVO", Condición: "OPERATIVO", Proyecto: "ENTEL", RUC: "20123456789", "Fecha de Ingreso": today(), "GR. de Ingreso": "GR-ING-001", "Link de GR. de Ingreso": "https://ejemplo.com/gr-ingreso.pdf", "N° Pedido": "PED-001", "Coordinador Entel": "COORDINADOR ENTEL", "Coordinador F1": "COORDINADOR F1", "Site Origen": "MO COMPANY", Ubicación: "MO COMPANY", "Serie/Lote": "SERIE001", "Modo de Lote": "MANUAL", "Unidad de Medida": "UND", Cantidad: 1, Costo: 100, "Tipo de Equipo": "EQUIPO", "Cargar Gr": "SI",
     } : movementType === "salida" ? {
       ITEM: 1,
       "Fecha Salida": today(),
@@ -1942,8 +1949,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       Provincia: "LIMA",
       ProyectoFinal: "ENTEL",
       CordF1: "COORDINADOR F1",
-      RUC: "20123456789",
-      Contrata: "CONTRATA",
+      "RUC/DNI": "20123456789",
       Consignatario: "RESPONSABLE DE RECEPCIÓN",
       "Serie/Lote": "SERIE001",
       Cantidad: 1,
@@ -2025,14 +2031,14 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       <div className="upload-actions"><button className="secondary-button" onClick={() => void downloadTemplate()}><Download size={16} />Plantilla de {operationLabel}</button><button className={`primary-button ${movementType === "salida" ? "danger-button" : ""} ${loadComplete ? "load-complete-button" : ""}`} disabled={!acceptedPreviewRows.length || saving || loadComplete} onClick={() => void submitBulk()}>{saving ? "Procesando..." : loadComplete ? "✓ Carga completada" : `Cargar ${acceptedPreviewRows.length || ""} líneas aprobadas`}</button></div>
     </div>
     <aside className="panel mapping-panel">
-      <div className="panel-title"><div><h2>{movementType === "entrada" ? "Campos de ingresos" : movementType === "salida" ? "27 campos de salidas" : "3 campos del maestro"}</h2><p>Plantilla diferenciada por proceso</p></div></div>
+      <div className="panel-title"><div><h2>{movementType === "entrada" ? "Campos de ingresos" : movementType === "salida" ? "Campos de salidas" : "3 campos del maestro"}</h2><p>Plantilla diferenciada por proceso</p></div></div>
       <div className={`operation-summary ${movementType}`}><span>{movementType === "entrada" ? <ArrowDownLeft size={19} /> : movementType === "salida" ? <ArrowUpRight size={19} /> : <Boxes size={19} />}</span><div><strong>{movementType === "entrada" ? "Ingreso al inventario" : movementType === "salida" ? "Salida del inventario" : "Maestro de productos"}</strong><small>{movementType === "entrada" ? "Los SKU existentes conservan el nombre y tipo oficiales del maestro." : movementType === "salida" ? "Acepta exactamente la estructura de tu Excel de despachos." : "Carga SKU, descripción oficial y tipo de equipo."}</small></div></div>
       <ul>{movementType === "entrada" ? <>
-        <li><b>Identificación</b><span>Fila, Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Estado y asignación</b><span>Estado de Equipo, Condición y Proyecto</span></li><li><b>Recepción</b><span>Proviene, Fecha de Ingreso y GR. de Ingreso</span></li><li><b>Responsables</b><span>Coordinador Entel y Coordinador F1</span></li><li><b>Trazabilidad</b><span>N° Pedido, Site Origen, Serie/Lote y Modo de Lote opcional</span></li><li><b>Transferencias</b><span>Si Serie/Lote está vacío y Proviene contiene “Transferencia”, el sistema genera un lote TRF automático.</span></li><li><b>Valorización</b><span>Unidad de Medida, Cantidad y costo opcional; si falta, usa Stock Contrata Entel</span></li><li><b>Evidencia</b><span>Cargar Gr y Link de GR. de Ingreso</span></li>
+        <li><b>Identificación</b><span>Fila, Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Estado y asignación</b><span>Estado de Equipo, Condición y Proyecto</span></li><li><b>Recepción</b><span>RUC, Fecha de Ingreso y GR. de Ingreso; Proviene se completa desde el maestro</span></li><li><b>Responsables</b><span>Coordinador Entel y Coordinador F1</span></li><li><b>Trazabilidad</b><span>N° Pedido, Site Origen, Serie/Lote y Modo de Lote opcional</span></li><li><b>Transferencias</b><span>Si no recibes Serie/Lote, usa Modo de Lote = AUTOMATICO para generar un código TRF.</span></li><li><b>Valorización</b><span>Unidad de Medida, Cantidad y costo opcional; si falta, usa Stock Contrata Entel</span></li><li><b>Evidencia</b><span>Cargar Gr y Link de GR. de Ingreso</span></li>
       </> : movementType === "salida" ? <>
         <li><b>Despacho</b><span>ITEM, Fecha Salida, NroGRSalida, IDDespacho y Link de GR</span></li>
         <li><b>Equipo</b><span>Sku, Descripción Sku, Serie/Lote, Cantidad, UnidadMedida y Tipo de Equipo</span></li>
-        <li><b>Destino</b><span>SiteDestino, Region, Provincia, ProyectoFinal, Contrata y Consignatario</span></li>
+        <li><b>Destino</b><span>RUC/DNI, SiteDestino, Region, Provincia, ProyectoFinal y Consignatario; el nombre se completa desde el maestro</span></li>
         <li><b>Responsables</b><span>CordEntelFinal, CordF1, N° Pedido y Persona que Registra</span></li>
         <li><b>Control de correo</b><span>CorreoSolicitante, Estado Correo, EstadoCorreo y FechaEnvioCorreo</span></li>
         <li><b>Sin Ticket/JIRA</b><span>JIRA se completa únicamente en Conciliación.</span></li>
@@ -2081,6 +2087,7 @@ function MovementModal({ products, coordinators, suppliers, initialType, warehou
   const f1Coordinators = coordinators.filter((coordinator) => coordinator.organization === "F1" && coordinator.active);
   const selectedProduct = products.find((product) => String(product.id) === productId);
   const selectedSupplier = suppliers.find((supplier) => supplier.active && supplier.documentNumber === contractorDocument);
+  const validDocumentMatch = type === "entrada" ? selectedSupplier?.documentType === "RUC" : Boolean(selectedSupplier);
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -2106,15 +2113,14 @@ function MovementModal({ products, coordinators, suppliers, initialType, warehou
           <label className="field"><span>{type === "salida" ? "Proyecto Final" : "Proyecto"}</span><input name="project" defaultValue="ENTEL" placeholder="Proyecto" /></label>
           <label className="field"><span>{type === "salida" ? "Cord. Entel Final" : "Coordinador Entel"} {type === "entrada" || type === "salida" ? "*" : ""}</span><input name="coordinator" list="entel-coordinators" required={type === "entrada" || type === "salida"} placeholder="Responsable Entel del pedido" /><datalist id="entel-coordinators">{entelCoordinators.map((coordinator) => <option value={coordinator.name} label={coordinator.email} key={coordinator.id} />)}</datalist></label>
           <label className="field"><span>Coordinador F1 {type === "entrada" || type === "salida" ? "*" : ""}</span><input name="coordinatorF1" list="f1-coordinators" required={type === "entrada" || type === "salida"} placeholder="Responsable interno F1" /><datalist id="f1-coordinators">{f1Coordinators.map((coordinator) => <option value={coordinator.name} label={coordinator.email} key={coordinator.id} />)}</datalist></label>
-          <label className="field"><span>RUC/DNI {type === "salida" ? "*" : ""}</span><input name="contractorDocument" inputMode="numeric" pattern="[0-9]{8}|[0-9]{11}" required={type === "salida"} value={contractorDocument} onChange={(event) => { const value = event.target.value.replace(/\D/g, "").slice(0, 11); setContractorDocument(value); const match = suppliers.find((supplier) => supplier.active && supplier.documentNumber === value); setContractor(match?.businessName ?? ""); }} placeholder="8 u 11 dígitos" /><small>{selectedSupplier ? `Registrado: ${selectedSupplier.businessName}` : contractorDocument.length >= 8 ? "No está en el maestro; completa la razón social." : "Busca la razón social en Proveedores."}</small></label>
-          <label className="field"><span>Razón social / contrata *</span><input name="contractor" required value={contractor} onChange={(event) => setContractor(event.target.value)} readOnly={Boolean(selectedSupplier)} placeholder="Empresa vinculada a la GR" /></label>
+          <label className="field"><span>{type === "entrada" ? "RUC de empresa de origen" : "RUC/DNI de destino"} *</span><input name="contractorDocument" inputMode="numeric" pattern={type === "entrada" ? "[0-9]{11}" : "[0-9]{8}|[0-9]{11}"} required value={contractorDocument} onChange={(event) => { const value = event.target.value.replace(/\D/g, "").slice(0, 11); setContractorDocument(value); const match = suppliers.find((supplier) => supplier.active && supplier.documentNumber === value && (type !== "entrada" || supplier.documentType === "RUC")); setContractor(match?.businessName ?? ""); }} placeholder={type === "entrada" ? "11 dígitos" : "8 u 11 dígitos"} /><small>{validDocumentMatch ? `Registrado: ${selectedSupplier?.businessName}` : contractorDocument.length >= 8 ? "Documento no registrado o inactivo; agrégalo en Empresas y personas." : "El nombre se completará desde el maestro."}</small></label>
+          <label className="field"><span>{type === "entrada" ? "Proviene (automático)" : "Razón social / nombre (automático)"}</span><input name="contractor" value={contractor} readOnly placeholder="Se completa al ingresar el documento" /></label>
           {type === "salida" ? <>
             <label className="field"><span>Site Destino</span><input name="destinationSite" placeholder="Código o nombre del site" /></label>
             <label className="field"><span>Región</span><input name="region" placeholder="Ej. Lima" /></label>
             <label className="field"><span>Provincia</span><input name="province" placeholder="Ej. Lima" /></label>
             <label className="field"><span>Consignatario</span><input name="consignee" placeholder="Persona que recibe" /></label>
           </> : <>
-            <label className="field"><span>Proviene</span><input name="origin" defaultValue="MO COMPANY" /></label>
             <label className="field"><span>Site Origen</span><input name="originSite" defaultValue={warehouse} /></label>
             <label className="field"><span>Ubicación del stock</span><select name="stockLocation" defaultValue="MO COMPANY"><option value="MO COMPANY">MO Company</option><option value="F1 - TRÁNSITO">F1 - tránsito</option></select></label>
           </>}
@@ -2124,7 +2130,7 @@ function MovementModal({ products, coordinators, suppliers, initialType, warehou
           <label className="field"><span>Propietario</span><select name="owner" defaultValue="F1 SERVICES"><option>F1 SERVICES</option><option>ENTEL</option><option>WIN</option><option>PRONATEL</option></select></label>
           <label className="field field-wide"><span>Observación</span><textarea name="notes" rows={2} placeholder="Detalle adicional del movimiento" /></label>
         </div>
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : type === "salida" ? "Confirmar salida" : "Guardar ingreso"}</button></div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || !validDocumentMatch}>{saving ? "Guardando..." : type === "salida" ? "Confirmar salida" : "Guardar ingreso"}</button></div>
       </>}
     </form>
   </div></div>;
