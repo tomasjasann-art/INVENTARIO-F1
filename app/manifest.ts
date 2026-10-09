@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Kardex F1 Logística",
-    short_name: "Kardex F1",
-    description: "Ingresos, salidas, stock, trazabilidad, conciliación y auditoría logística F1.",
+    name: "Logística F1 · Control de Equipos Entel",
+    short_name: "Logística F1",
+    description: "Plataforma modular de control logístico F1. Módulo activo: Control de Equipos Entel.",
     start_url: "/",
     display: "standalone",
     background_color: "#f4f5f7",

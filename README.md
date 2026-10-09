@@ -1,4 +1,4 @@
-# Kardex F1 Logística
+# Logística F1 · Control de Equipos Entel
 
 Aplicación de inventario, stock, movimientos, solicitudes, conciliación y auditoría para F1 Services. Esta versión está preparada para desplegarse como una aplicación **Next.js nativa en Vercel**.
 

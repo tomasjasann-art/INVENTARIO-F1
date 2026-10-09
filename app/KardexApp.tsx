@@ -5,10 +5,12 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   BarChart3,
+  Bell,
   Boxes,
   Database,
   CheckCircle2,
   CircleDollarSign,
+  Clock3,
   ClipboardList,
   Download,
   FileSpreadsheet,
@@ -153,6 +155,7 @@ type EquipmentRequest = {
   requestCode: string;
   coordinatorName: string;
   coordinatorEmail: string;
+  coordinatorEntel: string;
   orderNumber: string;
   project: string;
   site: string;
@@ -168,6 +171,8 @@ type EquipmentRequest = {
   pickupPerson2: string;
   region: string;
   city: string;
+  deliveryAddress: string;
+  transport: string;
   neededDate: string;
   status: "PENDIENTE" | "VALIDADA" | "DESPACHADA" | "EN_TRANSITO" | "LISTA_RECOJO" | "RECOGIDA" | "CERRADA" | "RECHAZADA";
   outboundGuide: string;
@@ -181,6 +186,7 @@ type EquipmentRequest = {
   sentDate: string;
   arrivalDate: string;
   pickupDate: string;
+  closedAt: string;
   logisticsNotes: string;
   notes: string;
   createdAt: string;
@@ -348,6 +354,31 @@ function displayDate(value: string) {
   return new Intl.DateTimeFormat("es-PE", { day: "2-digit", month: "short", year: "numeric" }).format(date);
 }
 
+function requestTimestamp(value: string) {
+  if (!value) return null;
+  const date = new Date(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isNaN(date.getTime()) ? kardexDate(value) : date;
+}
+
+function requestElapsedMilliseconds(request: EquipmentRequest) {
+  const start = requestTimestamp(request.createdAt);
+  const closed = request.closedAt || (request.status === "CERRADA" ? request.updatedAt : "");
+  const end = closed ? requestTimestamp(closed) : new Date();
+  return start && end ? Math.max(0, end.getTime() - start.getTime()) : 0;
+}
+
+function requestElapsedLabel(request: EquipmentRequest) {
+  const totalHours = Math.floor(requestElapsedMilliseconds(request) / 3_600_000);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  if (!days) return `${Math.max(1, totalHours)} h`;
+  return `${days} d ${hours} h`;
+}
+
+function requestDomId(requestCode: string) {
+  return `pedido-${requestCode.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+}
+
 function externalUrl(value: string) {
   const link = value.trim();
   if (!link) return "";
@@ -377,18 +408,22 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
   const [modal, setModal] = useState<"movement" | "product" | null>(null);
   const [movementType, setMovementType] = useState<Movement["type"]>("entrada");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [focusedRequestCode, setFocusedRequestCode] = useState("");
   const warehouse = "MO Company";
   const role = data.currentUser?.role ?? "SOLO_LECTURA";
   const canOperate = role === "ADMINISTRADOR" || role === "LOGISTICA";
   const canRequest = canOperate || role === "COORDINADOR";
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const response = await fetch("/api/kardex", { cache: "no-store" });
       const body = (await response.json()) as KardexData & { error?: string };
-      if (!response.ok) throw new Error(body.error || "No se pudo cargar el Kardex.");
+      if (!response.ok) throw new Error(body.error || "No se pudo cargar Logística F1.");
       setData({
         products: body.products ?? [],
         movements: body.movements ?? [],
@@ -404,15 +439,20 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
         currentUser: body.currentUser,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo cargar el Kardex.");
+      if (!silent) setError(err instanceof Error ? err.message : "No se pudo cargar Logística F1.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadData(), 0);
     return () => window.clearTimeout(timer);
+  }, [loadData]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => void loadData(true), 60_000);
+    return () => window.clearInterval(timer);
   }, [loadData]);
 
   useEffect(() => {
@@ -443,6 +483,21 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
       && product.stock <= product.minStock);
     return { stock, inventoryValue, entries, exits, alerts: alertProducts.length, alertProducts };
   }, [data]);
+
+  const notificationRequests = useMemo(() => {
+    const groups = new Map<string, EquipmentRequest[]>();
+    data.equipmentRequests.forEach((request) => groups.set(request.requestCode, [...(groups.get(request.requestCode) ?? []), request]));
+    return [...groups.values()]
+      .filter((group) => group[0]?.status === "PENDIENTE")
+      .sort((a, b) => Math.max(...b.map((row) => row.id)) - Math.max(...a.map((row) => row.id)));
+  }, [data.equipmentRequests]);
+
+  function openRequestFromNotification(requestCode: string) {
+    setFocusedRequestCode(requestCode);
+    setNotificationsOpen(false);
+    setView("solicitudes");
+    window.setTimeout(() => document.getElementById(requestDomId(requestCode))?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+  }
 
   const filteredMovements = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -512,7 +567,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `kardex-${today()}.csv`;
+    link.download = `control-equipos-entel-${today()}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -530,12 +585,15 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
         error?: string;
         imported?: number;
         rejected?: number;
+        requestCode?: string;
         rejectionDetails?: Array<{ row: number; sku: string; reason: string }>;
       };
       if (!response.ok) throw new Error(body.error || "No se pudo guardar.");
       setModal(null);
       setMessage(
-        typeof body.imported === "number"
+        body.requestCode
+          ? `Pedido F1 ${body.requestCode} registrado correctamente.`
+          : typeof body.imported === "number"
           ? `Carga procesada: ${body.imported} filas registradas${body.rejected ? ` y ${body.rejected} rechazadas` : ""}.`
           : success,
       );
@@ -558,9 +616,10 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
           <div className="brand-mark"><span>F1</span></div>
-          <div><strong>KARDEX</strong><small>CONTROL LOGÍSTICO</small></div>
+          <div><strong>LOGÍSTICA F1</strong><small>PLATAFORMA OPERATIVA</small></div>
           <button className="icon-button sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="Cerrar menú"><X size={18} /></button>
         </div>
+        <div className="module-pill"><Boxes size={17} /><span><small>MÓDULO ACTIVO</small><strong>Control de Equipos Entel</strong></span></div>
         <div className="warehouse-pill warehouse-fixed"><Warehouse size={17} /><span><small>ALMACÉN F1</small><strong>{warehouse}</strong></span></div>
         <nav className="nav-list" aria-label="Navegación principal">
           <button className={view === "resumen" ? "active" : ""} onClick={() => { setView("resumen"); setSidebarOpen(false); }}><LayoutDashboard size={19} />Resumen</button>
@@ -588,6 +647,14 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Abrir menú"><Menu size={21} /></button>
           <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>
           <div className="top-actions">
+            <div className="notification-center">
+              <button className={`notification-button ${notificationRequests.length ? "has-alerts" : ""}`} onClick={() => setNotificationsOpen((open) => !open)} aria-label={`${notificationRequests.length} solicitudes nuevas`} aria-expanded={notificationsOpen}><Bell size={19} />{notificationRequests.length > 0 && <span>{notificationRequests.length > 99 ? "99+" : notificationRequests.length}</span>}</button>
+              {notificationsOpen && <div className="notification-panel">
+                <div className="notification-head"><div><strong>Solicitudes nuevas</strong><small>{notificationRequests.length} Pedido(s) F1 por validar</small></div><button className="icon-button" onClick={() => setNotificationsOpen(false)} aria-label="Cerrar notificaciones"><X size={16} /></button></div>
+                <div className="notification-list">{notificationRequests.length === 0 ? <p>No tienes solicitudes nuevas.</p> : notificationRequests.slice(0, 8).map((group) => { const request = group[0]; const quantity = group.reduce((sum, row) => sum + row.quantity, 0); return <button key={request.requestCode} onClick={() => openRequestFromNotification(request.requestCode)}><span className="notification-icon"><ShoppingCart size={16} /></span><span><strong>{request.requestCode}</strong><small>{request.coordinatorName} · {quantity} equipo(s)</small><small>Despacho: {request.neededDate ? displayDate(request.neededDate) : "Sin fecha"}</small></span><b>{requestElapsedLabel(request)}</b></button>; })}</div>
+                {notificationRequests.length > 0 && <button className="notification-footer" onClick={() => { setView("solicitudes"); setNotificationsOpen(false); }}>Ver todas las solicitudes</button>}
+              </div>}
+            </div>
             {!(["solicitudes", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
             {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
             {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
@@ -597,7 +664,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
 
         <div className="content">
           <section className="page-heading">
-            <div><p className="eyebrow">SISTEMA INVENTARIO F1 · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? "Resumen del Kardex" : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? "Stock y trazabilidad" : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes de equipos" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? "Control centralizado por SKU, Serie/Lote, pedido y proyecto." : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU." : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Los coordinadores F1 seleccionan equipos por pedido para que MO Company prepare la salida." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el Kardex interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el Kardex." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
+            <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? "Resumen de equipos" : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? "Stock y trazabilidad" : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? "Control centralizado por SKU, Serie/Lote, pedido y proyecto." : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU." : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
           </section>
 
@@ -638,7 +705,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           {view === "salidas" && <OperationalMovementTable mode="salida" movements={filteredMovements.filter((movement) => ["salida", "baja"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
           {view === "stock" && <StockTable products={filteredProducts} movements={data.movements} loading={loading} />}
           {view === "lotes" && <LotView movements={filteredMovements} loading={loading} />}
-          {view === "solicitudes" && <RequestView products={data.products} movements={data.movements} coordinators={data.coordinators} suppliers={data.suppliers} requests={data.equipmentRequests} warehouse={warehouse} loading={loading} saving={saving} canRequest={canRequest} canOperate={canOperate} onSave={save} />}
+          {view === "solicitudes" && <RequestView products={data.products} movements={data.movements} coordinators={data.coordinators} suppliers={data.suppliers} requests={data.equipmentRequests} warehouse={warehouse} loading={loading} saving={saving} canRequest={canRequest} canOperate={canOperate} focusedRequestCode={focusedRequestCode} onSave={save} />}
           {view === "conciliacion" && <ConciliationView movements={data.movements} validations={data.installationValidations} auditImports={data.auditImports} auditRecords={data.auditRecords} auditHistoryRecords={data.auditHistoryRecords} loading={loading} saving={saving} onSave={(payload) => void save(payload, "Validación de instalación guardada.")} onOpenAudit={() => setView("auditoria")} />}
           {view === "auditoria" && <AuditView imports={data.auditImports} records={data.auditRecords} movements={data.movements} loading={loading} saving={saving} onSave={save} />}
           {view === "coordinadores" && <CoordinatorView coordinators={data.coordinators} loading={loading} saving={saving} onSave={(payload) => save(payload, "Coordinador actualizado correctamente.")} />}
@@ -806,7 +873,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, entry ? "Ingresos" : "Salidas");
     const suffix = filterQuery.trim().replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 45) || "todos";
-    XLSX.writeFile(workbook, `kardex_${mode}s_${filterBy}_${suffix}_${today()}.xlsx`);
+    XLSX.writeFile(workbook, `control_equipos_entel_${mode}s_${filterBy}_${suffix}_${today()}.xlsx`);
   }
   return <>
     <section className="panel table-panel operational-panel">
@@ -1276,7 +1343,7 @@ function ReconciliationRow({ movement, serial, validation, entryMovement, entelA
     <td><strong>{movement.project || "—"}</strong><small>{movement.destinationSite || "Sin site destino"}</small></td>
     <td>{entelAudit ? <><span className="reconcile-status match">VIGENTE EN CORTE</span><strong>{number.format(entelAudit.quantity)} {entelAudit.unitMeasure}</strong><small>{entelAudit.category}</small></> : entelHistory ? <><span className="reconcile-status retired">RETIRADO DEL ÚLTIMO CORTE</span><strong>Último: {number.format(entelHistory.quantity)} {entelHistory.unitMeasure}</strong><small>{displayDate(entelLastSeen?.cutoffDate || entelLastSeen?.createdAt || "")}</small></> : <><span className="reconcile-status missing">NUNCA ENCONTRADO</span><small>No existe en los cortes Entel conservados</small></>}</td>
     <td>{oracleAudit ? <><span className={`reconcile-status ${oracleMatch ? "match" : entelAudit ? "surplus" : "match"}`}>{oracleMatch ? "COINCIDE" : entelAudit ? "DIFERENCIA" : "VIGENTE EN ORACLE"}</span><strong>{number.format(oracleAudit.quantity)} {oracleAudit.unitMeasure}</strong><small>{oracleAudit.project || oracleAudit.requester || "Stock Oracle"}</small></> : oracleHistory ? <><span className="reconcile-status retired">RETIRADO DEL ÚLTIMO CORTE</span><strong>Último: {number.format(oracleHistory.quantity)} {oracleHistory.unitMeasure}</strong><small>{displayDate(oracleLastSeen?.cutoffDate || oracleLastSeen?.createdAt || "")}</small></> : <><span className="reconcile-status missing">NUNCA ENCONTRADO</span><small>No existe en los cortes Oracle conservados</small></>}</td>
-    <td><strong>{money.format((entelSnapshot?.totalCostCents ?? 0) / 100)}</strong><small>{entelAudit ? "Costo Entel del último corte" : entelHistory ? "Último costo conocido Entel" : "Sin costo Entel"}</small><strong>{money.format((f1UnitCostCents * lineQuantity) / 100)}</strong><small>Costo Kardex F1</small></td>
+    <td><strong>{money.format((entelSnapshot?.totalCostCents ?? 0) / 100)}</strong><small>{entelAudit ? "Costo Entel del último corte" : entelHistory ? "Último costo conocido Entel" : "Sin costo Entel"}</small><strong>{money.format((f1UnitCostCents * lineQuantity) / 100)}</strong><small>Costo control F1</small></td>
     <td><span className={`age-kpi ${kpi === "Mayor a 1 año" ? "danger" : kpi === "Mayor a 6 meses" ? "warning" : "current"}`}>{kpi.toUpperCase()}</span><small>{entelSnapshot?.ageMonths ? `${entelSnapshot.ageMonths} meses en contrata${entelHistory && !entelAudit ? " · último dato" : ""}` : "Sin antigüedad Entel"}</small></td>
     <td><select form={formId} name="evidenceSsnn" defaultValue={validation?.evidenceSsnn || ""} disabled={locked}><option value="" disabled>Selecciona sustento</option><option>Instalación Site</option><option>Fisico en PDV</option><option>Devuelto por LI</option><option>Facturar a SSNN</option><option>Transferencia entre Contratas</option><option>Sin Sustento</option></select></td>
     <td><input form={formId} list="dispatch-site-options" name="installedSite" defaultValue={validation?.installedSite ?? movement.destinationSite} placeholder="Código o nombre del site" disabled={locked} /></td>
@@ -1294,8 +1361,9 @@ function ReconciliationRow({ movement, serial, validation, entryMovement, entelA
   </tr>;
 }
 
-function RequestView({ products, movements, coordinators, suppliers, requests, warehouse, loading, saving, canRequest, canOperate, onSave }: { products: Product[]; movements: Movement[]; coordinators: Coordinator[]; suppliers: Supplier[]; requests: EquipmentRequest[]; warehouse: string; loading: boolean; saving: boolean; canRequest: boolean; canOperate: boolean; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
+function RequestView({ products, movements, coordinators, suppliers, requests, warehouse, loading, saving, canRequest, canOperate, focusedRequestCode, onSave }: { products: Product[]; movements: Movement[]; coordinators: Coordinator[]; suppliers: Supplier[]; requests: EquipmentRequest[]; warehouse: string; loading: boolean; saving: boolean; canRequest: boolean; canOperate: boolean; focusedRequestCode: string; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
   const [selectedCoordinator, setSelectedCoordinator] = useState("");
+  const [selectedEntelCoordinator, setSelectedEntelCoordinator] = useState("");
   const [selectedOrder, setSelectedOrder] = useState("");
   const [productQuery, setProductQuery] = useState("");
   const [selectedSeriesLot, setSelectedSeriesLot] = useState("");
@@ -1308,6 +1376,7 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
   const [tracking, setTracking] = useState<EquipmentRequest | null>(null);
   const productMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const activeCoordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "F1").sort((a, b) => a.name.localeCompare(b.name));
+  const activeEntelCoordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "ENTEL").sort((a, b) => a.name.localeCompare(b.name));
   const coordinator = activeCoordinators.find((item) => item.name === selectedCoordinator);
   const supplier = suppliers.find((item) => item.active && item.documentNumber === contractorDocument.trim());
   const pickupPerson = suppliers.find((item) => item.active && item.documentType === "DNI" && item.documentNumber === pickupPersonDni);
@@ -1373,6 +1442,54 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
   const pendingGroups = groupedRequests.filter((group) => !["CERRADA", "RECOGIDA", "RECHAZADA"].includes(group[0].status));
   const delayedGroups = pendingGroups.filter((group) => pendingDays(group[0]) > 7);
 
+  async function exportRequestExcel(group: EquipmentRequest[]) {
+    const request = group[0];
+    const XLSX = await import("xlsx");
+    const rows: Array<Array<string | number>> = [
+      ["LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL"],
+      ["Pedido F1", request.requestCode],
+      ["N° Pedido / Cód. Oracle", request.orderNumber],
+      ["Fecha de solicitud", displayDate(request.createdAt)],
+      ["Fecha programada de despacho", displayDate(request.neededDate)],
+      ["Fecha de envío", displayDate(request.sentDate)],
+      ["Coordinador Entel", request.coordinatorEntel || ""],
+      ["Coordinador F1", request.coordinatorName],
+      ["Correo Coordinador F1", request.coordinatorEmail],
+      ["Proyecto", request.project],
+      ["Site destino", request.site],
+      ["Región", request.region],
+      ["Ciudad", request.city],
+      ["Dirección de entrega", request.deliveryAddress],
+      ["Contrata", request.contractorBusinessName],
+      ["RUC", request.contractorRuc],
+      ["Transporte", request.transport],
+      ["Persona que recibe 1", request.pickupPerson],
+      ["DNI persona 1", request.pickupPersonDni],
+      ["Persona que recibe 2", request.pickupPerson2],
+      ["DNI persona 2", request.pickupPerson2Dni],
+      ["Almacén", request.warehouse],
+      ["GR de salida", request.outboundGuide],
+      ["Ticket de envío", request.shippingTicket],
+      ["Clave", request.shippingKey],
+      ["Estado", request.status.replaceAll("_", " ")],
+      ["Tiempo de atención", requestElapsedLabel(request)],
+      ["Observación", request.notes],
+      [],
+      ["ITEM", "SKU", "DESCRIPCIÓN", "CANTIDAD", "UNIDAD DE MEDIDA", "SERIE / LOTE"],
+      ...group.map((row, index) => {
+        const product = productMap.get(row.productId);
+        return [index + 1, product?.sku || "", product?.description || "", row.quantity, product?.unit || "UND", row.seriesLot || ""];
+      }),
+    ];
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    sheet["!merges"] = [XLSX.utils.decode_range("A1:F1")];
+    sheet["!cols"] = [{ wch: 26 }, { wch: 24 }, { wch: 44 }, { wch: 12 }, { wch: 20 }, { wch: 30 }];
+    sheet["!autofilter"] = { ref: `A30:F${29 + group.length + 1}` };
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, "Pedido F1");
+    XLSX.writeFile(workbook, `${request.requestCode}-almacen.xlsx`, { compression: true });
+  }
+
   function addItem() {
     const productId = selectedProduct?.id;
     if (!productId || !selectedOrder || !selectedTrace || selectedAvailable <= 0 || quantity > selectedAvailable) return;
@@ -1395,6 +1512,7 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
     if (ok) {
       form.reset();
       setSelectedCoordinator("");
+      setSelectedEntelCoordinator("");
       setSelectedOrder("");
       setProductQuery("");
       setSelectedSeriesLot("");
@@ -1408,7 +1526,7 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
 
   return <>
     <section className="request-alert-strip">
-      <article><small>SOLICITUDES ABIERTAS</small><strong>{number.format(pendingGroups.length)}</strong><span>No mueven stock del Kardex</span></article>
+      <article><small>PEDIDOS F1 ABIERTOS</small><strong>{number.format(pendingGroups.length)}</strong><span>No mueven stock del módulo</span></article>
       <article className={delayedGroups.length ? "danger" : "ok"}><small>PENDIENTES +7 DÍAS</small><strong>{number.format(delayedGroups.length)}</strong><span>{delayedGroups.length ? "Requieren seguimiento logístico" : "Sin recojos vencidos"}</span></article>
       <article><small>PEDIDOS CON STOCK</small><strong>{number.format(orderOptions.length)}</strong><span>Disponibles para solicitar</span></article>
     </section>
@@ -1418,7 +1536,8 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
         <div className="request-form-body">
           <div className="form-grid">
             <label className="field"><span>Coordinador F1 *</span><select name="coordinatorName" required value={selectedCoordinator} onChange={(event) => setSelectedCoordinator(event.target.value)}><option value="" disabled>Selecciona un coordinador F1</option>{activeCoordinators.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
-            <label className="field"><span>N° Pedido con ingreso *</span><select name="orderNumber" required value={selectedOrder} onChange={(event) => { setSelectedOrder(event.target.value); setItems([]); setProductQuery(""); setSelectedSeriesLot(""); }}><option value="" disabled>Selecciona un pedido ingresado</option>{orderOptions.map((order) => <option value={order} key={order}>{order}</option>)}</select><small>Solo aparecen pedidos con saldo disponible.</small></label>
+            <label className="field"><span>Coordinador Entel *</span><select name="coordinatorEntel" required value={selectedEntelCoordinator} onChange={(event) => setSelectedEntelCoordinator(event.target.value)}><option value="" disabled>Selecciona un coordinador Entel</option>{activeEntelCoordinators.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
+            <label className="field"><span>N° Pedido con ingreso *</span><select name="orderNumber" required value={selectedOrder} onChange={(event) => { const order = event.target.value; setSelectedOrder(order); setItems([]); setProductQuery(""); setSelectedSeriesLot(""); const inferred = movements.find((movement) => movement.orderNumber.trim() === order && movement.coordinator.trim())?.coordinator || ""; if (activeEntelCoordinators.some((item) => item.name === inferred)) setSelectedEntelCoordinator(inferred); }}><option value="" disabled>Selecciona un pedido ingresado</option>{orderOptions.map((order) => <option value={order} key={order}>{order}</option>)}</select><small>Solo aparecen pedidos con saldo disponible.</small></label>
             <label className="field"><span>Proyecto</span><input name="project" placeholder="Rollout, PEXT, PINT..." /></label>
             <label className="field"><span>Site destino</span><input name="site" placeholder="Código o nombre del site" /></label>
             <label className="field"><span>RUC de la contrata *</span><input name="contractorRuc" inputMode="numeric" pattern="[0-9]{11}" maxLength={11} required value={contractorDocument} onChange={(event) => { const value = event.target.value.replace(/\D/g, "").slice(0, 11); setContractorDocument(value); const match = suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === value); setContractorBusinessName(match?.businessName ?? ""); }} placeholder="11 dígitos" /><small>{supplier?.documentType === "RUC" ? `Empresa: ${supplier.businessName}` : contractorDocument.length === 11 ? "RUC no registrado; agrégalo primero en Empresas y personas." : "La razón social se completará automáticamente."}</small></label>
@@ -1429,8 +1548,10 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
             <label className="field"><span>Nombre de segunda persona</span><input value={pickupPerson2?.businessName ?? ""} readOnly placeholder="Automático desde el DNI" /></label>
             <label className="field"><span>Región de envío *</span><input name="region" required placeholder="Ej. Lima" /></label>
             <label className="field"><span>Ciudad de envío *</span><input name="city" required placeholder="Ej. Lima / Arequipa" /></label>
+            <label className="field field-wide"><span>Dirección de entrega *</span><input name="deliveryAddress" required placeholder="Dirección completa, agencia o referencia de entrega" /></label>
+            <label className="field"><span>Transporte *</span><input name="transport" list="request-transport-options" required placeholder="Ej. Shalom" /><datalist id="request-transport-options"><option>Recojo directo</option><option>Shalom</option><option>Marvisur</option><option>Transporte Grau</option><option>Nacional</option><option>Movilidad F1</option></datalist></label>
             <label className="field"><span>Almacén que atenderá</span><input name="warehouse" value={warehouse} readOnly /></label>
-            <label className="field"><span>Fecha requerida</span><input name="neededDate" type="date" min={today()} /></label>
+            <label className="field"><span>Fecha programada de despacho *</span><input name="neededDate" type="date" min={today()} required /></label>
           </div>
           <div className="request-item-builder">
             <label className="field product-search-field"><span>Buscar SKU o descripción</span><input list="request-product-options" value={productQuery} onChange={(event) => { setProductQuery(event.target.value); setSelectedSeriesLot(""); }} placeholder={selectedOrder ? "Escribe parte del SKU o nombre..." : "Primero selecciona el pedido"} disabled={!selectedOrder} /><datalist id="request-product-options">{availableProducts.map((product) => <option key={product.id} value={`${product.sku} — ${product.description}`}>Disponible en pedido: {orderStock.get(selectedOrder)?.get(product.id) ?? 0}</option>)}</datalist><small>{productQuery && !selectedProduct ? "Este SKU no pertenece al pedido o ya no tiene stock." : selectedProduct ? `${selectedTraceOptions.length} serie(s)/lote(s) con saldo · ${orderStock.get(selectedOrder)?.get(selectedProduct.id) ?? 0} ${selectedProduct.unit} en total.` : selectedOrder ? `${availableProducts.length} SKU con saldo en el pedido.` : "El pedido limita los equipos que puedes elegir."}</small></label>
@@ -1446,13 +1567,33 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
 
       <section className="panel request-guide">
         <div className="panel-title"><div><h2>Flujo de atención</h2><p>Seguimiento manual sin alterar inventario.</p></div></div>
-        <ol><li><b>1</b><span><strong>Coordinador F1 solicita</strong><small>Elige un pedido real y únicamente SKU con saldo.</small></span></li><li><b>2</b><span><strong>Logística valida</strong><small>Registra GR de salida, ticket de envío y clave.</small></span></li><li><b>3</b><span><strong>Envío y llegada</strong><small>Completa fechas para activar el contador de pendientes.</small></span></li><li><b>4</b><span><strong>Recojo y cierre</strong><small>Al recoger se registra la fecha y se cierra la solicitud.</small></span></li></ol>
+        <ol><li><b>1</b><span><strong>Coordinador F1 solicita</strong><small>El sistema genera un código PED-F1 por cada lote solicitado.</small></span></li><li><b>2</b><span><strong>Logística recibe la alerta</strong><small>La campana muestra el Pedido F1, coordinador y fecha programada.</small></span></li><li><b>3</b><span><strong>Envío y llegada</strong><small>Registra GR, ticket, transporte, clave y fechas.</small></span></li><li><b>4</b><span><strong>Recojo y cierre</strong><small>Al cambiar a CERRADA se detiene el tiempo total de atención.</small></span></li></ol>
       </section>
     </section>
 
     <section className="panel request-history">
-      <div className="panel-title"><div><h2>Solicitudes registradas</h2><p>{number.format(groupedRequests.length)} solicitudes; seguimiento separado del Kardex.</p></div></div>
-      <div className="table-wrap"><table><thead><tr><th>Solicitud</th><th>Coordinador F1</th><th>Pedido / Destino</th><th>Contrata / Recojo</th><th>Equipos solicitados</th><th>GR / Ticket / Fotos</th><th>Envío / Llegada</th><th>Días pendientes</th><th>Estado</th><th>Seguimiento</th></tr></thead><tbody>{loading ? <tr><td colSpan={10}><Empty text="Cargando solicitudes..." /></td></tr> : !groupedRequests.length ? <tr><td colSpan={10}><Empty text="Las solicitudes de los coordinadores F1 aparecerán aquí." /></td></tr> : groupedRequests.map((group) => { const request = group[0]; const days = pendingDays(request); const closed = ["CERRADA", "RECOGIDA", "RECHAZADA"].includes(request.status); return <tr key={request.requestCode}><td><strong>{request.requestCode}</strong><small>{displayDate(request.createdAt)}</small></td><td><strong>{request.coordinatorName}</strong><small>{request.coordinatorEmail || "Sin correo"}</small></td><td><strong>{request.orderNumber}</strong><small>{request.site || request.project || "Sin site"}</small><small>{[request.region, request.city].filter(Boolean).join(" · ") || "Sin región/ciudad"}</small></td><td><strong>{request.contractorBusinessName || "Sin razón social"}</strong><small>RUC: {request.contractorRuc || "—"}</small><small>Recoge 1: {request.pickupPerson || "—"} · DNI {request.pickupPersonDni || "—"}</small>{request.pickupPerson2 && <small>Recoge 2: {request.pickupPerson2} · DNI {request.pickupPerson2Dni || "—"}</small>}</td><td>{group.map((row) => { const product = productMap.get(row.productId); return <span className="request-line" key={row.id}><strong>{product?.sku || `Producto ${row.productId}`}</strong><small>{row.quantity} {product?.unit || "UND"} · {product?.description}</small><small>Serie/Lote: {row.seriesLot || "Sin registro"}</small></span>; })}</td><td><strong>{request.outboundGuide || "Sin GR"}</strong><small>{request.shippingTicket ? `Ticket: ${request.shippingTicket}` : "Sin ticket de envío"}</small><GrLinkCell link={request.outboundGuideLink} /><span className="evidence-links">{request.outboundGuidePhoto && <a href={request.outboundGuidePhoto} target="_blank" rel="noreferrer">Foto GR</a>}{request.shippingTicketPhoto && <a href={request.shippingTicketPhoto} target="_blank" rel="noreferrer">Foto ticket</a>}</span></td><td><strong>{request.sentDate ? displayDate(request.sentDate) : "Sin fecha de envío"}</strong><small>{request.arrivalDate ? `Llegó: ${displayDate(request.arrivalDate)}` : "Llegada pendiente"}</small></td><td><span className={`pending-days ${!closed && days > 7 ? "danger" : !closed && days >= 3 ? "warning" : "ok"}`}>{closed ? "Cerrada" : `${days} días`}</span><small>{request.pickupDate ? `Recogido: ${displayDate(request.pickupDate)}` : "Pendiente de recojo"}</small></td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td><td><button className="secondary-button trace-button" disabled={!canOperate} onClick={() => setTracking(request)}><ClipboardList size={14} />Actualizar</button></td></tr>; })}</tbody></table></div>
+      <div className="panel-title"><div><h2>Pedidos F1 registrados</h2><p>{number.format(groupedRequests.length)} pedidos; el seguimiento no modifica el stock hasta registrar la salida.</p></div></div>
+      <div className="table-wrap"><table><thead><tr><th>Pedido F1</th><th>Coordinadores</th><th>Pedido / Destino</th><th>Contrata / Recojo</th><th>Equipos solicitados</th><th>GR / Ticket / Fotos</th><th>Envío / Llegada</th><th>Pendiente de recojo</th><th>Tiempo de atención</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+        {loading ? <tr><td colSpan={11}><Empty text="Cargando Pedidos F1..." /></td></tr> : !groupedRequests.length ? <tr><td colSpan={11}><Empty text="Los Pedidos F1 de los coordinadores aparecerán aquí." /></td></tr> : groupedRequests.map((group) => {
+          const request = group[0];
+          const days = pendingDays(request);
+          const pickupClosed = ["CERRADA", "RECOGIDA", "RECHAZADA"].includes(request.status);
+          const serviceClosed = request.status === "CERRADA";
+          return <tr id={requestDomId(request.requestCode)} className={focusedRequestCode === request.requestCode ? "notification-target" : ""} key={request.requestCode}>
+            <td><strong>{request.requestCode}</strong><small>Código automático F1</small><small>{displayDate(request.createdAt)}</small></td>
+            <td><strong>F1: {request.coordinatorName}</strong><small>{request.coordinatorEmail || "Sin correo"}</small><small>Entel: {request.coordinatorEntel || "—"}</small></td>
+            <td><strong>{request.orderNumber}</strong><small>{request.project || "Sin proyecto"} · {request.site || "Sin site"}</small><small>{[request.region, request.city].filter(Boolean).join(" · ") || "Sin región/ciudad"}</small><small>{request.deliveryAddress || "Sin dirección"}</small><small>Transporte: {request.transport || "—"}</small></td>
+            <td><strong>{request.contractorBusinessName || "Sin razón social"}</strong><small>RUC: {request.contractorRuc || "—"}</small><small>Recibe 1: {request.pickupPerson || "—"} · DNI {request.pickupPersonDni || "—"}</small>{request.pickupPerson2 && <small>Recibe 2: {request.pickupPerson2} · DNI {request.pickupPerson2Dni || "—"}</small>}</td>
+            <td>{group.map((row) => { const product = productMap.get(row.productId); return <span className="request-line" key={row.id}><strong>{product?.sku || `Producto ${row.productId}`}</strong><small>{row.quantity} {product?.unit || "UND"} · {product?.description}</small><small>Serie/Lote: {row.seriesLot || "Sin registro"}</small></span>; })}</td>
+            <td><strong>{request.outboundGuide || "Sin GR"}</strong><small>{request.shippingTicket ? `Ticket: ${request.shippingTicket}` : "Sin ticket de envío"}</small><GrLinkCell link={request.outboundGuideLink} /><span className="evidence-links">{request.outboundGuidePhoto && <a href={request.outboundGuidePhoto} target="_blank" rel="noreferrer">Foto GR</a>}{request.shippingTicketPhoto && <a href={request.shippingTicketPhoto} target="_blank" rel="noreferrer">Foto ticket</a>}</span></td>
+            <td><strong>Programado: {request.neededDate ? displayDate(request.neededDate) : "Sin fecha"}</strong><small>{request.sentDate ? `Enviado: ${displayDate(request.sentDate)}` : "Sin fecha de envío"}</small><small>{request.arrivalDate ? `Llegó: ${displayDate(request.arrivalDate)}` : "Llegada pendiente"}</small></td>
+            <td><span className={`pending-days ${!pickupClosed && days > 7 ? "danger" : !pickupClosed && days >= 3 ? "warning" : "ok"}`}>{pickupClosed ? "Cerrado" : `${days} días`}</span><small>{request.pickupDate ? `Recogido: ${displayDate(request.pickupDate)}` : "Pendiente de recojo"}</small></td>
+            <td><span className={`service-time ${serviceClosed ? "closed" : "running"}`}><Clock3 size={13} />{requestElapsedLabel(request)}</span><small>{serviceClosed ? `Cerrado: ${displayDate(request.closedAt || request.updatedAt)}` : "Desde la solicitud hasta CERRADA"}</small></td>
+            <td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td>
+            <td><div className="request-actions"><button className="secondary-button trace-button" onClick={() => void exportRequestExcel(group)}><FileSpreadsheet size={14} />Excel almacén</button><button className="secondary-button trace-button" disabled={!canOperate} onClick={() => setTracking(request)}><ClipboardList size={14} />Actualizar</button></div></td>
+          </tr>;
+        })}
+      </tbody></table></div>
     </section>
     {tracking && <RequestTrackingModal request={tracking} saving={saving} onClose={() => setTracking(null)} onSave={async (payload) => { const ok = await onSave(payload, "Seguimiento logístico actualizado."); if (ok) setTracking(null); }} />}
   </>;
@@ -1508,7 +1649,7 @@ function RequestTrackingModal({ request, saving, onClose, onSave }: { request: E
     event.preventDefault();
     void onSave({ ...Object.fromEntries(new FormData(event.currentTarget).entries()), outboundGuidePhoto, shippingTicketPhoto });
   }
-  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">SEGUIMIENTO LOGÍSTICO</span><h2>{request.requestCode}</h2><p>Estos datos no modifican stock ni crean movimientos.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="requestLogistics" /><input type="hidden" name="requestCode" value={request.requestCode} /><div className="form-grid"><label className="field"><span>Estado *</span><select name="status" defaultValue={request.status}><option>PENDIENTE</option><option>VALIDADA</option><option>DESPACHADA</option><option>EN_TRANSITO</option><option>LISTA_RECOJO</option><option>RECOGIDA</option><option>CERRADA</option><option>RECHAZADA</option></select></label><label className="field"><span>Nro. GR de salida</span><input name="outboundGuide" defaultValue={request.outboundGuide} /></label><label className="field field-wide"><span>Link GR de salida</span><input name="outboundGuideLink" defaultValue={request.outboundGuideLink} placeholder="Vínculo SharePoint o nombre del archivo" /></label><label className="field"><span>Foto de la GR de despacho</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setOutboundGuidePhoto)} /><small>{outboundGuidePhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{outboundGuidePhotoPreview && <span className="photo-actions"><a href={outboundGuidePhotoPreview} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setOutboundGuidePhoto("")}>Quitar</button></span>}</label><label className="field"><span>Ticket de envío</span><input name="shippingTicket" defaultValue={request.shippingTicket} /></label><label className="field"><span>Foto del ticket de envío</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setShippingTicketPhoto)} /><small>{shippingTicketPhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{shippingTicketPhotoPreview && <span className="photo-actions"><a href={shippingTicketPhotoPreview} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setShippingTicketPhoto("")}>Quitar</button></span>}</label><label className="field"><span>Clave</span><input name="shippingKey" defaultValue={request.shippingKey} /></label><label className="field"><span>Fecha de envío</span><input name="sentDate" type="date" defaultValue={request.sentDate} /></label><label className="field"><span>Fecha de llegada</span><input name="arrivalDate" type="date" defaultValue={request.arrivalDate} /></label><label className="field"><span>Fecha de recojo</span><input name="pickupDate" type="date" defaultValue={request.pickupDate} /></label><label className="field field-wide"><span>Notas de seguimiento</span><textarea name="logisticsNotes" rows={3} defaultValue={request.logisticsNotes} placeholder="Incidencias, contacto, recordatorio..." /></label></div>{photoError && <div className="inline-error">{photoError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || compressing}>{compressing ? "Procesando fotos..." : saving ? "Guardando..." : "Guardar seguimiento"}</button></div></form></div></div>;
+  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">SEGUIMIENTO LOGÍSTICO</span><h2>{request.requestCode}</h2><p>El tiempo de atención se detiene cuando el estado cambia a CERRADA.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="requestLogistics" /><input type="hidden" name="requestCode" value={request.requestCode} /><div className="form-grid"><label className="field"><span>Estado *</span><select name="status" defaultValue={request.status}><option>PENDIENTE</option><option>VALIDADA</option><option>DESPACHADA</option><option>EN_TRANSITO</option><option>LISTA_RECOJO</option><option>RECOGIDA</option><option>CERRADA</option><option>RECHAZADA</option></select></label><label className="field"><span>Nro. GR de salida</span><input name="outboundGuide" defaultValue={request.outboundGuide} /></label><label className="field field-wide"><span>Link GR de salida</span><input name="outboundGuideLink" defaultValue={request.outboundGuideLink} placeholder="Vínculo SharePoint o nombre del archivo" /></label><label className="field"><span>Foto de la GR de despacho</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setOutboundGuidePhoto)} /><small>{outboundGuidePhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{outboundGuidePhotoPreview && <span className="photo-actions"><a href={outboundGuidePhotoPreview} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setOutboundGuidePhoto("")}>Quitar</button></span>}</label><label className="field"><span>Ticket de envío</span><input name="shippingTicket" defaultValue={request.shippingTicket} /></label><label className="field"><span>Foto del ticket de envío</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setShippingTicketPhoto)} /><small>{shippingTicketPhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{shippingTicketPhotoPreview && <span className="photo-actions"><a href={shippingTicketPhotoPreview} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setShippingTicketPhoto("")}>Quitar</button></span>}</label><label className="field"><span>Clave</span><input name="shippingKey" defaultValue={request.shippingKey} /></label><label className="field"><span>Fecha de envío</span><input name="sentDate" type="date" defaultValue={request.sentDate} /></label><label className="field"><span>Fecha de llegada</span><input name="arrivalDate" type="date" defaultValue={request.arrivalDate} /></label><label className="field"><span>Fecha de recojo</span><input name="pickupDate" type="date" defaultValue={request.pickupDate} /></label><label className="field"><span>Transporte</span><input name="transport" defaultValue={request.transport} /></label><label className="field field-wide"><span>Dirección de entrega</span><input name="deliveryAddress" defaultValue={request.deliveryAddress} /></label><label className="field field-wide"><span>Notas de seguimiento</span><textarea name="logisticsNotes" rows={3} defaultValue={request.logisticsNotes} placeholder="Incidencias, contacto, recordatorio..." /></label></div>{photoError && <div className="inline-error">{photoError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || compressing}>{compressing ? "Procesando fotos..." : saving ? "Guardando..." : "Guardar seguimiento"}</button></div></form></div></div>;
 }
 
 function SettingsView({ data, saving, onSave }: { data: KardexData; saving: boolean; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
@@ -1525,7 +1666,7 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
     const workbook = XLSX.utils.book_new();
     const sheets: Array<[string, string]> = [["products", "Maestro SKU"], ["movements", "Movimientos"], ["sourceRecords", "Fuentes externas"], ["coordinators", "Coordinadores"], ["suppliers", "Proveedores"], ["installationValidations", "Conciliaciones"], ["auditImports", "Cortes auditoría"], ["auditRecords", "Detalle auditoría"], ["equipmentRequests", "Solicitudes"]];
     sheets.forEach(([key, name]) => XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(backup[key] ?? []), name));
-    XLSX.writeFile(workbook, `respaldo-kardex-f1-${today()}.xlsx`, { compression: true });
+    XLSX.writeFile(workbook, `respaldo-logistica-f1-control-equipos-${today()}.xlsx`, { compression: true });
     setBackupDownloaded(true);
   }
 
@@ -1589,7 +1730,7 @@ function CoordinatorView({ coordinators, loading, saving, onSave }: { coordinato
     </section>
     <section className="panel table-panel coordinator-table-panel">
       <div className="panel-title"><div><h2>Tabla de coordinadores</h2><p>{coordinators.length} responsables disponibles para ingresos, salidas y correos.</p></div></div>
-      <div className="table-wrap"><table><thead><tr><th>Empresa</th><th>Coordinador</th><th>Correo</th><th>Estado manual</th></tr></thead><tbody>{loading ? <tr><td colSpan={4}><Empty text="Cargando coordinadores..." /></td></tr> : !coordinators.length ? <tr><td colSpan={4}><Empty text="Agrega los coordinadores F1 y Entel que usarás en el Kardex." /></td></tr> : coordinators.map((coordinator) => <tr key={coordinator.id}><td><span className="source-badge">{coordinator.organization}</span></td><td><strong>{coordinator.name}</strong></td><td>{coordinator.email || "Sin correo"}</td><td><select className={`coordinator-status ${coordinator.active ? "active" : "inactive"}`} value={coordinator.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "coordinatorStatus", coordinatorId: coordinator.id, active: event.target.value === "ACTIVO" })}><option>ACTIVO</option><option>INACTIVO</option></select></td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>Empresa</th><th>Coordinador</th><th>Correo</th><th>Estado manual</th></tr></thead><tbody>{loading ? <tr><td colSpan={4}><Empty text="Cargando coordinadores..." /></td></tr> : !coordinators.length ? <tr><td colSpan={4}><Empty text="Agrega los coordinadores F1 y Entel que usarás en este módulo." /></td></tr> : coordinators.map((coordinator) => <tr key={coordinator.id}><td><span className="source-badge">{coordinator.organization}</span></td><td><strong>{coordinator.name}</strong></td><td>{coordinator.email || "Sin correo"}</td><td><select className={`coordinator-status ${coordinator.active ? "active" : "inactive"}`} value={coordinator.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "coordinatorStatus", coordinatorId: coordinator.id, active: event.target.value === "ACTIVO" })}><option>ACTIVO</option><option>INACTIVO</option></select></td></tr>)}</tbody></table></div>
     </section>
   </div>;
 }
@@ -1678,7 +1819,7 @@ function ReportsView({ products, movements, requests }: { products: Product[]; m
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(reportRows), "Movimientos");
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(products), "Stock actual");
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(requests), "Solicitudes");
-    XLSX.writeFile(workbook, `reporte-kardex-f1-${today()}.xlsx`, { compression: true });
+    XLSX.writeFile(workbook, `reporte-control-equipos-entel-${today()}.xlsx`, { compression: true });
   }
 
   const entries = movements.filter((movement) => movement.type === "entrada");

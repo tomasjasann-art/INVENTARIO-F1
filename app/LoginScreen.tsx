@@ -26,7 +26,7 @@ export default function LoginScreen({ signInPath }: { signInPath: string }) {
           <Image className="login-client-logo" src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
           <div className="login-secure-label"><ShieldCheck size={15} /> ACCESO PRIVADO</div>
           <h2>Bienvenido</h2>
-          <p>Ingresa con el <strong>correo corporativo @f1.services que el Administrador registró</strong> en el Kardex.</p>
+          <p>Ingresa con el <strong>correo corporativo @f1.services que el Administrador registró</strong> en Logística F1.</p>
 
           <div className="login-access-steps">
             <strong>¿Cómo ingresar?</strong>
@@ -47,7 +47,7 @@ export default function LoginScreen({ signInPath }: { signInPath: string }) {
 
           <div className="login-module-list">
             <Boxes size={18} />
-            <span><strong>Kardex F1 Logística</strong><small>Stock · Ingresos · Salidas · Conciliación · Auditoría</small></span>
+            <span><strong>Control de Equipos Entel</strong><small>Primer módulo de Logística F1 · Stock · Solicitudes · Conciliación</small></span>
           </div>
         </div>
       </section>
@@ -62,7 +62,7 @@ export function DeploymentSetupScreen({ missing }: { missing: string[] }) {
         <Image src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
       </div>
       <div className="login-message"><p>CONFIGURACIÓN DE PRODUCCIÓN</p><h1>El código ya está<br />listo para Vercel.</h1><span>Falta conectar la base PostgreSQL y el acceso de usuarios del proyecto.</span></div>
-      <div className="login-brand-footer"><span>F1 Services © 2026</span><span>Kardex F1 Logística</span></div>
+      <div className="login-brand-footer"><span>F1 Services © 2026</span><span>Logística F1</span></div>
     </section>
     <section className="login-access-panel"><div className="login-card access-denied-card">
       <div className="login-secure-label denied"><ShieldAlert size={15} /> CONFIGURACIÓN PENDIENTE</div>
@@ -80,8 +80,8 @@ export function AccessDeniedScreen({ email, signOutPath }: { email: string; sign
       <div className="login-brand-lockup" aria-label="F1 Projects, Engineering and Services">
         <Image src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
       </div>
-      <div className="login-message"><p>ACCESO CONTROLADO</p><h1>Tu operación,<br />siempre protegida.</h1><span>El Kardex F1 está reservado para el equipo autorizado de F1 Services.</span></div>
-      <div className="login-brand-footer"><span>F1 Services © 2026</span><span>Kardex F1 Logística</span></div>
+      <div className="login-message"><p>ACCESO CONTROLADO</p><h1>Tu operación,<br />siempre protegida.</h1><span>Logística F1 está reservada para el equipo autorizado de F1 Services.</span></div>
+      <div className="login-brand-footer"><span>F1 Services © 2026</span><span>Logística F1</span></div>
     </section>
     <section className="login-access-panel"><div className="login-card access-denied-card">
       <div className="login-secure-label denied"><ShieldAlert size={15} /> ACCESO NO AUTORIZADO</div>

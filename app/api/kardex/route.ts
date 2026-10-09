@@ -170,6 +170,7 @@ type EquipmentRequestInput = {
   action?: "request";
   coordinatorName?: string;
   coordinatorEmail?: string;
+  coordinatorEntel?: string;
   orderNumber?: string;
   project?: string;
   site?: string;
@@ -182,6 +183,8 @@ type EquipmentRequestInput = {
   pickupPerson2?: string;
   region?: string;
   city?: string;
+  deliveryAddress?: string;
+  transport?: string;
   neededDate?: string;
   notes?: string;
   items?: Array<{ productId?: number; quantity?: number; seriesLot?: string }>;
@@ -208,6 +211,8 @@ type RequestLogisticsInput = {
   sentDate?: string;
   arrivalDate?: string;
   pickupDate?: string;
+  deliveryAddress?: string;
+  transport?: string;
   logisticsNotes?: string;
 };
 
@@ -409,7 +414,7 @@ export async function GET(request: Request) {
     const missingConfig = missingDeploymentConfig();
     if (missingConfig.length) return Response.json({ error: `Configuración pendiente: ${missingConfig.join(", ")}.` }, { status: 503 });
     const user = await getAuthenticatedUser();
-    if (!user) return Response.json({ error: "Debes iniciar sesión para acceder al Kardex." }, { status: 401 });
+    if (!user) return Response.json({ error: "Debes iniciar sesión para acceder a Logística F1." }, { status: 401 });
     const db = getDb();
     const access = await currentAccess(db, user.email);
     if (!access?.active) return Response.json({ error: "Tu correo no está registrado o se encuentra inactivo. Comunícate con un administrador." }, { status: 403 });
@@ -576,7 +581,7 @@ export async function POST(request: Request) {
     const missingConfig = missingDeploymentConfig();
     if (missingConfig.length) return Response.json({ error: `Configuración pendiente: ${missingConfig.join(", ")}.` }, { status: 503 });
     const user = await getAuthenticatedUser();
-    if (!user) return Response.json({ error: "Debes iniciar sesión para modificar el Kardex." }, { status: 401 });
+    if (!user) return Response.json({ error: "Debes iniciar sesión para modificar Logística F1." }, { status: 401 });
     const db = getDb();
     const access = await currentAccess(db, user.email);
     if (!access) return Response.json({ error: "Tu correo no está registrado. Pide a un administrador que agregue tu cuenta @f1.services." }, { status: 403 });
@@ -714,6 +719,7 @@ export async function POST(request: Request) {
     if (payload.action === "request") {
       const requestPayload = payload as EquipmentRequestInput;
       const coordinatorName = clean(requestPayload.coordinatorName).toUpperCase();
+      const coordinatorEntel = clean(requestPayload.coordinatorEntel).toUpperCase();
       const orderNumber = clean(requestPayload.orderNumber);
       const contractorRuc = clean(requestPayload.contractorRuc).replace(/\D/g, "");
       const contractorMatch = await supplierFromDocument(db, contractorRuc);
@@ -726,9 +732,12 @@ export async function POST(request: Request) {
       const pickupPerson2 = pickupPerson2Match?.businessName || "";
       const region = clean(requestPayload.region).toUpperCase();
       const city = clean(requestPayload.city).toUpperCase();
+      const deliveryAddress = clean(requestPayload.deliveryAddress).toUpperCase();
+      const transport = clean(requestPayload.transport).toUpperCase();
+      const neededDate = normalizeKardexDate(requestPayload.neededDate);
       const items = Array.isArray(requestPayload.items) ? requestPayload.items.slice(0, 30) : [];
-      if (!coordinatorName || !orderNumber || !items.length) {
-        return Response.json({ error: "Coordinador, N° Pedido y al menos un equipo son obligatorios." }, { status: 400 });
+      if (!coordinatorName || !coordinatorEntel || !orderNumber || !items.length) {
+        return Response.json({ error: "Coordinador F1, Coordinador Entel, N° Pedido y al menos un equipo son obligatorios." }, { status: 400 });
       }
       if (!/^\d{11}$/.test(contractorRuc) || !contractorMatch || contractorMatch.documentType !== "RUC") {
         return Response.json({ error: "El RUC de la contrata debe existir y estar activo en el maestro de Proveedores." }, { status: 400 });
@@ -739,7 +748,9 @@ export async function POST(request: Request) {
       if (pickupPerson2Dni && (!/^\d{8}$/.test(pickupPerson2Dni) || !pickupPerson2Match || pickupPerson2Match.documentType !== "DNI")) {
         return Response.json({ error: "El DNI de la segunda persona debe existir y estar activo en el maestro." }, { status: 400 });
       }
-      if (!region || !city) return Response.json({ error: "Completa región y ciudad de envío." }, { status: 400 });
+      if (!region || !city || !deliveryAddress || !transport || !neededDate) {
+        return Response.json({ error: "Completa región, ciudad, dirección, transporte y fecha programada de despacho." }, { status: 400 });
+      }
       const normalizedItems = items.map((item) => ({
         productId: Number(item.productId),
         quantity: Math.max(1, Math.round(Number(item.quantity) || 1)),
@@ -763,6 +774,14 @@ export async function POST(request: Request) {
       if (!coordinatorMatch) {
         return Response.json({ error: "Selecciona un Coordinador F1 activo." }, { status: 400 });
       }
+      const coordinatorEntelMatch = (await db.select().from(coordinators).where(and(
+        eq(coordinators.name, coordinatorEntel),
+        eq(coordinators.organization, "ENTEL"),
+        eq(coordinators.active, true),
+      )).limit(1))[0];
+      if (!coordinatorEntelMatch) {
+        return Response.json({ error: "Selecciona un Coordinador Entel activo." }, { status: 400 });
+      }
       const movementRows = await db.select().from(movements);
       const normalizedOrder = orderNumber.toUpperCase();
       for (const item of requestedByControl.values()) {
@@ -775,11 +794,16 @@ export async function POST(request: Request) {
         if (!hasIngreso) return Response.json({ error: `El SKU seleccionado no tiene un ingreso asociado al pedido ${orderNumber}.` }, { status: 409 });
         if (requestedQuantity > available) return Response.json({ error: `Stock insuficiente para ${seriesLot || "stock sin serie/lote"} del pedido ${orderNumber}. Disponible: ${Math.max(0, available)}.` }, { status: 409 });
       }
-      const requestCode = `SOL-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(Date.now()).slice(-6)}`;
+      const sequenceRows = await db.execute<{ requestSequence: string }>(sql`select nextval('equipment_request_code_seq')::text as "requestSequence"`);
+      const requestSequence = Number(sequenceRows[0]?.requestSequence);
+      if (!Number.isFinite(requestSequence)) return Response.json({ error: "No se pudo generar el código del Pedido F1." }, { status: 500 });
+      const requestDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date()).replaceAll("-", "");
+      const requestCode = `PED-F1-${requestDate}-${String(requestSequence).padStart(6, "0")}`;
       const created = await db.insert(equipmentRequests).values([...requestedByControl.values()].map(({ productId, quantity, seriesLot }) => ({
         requestCode,
         coordinatorName,
         coordinatorEmail: clean(requestPayload.coordinatorEmail).toLowerCase() || coordinatorMatch?.email || "",
+        coordinatorEntel,
         orderNumber,
         project: clean(requestPayload.project),
         site: clean(requestPayload.site),
@@ -795,7 +819,9 @@ export async function POST(request: Request) {
         pickupPerson2,
         region,
         city,
-        neededDate: normalizeKardexDate(requestPayload.neededDate),
+        deliveryAddress,
+        transport,
+        neededDate,
         notes: clean(requestPayload.notes),
       }))).returning();
       return Response.json({ ok: true, requestCode, requested: created.length }, { status: 201 });
@@ -807,7 +833,11 @@ export async function POST(request: Request) {
       const allowed = ["PENDIENTE", "VALIDADA", "DESPACHADA", "EN_TRANSITO", "LISTA_RECOJO", "RECOGIDA", "CERRADA", "RECHAZADA"] as const;
       const status = allowed.includes(statusPayload.status as typeof allowed[number]) ? statusPayload.status : undefined;
       if (!requestId || !status) return Response.json({ error: "Solicitud o estado inválido." }, { status: 400 });
-      const [updated] = await db.update(equipmentRequests).set({ status, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(equipmentRequests.id, requestId)).returning();
+      const [updated] = await db.update(equipmentRequests).set({
+        status,
+        closedAt: status === "CERRADA" ? sql`COALESCE(NULLIF(${equipmentRequests.closedAt}, ''), CURRENT_TIMESTAMP::text)` : "",
+        updatedAt: sql`CURRENT_TIMESTAMP`,
+      }).where(eq(equipmentRequests.id, requestId)).returning();
       if (!updated) return Response.json({ error: "Solicitud no encontrada." }, { status: 404 });
       return Response.json({ ok: true, request: updated });
     }
@@ -835,6 +865,9 @@ export async function POST(request: Request) {
         sentDate: normalizeKardexDate(logisticsPayload.sentDate),
         arrivalDate: normalizeKardexDate(logisticsPayload.arrivalDate),
         pickupDate: normalizeKardexDate(logisticsPayload.pickupDate),
+        deliveryAddress: logisticsPayload.deliveryAddress === undefined ? undefined : clean(logisticsPayload.deliveryAddress).toUpperCase(),
+        transport: logisticsPayload.transport === undefined ? undefined : clean(logisticsPayload.transport).toUpperCase(),
+        closedAt: status === "CERRADA" ? sql`COALESCE(NULLIF(${equipmentRequests.closedAt}, ''), CURRENT_TIMESTAMP::text)` : "",
         logisticsNotes: clean(logisticsPayload.logisticsNotes),
         updatedAt: sql`CURRENT_TIMESTAMP`,
       }).where(eq(equipmentRequests.requestCode, requestCode)).returning();

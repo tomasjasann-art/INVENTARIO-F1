@@ -4,10 +4,10 @@ import "./globals.css";
 import { isClerkConfigured } from "./deployment-config";
 
 export const metadata: Metadata = {
-  title: "Kardex F1 Logística",
-  description: "Control de ingresos, salidas, stock y trazabilidad logística.",
-  applicationName: "Kardex F1",
-  appleWebApp: { capable: true, title: "Kardex F1", statusBarStyle: "black-translucent" },
+  title: "Logística F1 · Control de Equipos Entel",
+  description: "Plataforma modular para solicitudes, inventario, trazabilidad, conciliación y auditoría logística.",
+  applicationName: "Logística F1",
+  appleWebApp: { capable: true, title: "Logística F1", statusBarStyle: "black-translucent" },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

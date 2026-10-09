@@ -1,5 +1,10 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, pgTable, serial, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgSequence, pgTable, serial, text, uniqueIndex } from "drizzle-orm/pg-core";
+
+export const equipmentRequestCodeSequence = pgSequence("equipment_request_code_seq", {
+  startWith: 1,
+  increment: 1,
+});
 
 export const products = pgTable("products", {
   id: serial("id").primaryKey(),
@@ -206,6 +211,7 @@ export const equipmentRequests = pgTable(
     requestCode: text("request_code").notNull(),
     coordinatorName: text("coordinator_name").notNull(),
     coordinatorEmail: text("coordinator_email").notNull().default(""),
+    coordinatorEntel: text("coordinator_entel").notNull().default(""),
     orderNumber: text("order_number").notNull(),
     project: text("project").notNull().default(""),
     site: text("site").notNull().default(""),
@@ -223,6 +229,8 @@ export const equipmentRequests = pgTable(
     pickupPerson2: text("pickup_person_2").notNull().default(""),
     region: text("region").notNull().default(""),
     city: text("city").notNull().default(""),
+    deliveryAddress: text("delivery_address").notNull().default(""),
+    transport: text("transport").notNull().default(""),
     neededDate: text("needed_date").notNull().default(""),
     status: text("status", { enum: ["PENDIENTE", "VALIDADA", "DESPACHADA", "EN_TRANSITO", "LISTA_RECOJO", "RECOGIDA", "CERRADA", "RECHAZADA"] }).notNull().default("PENDIENTE"),
     outboundGuide: text("outbound_guide").notNull().default(""),
@@ -234,6 +242,7 @@ export const equipmentRequests = pgTable(
     sentDate: text("sent_date").notNull().default(""),
     arrivalDate: text("arrival_date").notNull().default(""),
     pickupDate: text("pickup_date").notNull().default(""),
+    closedAt: text("closed_at").notNull().default(""),
     logisticsNotes: text("logistics_notes").notNull().default(""),
     notes: text("notes").notNull().default(""),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
