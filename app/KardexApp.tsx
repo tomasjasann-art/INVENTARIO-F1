@@ -9,6 +9,7 @@ import {
   Boxes,
   Database,
   CheckCircle2,
+  ChevronDown,
   CircleDollarSign,
   Clock3,
   ClipboardList,
@@ -408,6 +409,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
   const [modal, setModal] = useState<"movement" | "product" | null>(null);
   const [movementType, setMovementType] = useState<Movement["type"]>("entrada");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [equipmentModuleOpen, setEquipmentModuleOpen] = useState(true);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [focusedRequestCode, setFocusedRequestCode] = useState("");
   const warehouse = "MO Company";
@@ -619,23 +621,34 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           <div><strong>LOGÍSTICA F1</strong><small>PLATAFORMA OPERATIVA</small></div>
           <button className="icon-button sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="Cerrar menú"><X size={18} /></button>
         </div>
-        <div className="module-pill"><Boxes size={17} /><span><small>MÓDULO ACTIVO</small><strong>Control de Equipos Entel</strong></span></div>
-        <div className="warehouse-pill warehouse-fixed"><Warehouse size={17} /><span><small>ALMACÉN F1</small><strong>{warehouse}</strong></span></div>
-        <nav className="nav-list" aria-label="Navegación principal">
-          <button className={view === "resumen" ? "active" : ""} onClick={() => { setView("resumen"); setSidebarOpen(false); }}><LayoutDashboard size={19} />Resumen</button>
-          <button className={view === "ingresos" ? "active" : ""} onClick={() => { setView("ingresos"); setSidebarOpen(false); }}><ArrowDownLeft size={19} />Ingresos</button>
-          <button className={view === "salidas" ? "active" : ""} onClick={() => { setView("salidas"); setSidebarOpen(false); }}><ArrowUpRight size={19} />Salidas</button>
-          <button className={view === "stock" ? "active" : ""} onClick={() => { setView("stock"); setSidebarOpen(false); }}><Boxes size={19} />Stock actual</button>
-          <button className={view === "lotes" ? "active" : ""} onClick={() => { setView("lotes"); setSidebarOpen(false); }}><Layers3 size={19} />Series y Lotes</button>
-          <button className={view === "solicitudes" ? "active" : ""} onClick={() => { setView("solicitudes"); setSidebarOpen(false); }}><ShoppingCart size={19} />Solicitudes</button>
-          {canOperate && <button className={view === "carga" ? "active" : ""} onClick={() => { setView("carga"); setSidebarOpen(false); }}><Upload size={19} />Carga masiva</button>}
-          <button className={view === "conciliacion" ? "active" : ""} onClick={() => { setView("conciliacion"); setSidebarOpen(false); }}><Scale size={19} />Conciliación</button>
-          <button className={view === "auditoria" ? "active" : ""} onClick={() => { setView("auditoria"); setSidebarOpen(false); }}><Database size={19} />Auditoría Entel</button>
-          {canOperate && <button className={view === "coordinadores" ? "active" : ""} onClick={() => { setView("coordinadores"); setSidebarOpen(false); }}><Users size={19} />Coordinadores</button>}
-          {canOperate && <button className={view === "proveedores" ? "active" : ""} onClick={() => { setView("proveedores"); setSidebarOpen(false); }}><Warehouse size={19} />Empresas y personas</button>}
-          <button className={view === "movimientos" ? "active" : ""} onClick={() => { setView("movimientos"); setSidebarOpen(false); }}><ClipboardList size={19} />Historial</button>
-          <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>
-        </nav>
+        <button
+          className="module-pill"
+          type="button"
+          aria-expanded={equipmentModuleOpen}
+          aria-controls="equipment-module-navigation"
+          onClick={() => setEquipmentModuleOpen((open) => !open)}
+        >
+          <Boxes size={17} />
+          <span><small>MÓDULO ACTIVO</small><strong>Control de Equipos Entel</strong></span>
+          <ChevronDown className="module-chevron" size={16} />
+        </button>
+        <div className={`module-nav-shell ${equipmentModuleOpen ? "module-nav-open" : ""}`}>
+          <nav id="equipment-module-navigation" className="nav-list" aria-label="Control de Equipos Entel">
+            <button className={view === "resumen" ? "active" : ""} onClick={() => { setView("resumen"); setSidebarOpen(false); }}><LayoutDashboard size={19} />Resumen</button>
+            <button className={view === "ingresos" ? "active" : ""} onClick={() => { setView("ingresos"); setSidebarOpen(false); }}><ArrowDownLeft size={19} />Ingresos</button>
+            <button className={view === "salidas" ? "active" : ""} onClick={() => { setView("salidas"); setSidebarOpen(false); }}><ArrowUpRight size={19} />Salidas</button>
+            <button className={view === "stock" ? "active" : ""} onClick={() => { setView("stock"); setSidebarOpen(false); }}><Boxes size={19} />Stock actual</button>
+            <button className={view === "lotes" ? "active" : ""} onClick={() => { setView("lotes"); setSidebarOpen(false); }}><Layers3 size={19} />Series y Lotes</button>
+            <button className={view === "solicitudes" ? "active" : ""} onClick={() => { setView("solicitudes"); setSidebarOpen(false); }}><ShoppingCart size={19} />Solicitudes</button>
+            {canOperate && <button className={view === "carga" ? "active" : ""} onClick={() => { setView("carga"); setSidebarOpen(false); }}><Upload size={19} />Carga masiva</button>}
+            <button className={view === "conciliacion" ? "active" : ""} onClick={() => { setView("conciliacion"); setSidebarOpen(false); }}><Scale size={19} />Conciliación</button>
+            <button className={view === "auditoria" ? "active" : ""} onClick={() => { setView("auditoria"); setSidebarOpen(false); }}><Database size={19} />Auditoría Entel</button>
+            {canOperate && <button className={view === "coordinadores" ? "active" : ""} onClick={() => { setView("coordinadores"); setSidebarOpen(false); }}><Users size={19} />Coordinadores</button>}
+            {canOperate && <button className={view === "proveedores" ? "active" : ""} onClick={() => { setView("proveedores"); setSidebarOpen(false); }}><Warehouse size={19} />Empresas y personas</button>}
+            <button className={view === "movimientos" ? "active" : ""} onClick={() => { setView("movimientos"); setSidebarOpen(false); }}><ClipboardList size={19} />Historial</button>
+            <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>
+          </nav>
+        </div>
         <div className="sidebar-bottom">
           {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
           <div className="user-card"><span>{userInitials(user.displayName)}</span><div><strong>{user.displayName}</strong><small>{role.replaceAll("_", " ")} · {user.email}</small></div><a href={signOutPath} target="_top" aria-label="Cerrar sesión" title="Cerrar sesión"><LogOut size={16} /></a></div>
