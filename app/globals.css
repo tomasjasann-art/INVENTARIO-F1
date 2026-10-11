@@ -149,6 +149,7 @@ button { cursor: pointer; }
 .brand-mark span { color: white; font-weight: 900; font-size: 17px; transform: skew(6deg); }
 .brand strong { display: block; font-size: 14px; letter-spacing: .07em; white-space: nowrap; }
 .brand small { display: block; margin-top: 3px; color: #9da5ad; font-size: 8px; font-weight: 700; letter-spacing: .16em; }
+/* Navegación desplegable del módulo Control de Equipos Entel */
 .module-pill { width: calc(100% - 2px); min-height: 59px; display: flex; align-items: center; gap: 9px; padding: 8px 10px; margin: 0 1px 8px; border: 1px solid #4a5158; border-radius: 10px; background: linear-gradient(135deg,#343b42,#292f35); color: #f36c21; box-shadow: inset 3px 0 #f36c21; cursor: pointer; font: inherit; text-align: left; transition: border-color .18s ease, background .18s ease; }
 .module-pill:hover { border-color: #626a72; background: linear-gradient(135deg,#3b4249,#2e353b); }
 .module-pill > span { flex: 1; min-width: 0; }.module-pill small,.module-pill strong { display: block; }.module-pill small { margin-bottom: 4px; color: #9ca5ad; font-size: 6px; font-weight: 850; letter-spacing: .1em; }.module-pill strong { color: #f4f6f7; font-size: 10px; line-height: 1.25; }
