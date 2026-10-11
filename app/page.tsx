@@ -7,7 +7,7 @@ import {
   signInPath,
   signOutPath,
 } from "./auth";
-import { missingDeploymentConfig } from "./deployment-config";
+import { isClerkConfigured, missingDeploymentConfig } from "./deployment-config";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,7 @@ export default async function Home() {
   const user = await getAuthenticatedUser();
 
   if (!user) {
-    return <LoginScreen signInPath={signInPath("/")} />;
+    return <LoginScreen signInPath={signInPath("/")} legacyAccessAvailable={isClerkConfigured()} />;
   }
 
   const access = await getKardexAccess(user.email, user.userId, user.authProvider);

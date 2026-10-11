@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react";
 import { ArrowRight, Boxes, KeyRound, LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
 import Image from "next/image";
 
-export default function LoginScreen({ signInPath }: { signInPath: string }) {
+export default function LoginScreen({ signInPath, legacyAccessAvailable }: { signInPath: string; legacyAccessAvailable: boolean }) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -60,7 +60,7 @@ export default function LoginScreen({ signInPath }: { signInPath: string }) {
             <button className="login-submit login-submit-button" type="submit" disabled={submitting}><KeyRound size={18} />{submitting ? "Ingresando..." : "Ingresar a Logística F1"}</button>
           </form>
 
-          <a className="legacy-login-link" href={signInPath} target="_top">Acceso anterior con correo F1 <ArrowRight size={14} /></a>
+          {legacyAccessAvailable ? <a className="legacy-login-link" href={signInPath} target="_top">Acceso anterior del administrador <ArrowRight size={14} /></a> : null}
 
           <div className="login-security-note">
             <ShieldCheck size={18} />
