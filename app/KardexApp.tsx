@@ -154,6 +154,7 @@ type InstallationValidation = {
 type EquipmentRequest = {
   id: number;
   requestCode: string;
+  coordinatorId?: number | null;
   coordinatorName: string;
   coordinatorEmail: string;
   coordinatorEntel: string;
@@ -203,6 +204,7 @@ type AppUser = {
   authUserId: string;
   displayName: string;
   role: UserRole;
+  coordinatorId: number | null;
   active: boolean;
   mustChangePassword: boolean;
   passwordUpdatedAt: string;
@@ -211,9 +213,28 @@ type AppUser = {
   invitedAt: string;
 };
 
+type StockMovement = Pick<Movement, "id" | "productId" | "type" | "quantity" | "orderNumber" | "serials" | "coordinator">;
+
+type StockReservation = {
+  productId: number;
+  orderNumber: string;
+  seriesLot: string;
+  quantity: number;
+};
+
+type CoordinatorSummary = {
+  dispatchedCostCents: number;
+  dispatches: number;
+  pendingSites: number;
+  pendingGuides: number;
+  pendingWithoutGuide: number;
+};
+
 type KardexData = {
   products: Product[];
   movements: Movement[];
+  stockMovements: StockMovement[];
+  stockReservations: StockReservation[];
   sourceRecords: SourceRecord[];
   coordinators: Coordinator[];
   suppliers: Supplier[];
@@ -223,7 +244,8 @@ type KardexData = {
   auditHistoryRecords: AuditRecord[];
   equipmentRequests: EquipmentRequest[];
   appUsers: AppUser[];
-  currentUser?: { email: string; displayName: string; role: UserRole; active: boolean; authProvider?: "supabase" | "clerk"; mustChangePassword?: boolean };
+  coordinatorSummary?: CoordinatorSummary | null;
+  currentUser?: { email: string; displayName: string; role: UserRole; active: boolean; authProvider?: "supabase" | "clerk"; mustChangePassword?: boolean; coordinatorId?: number | null; coordinatorName?: string };
 };
 type View = "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
 
@@ -404,7 +426,7 @@ function userInitials(value: string) {
 }
 
 export default function KardexApp({ user, signOutPath }: { user: KardexUser; signOutPath: string }) {
-  const [data, setData] = useState<KardexData>({ products: [], movements: [], sourceRecords: [], coordinators: [], suppliers: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], appUsers: [] });
+  const [data, setData] = useState<KardexData>({ products: [], movements: [], stockMovements: [], stockReservations: [], sourceRecords: [], coordinators: [], suppliers: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], appUsers: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -421,6 +443,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
   const role = data.currentUser?.role ?? "SOLO_LECTURA";
   const canOperate = role === "ADMINISTRADOR" || role === "LOGISTICA";
   const canRequest = canOperate || role === "COORDINADOR";
+  const isCoordinator = role === "COORDINADOR";
 
   const loadData = useCallback(async (silent = false) => {
     if (!silent) {
@@ -434,6 +457,8 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
       setData({
         products: body.products ?? [],
         movements: body.movements ?? [],
+        stockMovements: body.stockMovements ?? body.movements ?? [],
+        stockReservations: body.stockReservations ?? [],
         sourceRecords: body.sourceRecords ?? [],
         coordinators: body.coordinators ?? [],
         suppliers: body.suppliers ?? [],
@@ -443,6 +468,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
         auditHistoryRecords: body.auditHistoryRecords ?? [],
         equipmentRequests: body.equipmentRequests ?? [],
         appUsers: body.appUsers ?? [],
+        coordinatorSummary: body.coordinatorSummary,
         currentUser: body.currentUser,
       });
     } catch (err) {
@@ -495,9 +521,11 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
     const groups = new Map<string, EquipmentRequest[]>();
     data.equipmentRequests.forEach((request) => groups.set(request.requestCode, [...(groups.get(request.requestCode) ?? []), request]));
     return [...groups.values()]
-      .filter((group) => group[0]?.status === "PENDIENTE")
+      .filter((group) => isCoordinator
+        ? !["CERRADA", "RECHAZADA"].includes(group[0]?.status ?? "")
+        : group[0]?.status === "PENDIENTE")
       .sort((a, b) => Math.max(...b.map((row) => row.id)) - Math.max(...a.map((row) => row.id)));
-  }, [data.equipmentRequests]);
+  }, [data.equipmentRequests, isCoordinator]);
 
   function openRequestFromNotification(requestCode: string) {
     setFocusedRequestCode(requestCode);
@@ -640,18 +668,18 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
         <div className={`module-nav-shell ${equipmentModuleOpen ? "module-nav-open" : ""}`}>
           <nav id="equipment-module-navigation" className="nav-list" aria-label="Control de Equipos Entel">
             <button className={view === "resumen" ? "active" : ""} onClick={() => { setView("resumen"); setSidebarOpen(false); }}><LayoutDashboard size={19} />Resumen</button>
-            <button className={view === "ingresos" ? "active" : ""} onClick={() => { setView("ingresos"); setSidebarOpen(false); }}><ArrowDownLeft size={19} />Ingresos</button>
-            <button className={view === "salidas" ? "active" : ""} onClick={() => { setView("salidas"); setSidebarOpen(false); }}><ArrowUpRight size={19} />Salidas</button>
-            <button className={view === "stock" ? "active" : ""} onClick={() => { setView("stock"); setSidebarOpen(false); }}><Boxes size={19} />Stock actual</button>
-            <button className={view === "lotes" ? "active" : ""} onClick={() => { setView("lotes"); setSidebarOpen(false); }}><Layers3 size={19} />Series y Lotes</button>
+            {!isCoordinator && <button className={view === "ingresos" ? "active" : ""} onClick={() => { setView("ingresos"); setSidebarOpen(false); }}><ArrowDownLeft size={19} />Ingresos</button>}
+            {!isCoordinator && <button className={view === "salidas" ? "active" : ""} onClick={() => { setView("salidas"); setSidebarOpen(false); }}><ArrowUpRight size={19} />Salidas</button>}
+            <button className={view === "stock" ? "active" : ""} onClick={() => { setView("stock"); setSidebarOpen(false); }}><Boxes size={19} />{isCoordinator ? "Stock disponible" : "Stock actual"}</button>
+            {!isCoordinator && <button className={view === "lotes" ? "active" : ""} onClick={() => { setView("lotes"); setSidebarOpen(false); }}><Layers3 size={19} />Series y Lotes</button>}
             <button className={view === "solicitudes" ? "active" : ""} onClick={() => { setView("solicitudes"); setSidebarOpen(false); }}><ShoppingCart size={19} />Solicitudes</button>
             {canOperate && <button className={view === "carga" ? "active" : ""} onClick={() => { setView("carga"); setSidebarOpen(false); }}><Upload size={19} />Carga masiva</button>}
-            <button className={view === "conciliacion" ? "active" : ""} onClick={() => { setView("conciliacion"); setSidebarOpen(false); }}><Scale size={19} />Conciliación</button>
-            <button className={view === "auditoria" ? "active" : ""} onClick={() => { setView("auditoria"); setSidebarOpen(false); }}><Database size={19} />Auditoría Entel</button>
+            {!isCoordinator && <button className={view === "conciliacion" ? "active" : ""} onClick={() => { setView("conciliacion"); setSidebarOpen(false); }}><Scale size={19} />Conciliación</button>}
+            {!isCoordinator && <button className={view === "auditoria" ? "active" : ""} onClick={() => { setView("auditoria"); setSidebarOpen(false); }}><Database size={19} />Auditoría Entel</button>}
             {canOperate && <button className={view === "coordinadores" ? "active" : ""} onClick={() => { setView("coordinadores"); setSidebarOpen(false); }}><Users size={19} />Coordinadores</button>}
             {canOperate && <button className={view === "proveedores" ? "active" : ""} onClick={() => { setView("proveedores"); setSidebarOpen(false); }}><Warehouse size={19} />Empresas y personas</button>}
-            <button className={view === "movimientos" ? "active" : ""} onClick={() => { setView("movimientos"); setSidebarOpen(false); }}><ClipboardList size={19} />Historial</button>
-            <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>
+            {!isCoordinator && <button className={view === "movimientos" ? "active" : ""} onClick={() => { setView("movimientos"); setSidebarOpen(false); }}><ClipboardList size={19} />Historial</button>}
+            {!isCoordinator && <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>}
           </nav>
         </div>
         <div className="sidebar-bottom">
@@ -668,12 +696,12 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
             <div className="notification-center">
               <button className={`notification-button ${notificationRequests.length ? "has-alerts" : ""}`} onClick={() => setNotificationsOpen((open) => !open)} aria-label={`${notificationRequests.length} solicitudes nuevas`} aria-expanded={notificationsOpen}><Bell size={19} />{notificationRequests.length > 0 && <span>{notificationRequests.length > 99 ? "99+" : notificationRequests.length}</span>}</button>
               {notificationsOpen && <div className="notification-panel">
-                <div className="notification-head"><div><strong>Solicitudes nuevas</strong><small>{notificationRequests.length} Pedido(s) F1 por validar</small></div><button className="icon-button" onClick={() => setNotificationsOpen(false)} aria-label="Cerrar notificaciones"><X size={16} /></button></div>
+                <div className="notification-head"><div><strong>{isCoordinator ? "Mis solicitudes activas" : "Solicitudes nuevas"}</strong><small>{notificationRequests.length} Pedido(s) F1 {isCoordinator ? "en seguimiento" : "por validar"}</small></div><button className="icon-button" onClick={() => setNotificationsOpen(false)} aria-label="Cerrar notificaciones"><X size={16} /></button></div>
                 <div className="notification-list">{notificationRequests.length === 0 ? <p>No tienes solicitudes nuevas.</p> : notificationRequests.slice(0, 8).map((group) => { const request = group[0]; const quantity = group.reduce((sum, row) => sum + row.quantity, 0); return <button key={request.requestCode} onClick={() => openRequestFromNotification(request.requestCode)}><span className="notification-icon"><ShoppingCart size={16} /></span><span><strong>{request.requestCode}</strong><small>{request.coordinatorName} · {quantity} equipo(s)</small><small>Despacho: {request.neededDate ? displayDate(request.neededDate) : "Sin fecha"}</small></span><b>{requestElapsedLabel(request)}</b></button>; })}</div>
                 {notificationRequests.length > 0 && <button className="notification-footer" onClick={() => { setView("solicitudes"); setNotificationsOpen(false); }}>Ver todas las solicitudes</button>}
               </div>}
             </div>
-            {!(["solicitudes", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
+            {!isCoordinator && !(["solicitudes", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
             {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
             {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
             {canOperate && view === "carga" && <button className="secondary-button product-button" onClick={() => setModal("product")}><PackagePlus size={17} />Nuevo SKU</button>}
@@ -682,13 +710,15 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
 
         <div className="content">
           <section className="page-heading">
-            <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? "Resumen de equipos" : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? "Stock y trazabilidad" : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? "Control centralizado por SKU, Serie/Lote, pedido y proyecto." : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU." : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
+            <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? (isCoordinator ? "Mi panel de coordinador" : "Resumen de equipos") : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? (isCoordinator ? "Stock disponible para solicitar" : "Stock y trazabilidad") : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? (isCoordinator ? "Consulta tus costos despachados, solicitudes y pendientes de cierre." : "Control centralizado por SKU, Serie/Lote, pedido y proyecto.") : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? (isCoordinator ? "Disponibilidad global sin costos ni movimientos de otros coordinadores." : "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU.") : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
           </section>
 
           {error && <div className="error-banner"><AlertTriangle size={18} /><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
 
-          {view === "resumen" && (
+          {view === "resumen" && isCoordinator && <CoordinatorOverview summary={data.coordinatorSummary} movements={data.movements} requests={data.equipmentRequests} loading={loading} />}
+
+          {view === "resumen" && !isCoordinator && (
             <>
               <section className="metrics-grid">
                 <Metric label="Stock total" value={`${number.format(metrics.stock.units)} UND`} meta={`${number.format(metrics.stock.meters)} MTS · ${data.products.length} SKU`} icon={<Boxes size={20} />} tone="dark" />
@@ -721,9 +751,11 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           {view === "movimientos" && <MovementTable movements={filteredMovements} loading={loading} title="Todos los movimientos" subtitle={`${filteredMovements.length} operaciones encontradas`} />}
           {view === "ingresos" && <OperationalMovementTable mode="entrada" movements={filteredMovements.filter((movement) => ["entrada", "devolucion", "regularizacion"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
           {view === "salidas" && <OperationalMovementTable mode="salida" movements={filteredMovements.filter((movement) => ["salida", "baja"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
-          {view === "stock" && <StockTable products={filteredProducts} movements={data.movements} loading={loading} />}
+          {view === "stock" && (isCoordinator
+            ? <CoordinatorStockView products={filteredProducts} movements={data.stockMovements} reservations={data.stockReservations} loading={loading} />
+            : <StockTable products={filteredProducts} movements={data.movements} loading={loading} />)}
           {view === "lotes" && <LotView movements={filteredMovements} loading={loading} />}
-          {view === "solicitudes" && <RequestView products={data.products} movements={data.movements} coordinators={data.coordinators} suppliers={data.suppliers} requests={data.equipmentRequests} warehouse={warehouse} loading={loading} saving={saving} canRequest={canRequest} canOperate={canOperate} focusedRequestCode={focusedRequestCode} onSave={save} />}
+          {view === "solicitudes" && <RequestView products={data.products} movements={data.stockMovements} reservations={data.stockReservations} coordinators={data.coordinators} suppliers={data.suppliers} requests={data.equipmentRequests} warehouse={warehouse} loading={loading} saving={saving} canRequest={canRequest} canOperate={canOperate} coordinatorMode={isCoordinator} assignedCoordinatorName={data.currentUser?.coordinatorName ?? ""} focusedRequestCode={focusedRequestCode} onSave={save} />}
           {view === "conciliacion" && <ConciliationView movements={data.movements} validations={data.installationValidations} auditImports={data.auditImports} auditRecords={data.auditRecords} auditHistoryRecords={data.auditHistoryRecords} loading={loading} saving={saving} onSave={(payload) => void save(payload, "Validación de instalación guardada.")} onOpenAudit={() => setView("auditoria")} />}
           {view === "auditoria" && <AuditView imports={data.auditImports} records={data.auditRecords} movements={data.movements} loading={loading} saving={saving} onSave={save} />}
           {view === "coordinadores" && <CoordinatorView coordinators={data.coordinators} loading={loading} saving={saving} onSave={(payload) => save(payload, "Coordinador actualizado correctamente.")} />}
@@ -744,6 +776,79 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
 
 function Metric({ label, value, meta, icon, tone }: { label: string; value: string; meta: string; icon: React.ReactNode; tone: string }) {
   return <article className={`metric-card metric-${tone}`}><div className="metric-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><strong>{value}</strong><small>{meta}</small></article>;
+}
+
+function CoordinatorOverview({ summary, movements, requests, loading }: { summary?: CoordinatorSummary | null; movements: Movement[]; requests: EquipmentRequest[]; loading: boolean }) {
+  const requestGroups = useMemo(() => {
+    const groups = new Map<string, EquipmentRequest[]>();
+    requests.forEach((request) => groups.set(request.requestCode, [...(groups.get(request.requestCode) ?? []), request]));
+    return [...groups.values()]
+      .filter((group) => !["CERRADA", "RECHAZADA"].includes(group[0]?.status ?? ""))
+      .sort((a, b) => Math.max(...b.map((row) => row.id)) - Math.max(...a.map((row) => row.id)));
+  }, [requests]);
+
+  function exportOwnDispatches() {
+    const header = ["Fecha", "GR", "Pedido", "SKU", "Descripción", "Serie/Lote", "Cantidad", "Costo unitario", "Costo total", "Site", "Proyecto", "Coordinador Entel"];
+    const rows = movements.map((movement) => {
+      const unitCost = (movement.unitCostCents || movement.productUnitCostCents || 0) / 100;
+      return [movement.movementDate, movement.document, movement.orderNumber, movement.sku, movement.description, movement.serials, movement.quantity, unitCost, unitCost * movement.quantity, movement.destinationSite, movement.project, movement.coordinator];
+    });
+    const csv = [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mis-despachos-f1-${today()}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return <>
+    <section className="metrics-grid coordinator-metrics">
+      <Metric label="Costo despachado" value={money.format((summary?.dispatchedCostCents ?? 0) / 100)} meta="Solo tus despachos · lectura" icon={<CircleDollarSign size={20} />} tone="neutral" />
+      <Metric label="Despachos propios" value={number.format(summary?.dispatches ?? 0)} meta="GR o movimientos asociados" icon={<ArrowUpRight size={20} />} tone="orange" />
+      <Metric label="Sites pendientes" value={number.format(summary?.pendingSites ?? 0)} meta="Solicitudes aún no cerradas" icon={<Warehouse size={20} />} tone="dark" />
+      <Metric label="GR pendientes" value={number.format(summary?.pendingGuides ?? 0)} meta={`${number.format(summary?.pendingWithoutGuide ?? 0)} pedido(s) aún sin GR`} icon={<ClipboardList size={20} />} tone="red" />
+    </section>
+    <section className="dashboard-grid coordinator-dashboard-grid">
+      <article className="panel table-panel">
+        <div className="panel-title"><div><h2>Mis costos despachados</h2><p>Vista de lectura; no muestra costos del stock general.</p></div><button className="secondary-button" type="button" onClick={exportOwnDispatches} disabled={!movements.length}><Download size={15} />Exportar</button></div>
+        <div className="table-wrap"><table><thead><tr><th>Fecha / GR</th><th>Equipo</th><th>Pedido / Site</th><th>Cantidad</th><th>Costo despachado</th></tr></thead><tbody>
+          {loading ? <tr><td colSpan={5}><Empty text="Cargando tus despachos..." /></td></tr> : !movements.length ? <tr><td colSpan={5}><Empty text="Todavía no tienes despachos asociados." /></td></tr> : movements.slice(0, 20).map((movement) => { const unitCost = movement.unitCostCents || movement.productUnitCostCents || 0; return <tr key={movement.id}><td><strong>{displayDate(movement.movementDate)}</strong><small>GR: {movement.document || "—"}</small></td><td><strong>{movement.sku}</strong><small>{movement.description}</small><small>{movement.serials || "Sin serie/lote"}</small></td><td><strong>{movement.orderNumber || "Sin pedido"}</strong><small>{movement.destinationSite || "Sin site"}</small></td><td>{number.format(movement.quantity)} {movement.unit}</td><td><strong>{money.format((unitCost * movement.quantity) / 100)}</strong><small>{money.format(unitCost / 100)} por {movement.unit}</small></td></tr>; })}
+        </tbody></table></div>
+      </article>
+      <article className="panel table-panel">
+        <div className="panel-title"><div><h2>Sites y GR por cerrar</h2><p>Seguimiento de tus Pedidos F1 activos.</p></div><span className="count-badge">{requestGroups.length}</span></div>
+        <div className="table-wrap"><table><thead><tr><th>Pedido F1</th><th>Site</th><th>GR / Transporte</th><th>Estado</th><th>Tiempo</th></tr></thead><tbody>
+          {loading ? <tr><td colSpan={5}><Empty text="Cargando pendientes..." /></td></tr> : !requestGroups.length ? <tr><td colSpan={5}><Empty text="No tienes sites ni GR pendientes de cierre." /></td></tr> : requestGroups.slice(0, 20).map((group) => { const request = group[0]; return <tr key={request.requestCode}><td><strong>{request.requestCode}</strong><small>{request.orderNumber}</small></td><td><strong>{request.site || "Sin site"}</strong><small>{request.project || "Sin proyecto"}</small></td><td><strong>{request.outboundGuide || "GR pendiente"}</strong><small>{request.transport || "Transporte pendiente"}</small></td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status.replaceAll("_", " ")}</span></td><td><span className="service-time running"><Clock3 size={13} />{requestElapsedLabel(request)}</span></td></tr>; })}
+        </tbody></table></div>
+      </article>
+    </section>
+  </>;
+}
+
+function CoordinatorStockView({ products, movements, reservations, loading }: { products: Product[]; movements: StockMovement[]; reservations: StockReservation[]; loading: boolean }) {
+  const reservedByProduct = useMemo(() => {
+    const map = new Map<number, number>();
+    reservations.forEach((row) => map.set(row.productId, (map.get(row.productId) ?? 0) + row.quantity));
+    return map;
+  }, [reservations]);
+  const ordersByProduct = useMemo(() => {
+    const map = new Map<number, Set<string>>();
+    movements.forEach((movement) => {
+      if (!movement.orderNumber.trim()) return;
+      const orders = map.get(movement.productId) ?? new Set<string>();
+      orders.add(movement.orderNumber.trim());
+      map.set(movement.productId, orders);
+    });
+    return map;
+  }, [movements]);
+  const available = products.filter((product) => Math.max(0, product.stock - (reservedByProduct.get(product.id) ?? 0)) > 0);
+  return <section className="panel table-panel">
+    <div className="panel-title"><div><h2>Stock disponible para solicitar</h2><p>Las reservas PENDIENTES o VALIDADAS de todos los coordinadores ya están descontadas. Los costos generales permanecen restringidos.</p></div><span className="count-badge">{available.length}</span></div>
+    <div className="table-wrap"><table><thead><tr><th>SKU</th><th>Descripción</th><th>Categoría</th><th>Unidad</th><th>Stock físico</th><th>Reservado</th><th>Disponible</th><th>Pedidos con saldo</th></tr></thead><tbody>
+      {loading ? <tr><td colSpan={8}><Empty text="Cargando stock disponible..." /></td></tr> : !available.length ? <tr><td colSpan={8}><Empty text="No hay stock disponible para nuevas solicitudes." /></td></tr> : available.map((product) => { const reserved = reservedByProduct.get(product.id) ?? 0; return <tr key={product.id}><td><strong>{product.sku}</strong></td><td>{product.description}</td><td>{product.category}</td><td>{product.unit}</td><td>{number.format(product.stock)}</td><td>{number.format(reserved)}</td><td><strong>{number.format(Math.max(0, product.stock - reserved))}</strong></td><td>{number.format(ordersByProduct.get(product.id)?.size ?? 0)}</td></tr>; })}
+    </tbody></table></div>
+  </section>;
 }
 
 function CoordinatorCostSummary({ organization, movements, products, loading }: { organization: "F1" | "ENTEL"; movements: Movement[]; products: Product[]; loading: boolean }) {
@@ -1379,8 +1484,8 @@ function ReconciliationRow({ movement, serial, validation, entryMovement, entelA
   </tr>;
 }
 
-function RequestView({ products, movements, coordinators, suppliers, requests, warehouse, loading, saving, canRequest, canOperate, focusedRequestCode, onSave }: { products: Product[]; movements: Movement[]; coordinators: Coordinator[]; suppliers: Supplier[]; requests: EquipmentRequest[]; warehouse: string; loading: boolean; saving: boolean; canRequest: boolean; canOperate: boolean; focusedRequestCode: string; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
-  const [selectedCoordinator, setSelectedCoordinator] = useState("");
+function RequestView({ products, movements, reservations, coordinators, suppliers, requests, warehouse, loading, saving, canRequest, canOperate, coordinatorMode, assignedCoordinatorName, focusedRequestCode, onSave }: { products: Product[]; movements: StockMovement[]; reservations: StockReservation[]; coordinators: Coordinator[]; suppliers: Supplier[]; requests: EquipmentRequest[]; warehouse: string; loading: boolean; saving: boolean; canRequest: boolean; canOperate: boolean; coordinatorMode: boolean; assignedCoordinatorName: string; focusedRequestCode: string; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
+  const [selectedCoordinator, setSelectedCoordinator] = useState(assignedCoordinatorName);
   const [selectedEntelCoordinator, setSelectedEntelCoordinator] = useState("");
   const [selectedOrder, setSelectedOrder] = useState("");
   const [productQuery, setProductQuery] = useState("");
@@ -1407,8 +1512,14 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
       productsInOrder.set(movement.productId, (productsInOrder.get(movement.productId) ?? 0) + movementEffect(movement.type) * movement.quantity);
       map.set(order, productsInOrder);
     });
+    reservations.forEach((reservation) => {
+      const order = reservation.orderNumber.trim();
+      const productsInOrder = map.get(order) ?? new Map<number, number>();
+      productsInOrder.set(reservation.productId, (productsInOrder.get(reservation.productId) ?? 0) - reservation.quantity);
+      map.set(order, productsInOrder);
+    });
     return map;
-  }, [movements]);
+  }, [movements, reservations]);
   const orderOptions = useMemo(() => [...orderStock]
     .filter(([, balances]) => [...balances.values()].some((balance) => balance > 0))
     .map(([order]) => order)
@@ -1428,8 +1539,17 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
       productsInOrder.set(movement.productId, traces);
       map.set(order, productsInOrder);
     });
+    reservations.forEach((reservation) => {
+      const order = reservation.orderNumber.trim();
+      const productsInOrder = map.get(order) ?? new Map<number, Map<string, number>>();
+      const traces = productsInOrder.get(reservation.productId) ?? new Map<string, number>();
+      const trace = reservation.seriesLot.trim();
+      traces.set(trace, (traces.get(trace) ?? 0) - reservation.quantity);
+      productsInOrder.set(reservation.productId, traces);
+      map.set(order, productsInOrder);
+    });
     return map;
-  }, [movements]);
+  }, [movements, reservations]);
   const availableProducts = useMemo(() => products.filter((product) => (orderStock.get(selectedOrder)?.get(product.id) ?? 0) > 0), [orderStock, products, selectedOrder]);
   const selectedProduct = availableProducts.find((product) => {
     const label = `${product.sku} — ${product.description}`;
@@ -1529,7 +1649,7 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
     const ok = await onSave({ ...values, action: "request", coordinatorEmail: coordinator?.email ?? "", items }, "Solicitud registrada para preparación de despacho.");
     if (ok) {
       form.reset();
-      setSelectedCoordinator("");
+      setSelectedCoordinator(coordinatorMode ? assignedCoordinatorName : "");
       setSelectedEntelCoordinator("");
       setSelectedOrder("");
       setProductQuery("");
@@ -1553,7 +1673,7 @@ function RequestView({ products, movements, coordinators, suppliers, requests, w
         <div className="panel-title"><div><h2>Nueva solicitud independiente</h2><p>Reserva de atención logística; no crea salidas, ingresos ni modifica stock.</p></div><span><ShoppingCart size={20} /></span></div>
         <div className="request-form-body">
           <div className="form-grid">
-            <label className="field"><span>Coordinador F1 *</span><select name="coordinatorName" required value={selectedCoordinator} onChange={(event) => setSelectedCoordinator(event.target.value)}><option value="" disabled>Selecciona un coordinador F1</option>{activeCoordinators.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
+            <label className="field"><span>Coordinador F1 *</span><select name="coordinatorName" required value={selectedCoordinator} disabled={coordinatorMode} onChange={(event) => setSelectedCoordinator(event.target.value)}><option value="" disabled>Selecciona un coordinador F1</option>{activeCoordinators.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select>{coordinatorMode && <input type="hidden" name="coordinatorName" value={selectedCoordinator} />}<small>{coordinatorMode ? "Asignado a tu cuenta por el administrador." : "Responsable F1 de la solicitud."}</small></label>
             <label className="field"><span>Coordinador Entel *</span><select name="coordinatorEntel" required value={selectedEntelCoordinator} onChange={(event) => setSelectedEntelCoordinator(event.target.value)}><option value="" disabled>Selecciona un coordinador Entel</option>{activeEntelCoordinators.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
             <label className="field"><span>N° Pedido con ingreso *</span><select name="orderNumber" required value={selectedOrder} onChange={(event) => { const order = event.target.value; setSelectedOrder(order); setItems([]); setProductQuery(""); setSelectedSeriesLot(""); const inferred = movements.find((movement) => movement.orderNumber.trim() === order && movement.coordinator.trim())?.coordinator || ""; if (activeEntelCoordinators.some((item) => item.name === inferred)) setSelectedEntelCoordinator(inferred); }}><option value="" disabled>Selecciona un pedido ingresado</option>{orderOptions.map((order) => <option value={order} key={order}>{order}</option>)}</select><small>Solo aparecen pedidos con saldo disponible.</small></label>
             <label className="field"><span>Proyecto</span><input name="project" placeholder="Rollout, PEXT, PINT..." /></label>
@@ -1676,7 +1796,9 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
   const [backupDownloaded, setBackupDownloaded] = useState(false);
   const [resetUserId, setResetUserId] = useState<number | null>(null);
   const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [newUserRole, setNewUserRole] = useState<UserRole>("SOLO_LECTURA");
   const phrase = scope === "all" ? "BORRAR TODO" : "LIMPIAR PRUEBAS";
+  const f1Coordinators = data.coordinators.filter((coordinator) => coordinator.organization === "F1" && coordinator.active).sort((a, b) => a.name.localeCompare(b.name));
 
   async function downloadBackup() {
     const response = await fetch("/api/kardex?backup=1", { cache: "no-store" });
@@ -1700,7 +1822,7 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
     const form = event.currentTarget;
     const values = Object.fromEntries(new FormData(form).entries());
     const ok = await onSave({ ...values, action: "appUser", active: true }, "Usuario y permisos guardados.");
-    if (ok) form.reset();
+    if (ok) { form.reset(); setNewUserRole("SOLO_LECTURA"); }
   }
 
   async function resetPassword() {
@@ -1731,16 +1853,18 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
         <label className="field"><span>Nombre *</span><input name="displayName" required placeholder="Nombre del colaborador" /></label>
         <label className="field"><span>Usuario *</span><input name="username" required minLength={4} maxLength={40} pattern="[a-zA-Z0-9._-]+" autoComplete="off" placeholder="nombre.apellido" /></label>
         <label className="field"><span>Contraseña temporal *</span><input name="temporaryPassword" type="password" required minLength={10} autoComplete="new-password" placeholder="Mínimo 10 caracteres" /></label>
-        <label className="field"><span>Rol *</span><select name="role" defaultValue="SOLO_LECTURA"><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></label>
+        <label className="field"><span>Rol *</span><select name="role" value={newUserRole} onChange={(event) => setNewUserRole(event.target.value as UserRole)}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></label>
+        <label className="field"><span>Coordinador F1 {newUserRole === "COORDINADOR" ? "*" : ""}</span><select name="coordinatorId" defaultValue="" required={newUserRole === "COORDINADOR"}><option value="">Sin vincular</option>{f1Coordinators.map((coordinator) => <option key={coordinator.id} value={coordinator.id}>{coordinator.name}</option>)}</select><small>Obligatorio para limitar solicitudes, alertas y despachos propios.</small></label>
         <button className="primary-button" type="submit" disabled={saving}><Plus size={15} />Crear usuario</button>
       </form>
-      <div className="role-guide"><span><b>Administrador</b> configura usuarios y limpia datos.</span><span><b>Logística</b> registra y carga operaciones.</span><span><b>Coordinador</b> crea solicitudes.</span><span><b>Solo lectura</b> consulta sin editar.</span></div>
-      <div className="table-wrap"><table className="user-access-table"><thead><tr><th>Colaborador</th><th>Usuario</th><th>Rol</th><th>Estado</th><th>Seguridad</th><th>Último acceso</th></tr></thead><tbody>
-        {!data.appUsers.length ? <tr><td colSpan={6}><Empty text="Crea la primera cuenta interna para tu equipo." /></td></tr> : data.appUsers.map((appUser) => <tr key={appUser.id}>
+      <div className="role-guide"><span><b>Administrador</b> configura usuarios y limpia datos.</span><span><b>Logística</b> registra y carga operaciones.</span><span><b>Coordinador</b> solo ve su ámbito y el stock disponible.</span><span><b>Solo lectura</b> consulta sin editar.</span></div>
+      <div className="table-wrap"><table className="user-access-table"><thead><tr><th>Colaborador</th><th>Usuario</th><th>Rol</th><th>Coordinador F1</th><th>Estado</th><th>Seguridad</th><th>Último acceso</th></tr></thead><tbody>
+        {!data.appUsers.length ? <tr><td colSpan={7}><Empty text="Crea la primera cuenta interna para tu equipo." /></td></tr> : data.appUsers.map((appUser) => <tr key={appUser.id}>
           <td><strong>{appUser.displayName || "Sin nombre"}</strong><small>{appUser.username ? "Cuenta interna" : "Acceso anterior por correo"}</small></td>
           <td><b>{appUser.username || appUser.email}</b></td>
-          <td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: event.target.value, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></td>
-          <td><select value={appUser.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: appUser.role, active: event.target.value === "ACTIVO" }, "Estado del usuario actualizado.")}><option>ACTIVO</option><option>INACTIVO</option></select></td>
+          <td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: event.target.value, coordinatorId: appUser.coordinatorId, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></td>
+          <td><select value={appUser.coordinatorId ?? ""} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: appUser.role, coordinatorId: Number(event.target.value) || null, active: appUser.active }, "Coordinador F1 vinculado.")}><option value="">Sin vincular</option>{f1Coordinators.map((coordinator) => <option key={coordinator.id} value={coordinator.id}>{coordinator.name}</option>)}</select></td>
+          <td><select value={appUser.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: appUser.role, coordinatorId: appUser.coordinatorId, active: event.target.value === "ACTIVO" }, "Estado del usuario actualizado.")}><option>ACTIVO</option><option>INACTIVO</option></select></td>
           <td>{appUser.authUserId ? <div className="password-state"><span className={appUser.mustChangePassword ? "warning" : "ok"}>{appUser.mustChangePassword ? "Cambio pendiente" : "Contraseña definida"}</span><button type="button" className="text-action" disabled={saving} onClick={() => { setResetUserId(appUser.id); setTemporaryPassword(""); }}><RefreshCw size={12} />Restablecer</button></div> : <small>Cuenta heredada</small>}</td>
           <td><small>{appUser.lastLoginAt ? new Date(appUser.lastLoginAt).toLocaleString("es-PE") : "Sin ingreso"}</small></td>
         </tr>)}

@@ -209,6 +209,7 @@ export const equipmentRequests = pgTable(
   {
     id: serial("id").primaryKey(),
     requestCode: text("request_code").notNull(),
+    coordinatorId: integer("coordinator_id").references(() => coordinators.id, { onDelete: "set null" }),
     coordinatorName: text("coordinator_name").notNull(),
     coordinatorEmail: text("coordinator_email").notNull().default(""),
     coordinatorEntel: text("coordinator_entel").notNull().default(""),
@@ -252,6 +253,7 @@ export const equipmentRequests = pgTable(
     index("equipment_requests_code_idx").on(table.requestCode),
     index("equipment_requests_status_idx").on(table.status, table.id),
     index("equipment_requests_product_id_idx").on(table.productId),
+    index("equipment_requests_coordinator_id_idx").on(table.coordinatorId),
     index("equipment_requests_contractor_ruc_idx").on(table.contractorRuc),
     index("equipment_requests_pickup_dni_idx").on(table.pickupPersonDni),
   ],
@@ -266,6 +268,7 @@ export const appUsers = pgTable(
     authUserId: text("auth_user_id").notNull().default(""),
     displayName: text("display_name").notNull().default(""),
     role: text("role", { enum: ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA"] }).notNull().default("SOLO_LECTURA"),
+    coordinatorId: integer("coordinator_id").references(() => coordinators.id, { onDelete: "set null" }),
     active: boolean("active").notNull().default(true),
     mustChangePassword: boolean("must_change_password").notNull().default(false),
     passwordUpdatedAt: text("password_updated_at").notNull().default(""),
@@ -279,5 +282,6 @@ export const appUsers = pgTable(
     uniqueIndex("app_users_email_unique").on(table.email),
     uniqueIndex("app_users_username_unique").on(table.username).where(sql`${table.username} <> ''`),
     uniqueIndex("app_users_auth_user_id_unique").on(table.authUserId).where(sql`${table.authUserId} <> ''`),
+    index("app_users_coordinator_id_idx").on(table.coordinatorId),
   ],
 );

@@ -50,6 +50,20 @@
       "when": 1791678792673,
       "tag": "0006_known_lorna_dane",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791682215109,
+      "tag": "0007_goofy_korvac",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791682382530,
+      "tag": "0008_broad_pyro",
+      "breakpoints": true
     }
   ]
 }

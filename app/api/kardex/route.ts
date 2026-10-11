@@ -224,6 +224,7 @@ type AppUserInput = {
   username?: string;
   displayName?: string;
   role?: UserRole;
+  coordinatorId?: number;
   active?: boolean;
   temporaryPassword?: string;
 };
@@ -429,6 +430,16 @@ export async function GET(request: Request) {
     const db = getDb();
     const access = await currentAccess(db, user);
     if (!access?.active) return Response.json({ error: "Tu usuario no está registrado o se encuentra inactivo. Comunícate con un administrador." }, { status: 403 });
+    const [assignedCoordinator] = access.role === "COORDINADOR" && "coordinatorId" in access && access.coordinatorId
+      ? await db.select().from(coordinators).where(and(
+        eq(coordinators.id, access.coordinatorId),
+        eq(coordinators.organization, "F1"),
+        eq(coordinators.active, true),
+      )).limit(1)
+      : [];
+    if (access.role === "COORDINADOR" && !assignedCoordinator) {
+      return Response.json({ error: "Tu cuenta de Coordinador aún no está vinculada a un Coordinador F1 activo. Solicita la vinculación al administrador." }, { status: 403 });
+    }
     if (new URL(request.url).searchParams.get("backup") === "1") {
       if (!mayOperate(access.role)) return Response.json({ error: "Tu perfil no puede descargar respaldos operativos." }, { status: 403 });
       const [productRows, movementRows, sourceRows, coordinatorRows, supplierRows, validationRows, importRows, recordRows, requestRows, userRows] = await Promise.all([
@@ -544,35 +555,72 @@ export async function GET(request: Request) {
       stock.set(movement.productId, (stock.get(movement.productId) ?? 0) + movement.quantity * sign);
     }
 
+    const isCoordinator = access.role === "COORDINADOR";
+    const assignedCoordinatorName = normalizeParty(assignedCoordinator?.name);
+    const ownMovementRows = isCoordinator
+      ? movementRows.filter((movement) => ["salida", "baja"].includes(movement.type)
+        && normalizeParty(movement.coordinatorF1) === assignedCoordinatorName)
+      : movementRows;
+    const ownRequestRows = isCoordinator
+      ? requestRows.filter((row) => row.coordinatorId === assignedCoordinator?.id
+        || (!row.coordinatorId && normalizeParty(row.coordinatorName) === assignedCoordinatorName))
+      : requestRows;
+    const visibleCoordinatorRows = isCoordinator
+      ? coordinatorRows.filter((row) => row.active && (row.organization === "ENTEL" || row.id === assignedCoordinator?.id))
+      : coordinatorRows;
+    const resolvedMovements = ownMovementRows.map((movement) => ({
+      ...movement,
+      unitCostCents: movement.unitCostCents || resolvedProductCostById.get(movement.productId) || 0,
+      productUnitCostCents: resolvedProductCostById.get(movement.productId) || movement.productUnitCostCents,
+      costSource: movement.unitCostCents > 0 ? "MOVIMIENTO" : (resolvedProductCostById.get(movement.productId) ?? 0) > 0 ? "STOCK CONTRATA ENTEL / MAESTRO" : "SIN COSTO",
+      movementDate: normalizeKardexDate(movement.movementDate, movement.movementDate),
+    }));
+    const coordinatorRequestGroups = new Map<string, typeof ownRequestRows>();
+    ownRequestRows.forEach((row) => coordinatorRequestGroups.set(row.requestCode, [...(coordinatorRequestGroups.get(row.requestCode) ?? []), row]));
+    const pendingCoordinatorGroups = [...coordinatorRequestGroups.values()].filter((group) => !["CERRADA", "RECHAZADA"].includes(group[0]?.status ?? ""));
+    const coordinatorSummary = isCoordinator ? {
+      dispatchedCostCents: resolvedMovements.reduce((sum, movement) => sum + (movement.unitCostCents || movement.productUnitCostCents || 0) * movement.quantity, 0),
+      dispatches: new Set(resolvedMovements.map((movement) => movement.document || `MOV-${movement.id}`)).size,
+      pendingSites: new Set(pendingCoordinatorGroups.map((group) => group[0]?.site.trim()).filter(Boolean)).size,
+      pendingGuides: new Set(pendingCoordinatorGroups.map((group) => group[0]?.outboundGuide.trim()).filter(Boolean)).size,
+      pendingWithoutGuide: pendingCoordinatorGroups.filter((group) => !group[0]?.outboundGuide.trim()).length,
+    } : null;
+
     return Response.json({
       products: productRows.map((product) => ({
         ...product,
-        unitCostCents: resolvedProductCostById.get(product.id) ?? product.unitCostCents,
-        costSource: product.unitCostCents > 0 ? "KARDEX" : entelCostBySku.has(product.sku.toUpperCase()) ? "STOCK CONTRATA ENTEL" : "SIN COSTO",
+        unitCostCents: isCoordinator ? 0 : resolvedProductCostById.get(product.id) ?? product.unitCostCents,
+        costSource: isCoordinator ? "RESTRINGIDO" : product.unitCostCents > 0 ? "KARDEX" : entelCostBySku.has(product.sku.toUpperCase()) ? "STOCK CONTRATA ENTEL" : "SIN COSTO",
         stock: stock.get(product.id) ?? 0,
       })),
-      movements: movementRows.map((movement) => ({
-        ...movement,
-        unitCostCents: movement.unitCostCents || resolvedProductCostById.get(movement.productId) || 0,
-        productUnitCostCents: resolvedProductCostById.get(movement.productId) || movement.productUnitCostCents,
-        costSource: movement.unitCostCents > 0 ? "MOVIMIENTO" : (resolvedProductCostById.get(movement.productId) ?? 0) > 0 ? "STOCK CONTRATA ENTEL / MAESTRO" : "SIN COSTO",
-        movementDate: normalizeKardexDate(movement.movementDate, movement.movementDate),
+      movements: resolvedMovements,
+      stockMovements: movementRows.map((movement) => ({
+        id: movement.id,
+        productId: movement.productId,
+        type: movement.type,
+        quantity: movement.quantity,
+        orderNumber: movement.orderNumber,
+        serials: movement.serials,
+        coordinator: isCoordinator ? "" : movement.coordinator,
       })),
-      sourceRecords: sourceRows.map((record) => ({
+      stockReservations: requestRows
+        .filter((row) => ["PENDIENTE", "VALIDADA"].includes(row.status))
+        .map((row) => ({ productId: row.productId, orderNumber: row.orderNumber, seriesLot: row.seriesLot, quantity: row.quantity })),
+      sourceRecords: isCoordinator ? [] : sourceRows.map((record) => ({
         ...record,
         movementDate: normalizeKardexDate(record.movementDate, record.movementDate),
       })),
-      coordinators: coordinatorRows,
-      suppliers: supplierRows,
-      installationValidations: validationRows.map((validation) => ({
+      coordinators: visibleCoordinatorRows,
+      suppliers: isCoordinator ? supplierRows.filter((row) => row.active) : supplierRows,
+      installationValidations: isCoordinator ? [] : validationRows.map((validation) => ({
         ...validation,
         managementDate: normalizeKardexDate(validation.managementDate, validation.managementDate),
         entelReviewDate: normalizeKardexDate(validation.entelReviewDate, validation.entelReviewDate),
       })),
-      auditImports: auditImportRows,
-      auditRecords: auditRecordRows,
-      auditHistoryRecords: [...historicalAuditMap.values()],
-      equipmentRequests: await Promise.all(requestRows.map(async (row) => ({
+      auditImports: isCoordinator ? [] : auditImportRows,
+      auditRecords: isCoordinator ? [] : auditRecordRows,
+      auditHistoryRecords: isCoordinator ? [] : [...historicalAuditMap.values()],
+      equipmentRequests: await Promise.all(ownRequestRows.map(async (row) => ({
         ...row,
         outboundGuidePhotoStored: row.outboundGuidePhoto,
         shippingTicketPhotoStored: row.shippingTicketPhoto,
@@ -580,7 +628,8 @@ export async function GET(request: Request) {
         shippingTicketPhoto: await resolveEvidenceImage(row.shippingTicketPhoto),
       }))),
       appUsers: userRows,
-      currentUser: { email: user.email.toLowerCase(), displayName: user.displayName, role: access.role, active: access.active, authProvider: user.authProvider, mustChangePassword: "mustChangePassword" in access ? access.mustChangePassword : false },
+      coordinatorSummary,
+      currentUser: { email: user.email.toLowerCase(), displayName: user.displayName, role: access.role, active: access.active, authProvider: user.authProvider, mustChangePassword: "mustChangePassword" in access ? access.mustChangePassword : false, coordinatorId: assignedCoordinator?.id ?? null, coordinatorName: assignedCoordinator?.name ?? "" },
     });
   } catch (error) {
     return Response.json({ error: errorMessage(error) }, { status: 500 });
@@ -596,9 +645,17 @@ export async function POST(request: Request) {
     const db = getDb();
     const access = await currentAccess(db, user);
     if (!access) return Response.json({ error: "Tu usuario no está registrado. Pide a un administrador que cree o habilite tu cuenta." }, { status: 403 });
+    const [assignedCoordinator] = access.role === "COORDINADOR" && "coordinatorId" in access && access.coordinatorId
+      ? await db.select().from(coordinators).where(and(
+        eq(coordinators.id, access.coordinatorId),
+        eq(coordinators.organization, "F1"),
+        eq(coordinators.active, true),
+      )).limit(1)
+      : [];
     const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | AppUserInput | AppUserResetPasswordInput | CleanupInput;
     const action = clean(payload.action);
     if (!access.active) return Response.json({ error: "Tu usuario está inactivo. Comunícate con un administrador." }, { status: 403 });
+    if (access.role === "COORDINADOR" && !assignedCoordinator) return Response.json({ error: "Tu cuenta no está vinculada a un Coordinador F1 activo." }, { status: 403 });
     if ((action === "appUser" || action === "appUserResetPassword") && access.role !== "ADMINISTRADOR") return Response.json({ error: "Solo un Administrador puede cambiar permisos." }, { status: 403 });
     if (action === "cleanup" && access.role !== "ADMINISTRADOR") return Response.json({ error: "Solo un Administrador puede limpiar la base." }, { status: 403 });
     if (action === "request" && !mayOperate(access.role) && access.role !== "COORDINADOR") return Response.json({ error: "Tu perfil es de solo lectura." }, { status: 403 });
@@ -611,6 +668,17 @@ export async function POST(request: Request) {
       const temporaryPassword = String(userPayload.temporaryPassword ?? "");
       const roles: UserRole[] = ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA"];
       const role = roles.includes(userPayload.role as UserRole) ? userPayload.role as UserRole : "SOLO_LECTURA";
+      const coordinatorId = Number(userPayload.coordinatorId) || null;
+      const [linkedCoordinator] = coordinatorId
+        ? await db.select().from(coordinators).where(and(
+          eq(coordinators.id, coordinatorId),
+          eq(coordinators.organization, "F1"),
+          eq(coordinators.active, true),
+        )).limit(1)
+        : [];
+      if (role === "COORDINADOR" && !linkedCoordinator) {
+        return Response.json({ error: "Selecciona un Coordinador F1 activo para este usuario." }, { status: 400 });
+      }
       const requestedUserId = Number(userPayload.userId);
       const isUpdate = Number.isInteger(requestedUserId) && requestedUserId > 0;
       const [existingUser] = isUpdate
@@ -633,12 +701,12 @@ export async function POST(request: Request) {
         const storedUsername = existingUser.username || username;
         if (existingUser.authUserId) {
           const { error } = await admin.auth.admin.updateUserById(existingUser.authUserId, {
-            app_metadata: { application: "LOGISTICA_F1", username: storedUsername, role, active },
+            app_metadata: { application: "LOGISTICA_F1", username: storedUsername, role, active, coordinator_id: coordinatorId },
             user_metadata: { display_name: displayName },
           });
           if (error) return Response.json({ error: `No se pudo actualizar la cuenta: ${error.message}` }, { status: 400 });
         }
-        const [savedUser] = await db.update(appUsers).set({ displayName, role, active, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(appUsers.id, existingUser.id)).returning();
+        const [savedUser] = await db.update(appUsers).set({ displayName, role, coordinatorId, active, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(appUsers.id, existingUser.id)).returning();
         return Response.json({ ok: true, user: savedUser, accountStatus: active ? "ACTIVA" : "INACTIVA" });
       }
 
@@ -647,7 +715,7 @@ export async function POST(request: Request) {
         email,
         password: temporaryPassword,
         email_confirm: true,
-        app_metadata: { application: "LOGISTICA_F1", username, role, active },
+        app_metadata: { application: "LOGISTICA_F1", username, role, active, coordinator_id: coordinatorId },
         user_metadata: { display_name: displayName },
       });
       if (createError || !created.user) return Response.json({ error: `No se pudo crear la cuenta: ${createError?.message || "respuesta inválida de Supabase"}` }, { status: 400 });
@@ -659,6 +727,7 @@ export async function POST(request: Request) {
           authUserId: created.user.id,
           displayName,
           role,
+          coordinatorId,
           active,
           mustChangePassword: true,
           invitationStatus: "CUENTA_CREADA",
@@ -782,7 +851,9 @@ export async function POST(request: Request) {
 
     if (payload.action === "request") {
       const requestPayload = payload as EquipmentRequestInput;
-      const coordinatorName = clean(requestPayload.coordinatorName).toUpperCase();
+      const coordinatorName = access.role === "COORDINADOR"
+        ? normalizeParty(assignedCoordinator?.name)
+        : clean(requestPayload.coordinatorName).toUpperCase();
       const coordinatorEntel = clean(requestPayload.coordinatorEntel).toUpperCase();
       const orderNumber = clean(requestPayload.orderNumber);
       const contractorRuc = clean(requestPayload.contractorRuc).replace(/\D/g, "");
@@ -830,7 +901,7 @@ export async function POST(request: Request) {
       const uniqueProductIds = [...new Set(normalizedItems.map((item) => item.productId))];
       const availableProducts = await Promise.all(uniqueProductIds.map((id) => db.select().from(products).where(eq(products.id, id)).limit(1)));
       if (availableProducts.some((rows) => !rows[0])) return Response.json({ error: "Uno de los SKU solicitados ya no existe." }, { status: 404 });
-      const coordinatorMatch = (await db.select().from(coordinators).where(and(
+      const coordinatorMatch = access.role === "COORDINADOR" ? assignedCoordinator : (await db.select().from(coordinators).where(and(
         eq(coordinators.name, coordinatorName),
         eq(coordinators.organization, "F1"),
         eq(coordinators.active, true),
@@ -847,14 +918,27 @@ export async function POST(request: Request) {
         return Response.json({ error: "Selecciona un Coordinador Entel activo." }, { status: 400 });
       }
       const movementRows = await db.select().from(movements);
+      const reservationRows = (await db.select({
+        productId: equipmentRequests.productId,
+        orderNumber: equipmentRequests.orderNumber,
+        seriesLot: equipmentRequests.seriesLot,
+        quantity: equipmentRequests.quantity,
+        status: equipmentRequests.status,
+      }).from(equipmentRequests)).filter((row) => ["PENDIENTE", "VALIDADA"].includes(row.status));
       const normalizedOrder = orderNumber.toUpperCase();
       for (const item of requestedByControl.values()) {
         const { productId, requestedQuantity, seriesLot } = { productId: item.productId, requestedQuantity: item.quantity, seriesLot: item.seriesLot };
         const orderRows = movementRows.filter((row) => row.productId === productId && clean(row.orderNumber).toUpperCase() === normalizedOrder);
         const hasIngreso = orderRows.some((row) => ["entrada", "devolucion", "regularizacion"].includes(row.type));
-        const available = seriesLot
+        const physicalAvailable = seriesLot
           ? orderRows.reduce((total, row) => total + stockEffect(row.type) * trackedSeriesQuantity(row.serials, row.quantity, seriesLot), 0)
           : orderRows.filter((row) => !splitSeries(row.serials).length).reduce((total, row) => total + stockEffect(row.type) * row.quantity, 0);
+        const reserved = reservationRows
+          .filter((row) => row.productId === productId
+            && normalizeParty(row.orderNumber) === normalizedOrder
+            && normalizeParty(row.seriesLot) === normalizeParty(seriesLot))
+          .reduce((total, row) => total + row.quantity, 0);
+        const available = Math.max(0, physicalAvailable - reserved);
         if (!hasIngreso) return Response.json({ error: `El SKU seleccionado no tiene un ingreso asociado al pedido ${orderNumber}.` }, { status: 409 });
         if (requestedQuantity > available) return Response.json({ error: `Stock insuficiente para ${seriesLot || "stock sin serie/lote"} del pedido ${orderNumber}. Disponible: ${Math.max(0, available)}.` }, { status: 409 });
       }
@@ -865,8 +949,9 @@ export async function POST(request: Request) {
       const requestCode = `PED-F1-${requestDate}-${String(requestSequence).padStart(6, "0")}`;
       const created = await db.insert(equipmentRequests).values([...requestedByControl.values()].map(({ productId, quantity, seriesLot }) => ({
         requestCode,
+        coordinatorId: coordinatorMatch?.id ?? null,
         coordinatorName,
-        coordinatorEmail: clean(requestPayload.coordinatorEmail).toLowerCase() || coordinatorMatch?.email || "",
+        coordinatorEmail: access.role === "COORDINADOR" ? coordinatorMatch?.email || "" : clean(requestPayload.coordinatorEmail).toLowerCase() || coordinatorMatch?.email || "",
         coordinatorEntel,
         orderNumber,
         project: clean(requestPayload.project),
