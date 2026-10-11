@@ -1,8 +1,9 @@
 import KardexApp from "./KardexApp";
 import LoginScreen, { AccessDeniedScreen, DeploymentSetupScreen } from "./LoginScreen";
+import PasswordChangeScreen from "./PasswordChangeScreen";
 import {
+  getKardexAccess,
   getAuthenticatedUser,
-  isAuthorizedKardexUser,
   signInPath,
   signOutPath,
 } from "./auth";
@@ -22,8 +23,13 @@ export default async function Home() {
     return <LoginScreen signInPath={signInPath("/")} />;
   }
 
-  if (!(await isAuthorizedKardexUser(user.email))) {
+  const access = await getKardexAccess(user.email, user.userId, user.authProvider);
+  if (!access?.active) {
     return <AccessDeniedScreen email={user.email} signOutPath={signOutPath()} />;
+  }
+
+  if (user.authProvider === "supabase" && access.mustChangePassword) {
+    return <PasswordChangeScreen displayName={access.displayName || user.displayName} />;
   }
 
   return (

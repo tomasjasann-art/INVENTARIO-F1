@@ -262,13 +262,22 @@ export const appUsers = pgTable(
   {
     id: serial("id").primaryKey(),
     email: text("email").notNull(),
+    username: text("username").notNull().default(""),
+    authUserId: text("auth_user_id").notNull().default(""),
     displayName: text("display_name").notNull().default(""),
     role: text("role", { enum: ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA"] }).notNull().default("SOLO_LECTURA"),
     active: boolean("active").notNull().default(true),
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
+    passwordUpdatedAt: text("password_updated_at").notNull().default(""),
+    lastLoginAt: text("last_login_at").notNull().default(""),
     invitationStatus: text("invitation_status").notNull().default("PENDIENTE"),
     invitedAt: text("invited_at").notNull().default(""),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
-  (table) => [uniqueIndex("app_users_email_unique").on(table.email)],
+  (table) => [
+    uniqueIndex("app_users_email_unique").on(table.email),
+    uniqueIndex("app_users_username_unique").on(table.username).where(sql`${table.username} <> ''`),
+    uniqueIndex("app_users_auth_user_id_unique").on(table.authUserId).where(sql`${table.authUserId} <> ''`),
+  ],
 );

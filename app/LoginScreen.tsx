@@ -1,7 +1,32 @@
-import { ArrowRight, Boxes, LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
+"use client";
+
+import { FormEvent, useState } from "react";
+import { ArrowRight, Boxes, KeyRound, LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
 import Image from "next/image";
 
 export default function LoginScreen({ signInPath }: { signInPath: string }) {
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget).entries())),
+      });
+      const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(body.error || "No se pudo iniciar sesión.");
+      window.location.replace("/");
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : "No se pudo iniciar sesión.");
+      setSubmitting(false);
+    }
+  }
+
   return (
     <main className="login-page">
       <section className="login-brand-panel">
@@ -26,23 +51,20 @@ export default function LoginScreen({ signInPath }: { signInPath: string }) {
           <Image className="login-client-logo" src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
           <div className="login-secure-label"><ShieldCheck size={15} /> ACCESO PRIVADO</div>
           <h2>Bienvenido</h2>
-          <p>Ingresa con el <strong>correo corporativo @f1.services que el Administrador registró</strong> en Logística F1.</p>
+          <p>Ingresa con el <strong>usuario y contraseña que el Administrador creó</strong> en Logística F1.</p>
 
-          <div className="login-access-steps">
-            <strong>¿Cómo ingresar?</strong>
-            <ol>
-              <li><b>1</b><span>Abre la invitación enviada a tu correo corporativo y crea tu acceso.</span></li>
-              <li><b>2</b><span>Luego ingresa con exactamente el mismo correo @f1.services.</span></li>
-            </ol>
-          </div>
+          <form className="internal-login-form" onSubmit={login}>
+            <label><span>Usuario</span><input name="username" autoComplete="username" required placeholder="nombre.apellido" /></label>
+            <label><span>Contraseña</span><input name="password" type="password" autoComplete="current-password" required placeholder="••••••••••" /></label>
+            {error && <div className="login-form-error">{error}</div>}
+            <button className="login-submit login-submit-button" type="submit" disabled={submitting}><KeyRound size={18} />{submitting ? "Ingresando..." : "Ingresar a Logística F1"}</button>
+          </form>
 
-          <a className="login-submit" href={signInPath} target="_top">
-            Ingresar con correo F1 <ArrowRight size={18} />
-          </a>
+          <a className="legacy-login-link" href={signInPath} target="_top">Acceso anterior con correo F1 <ArrowRight size={14} /></a>
 
           <div className="login-security-note">
             <ShieldCheck size={18} />
-            <span>Solo ingresan correos registrados previamente en <b>Configuración → Usuarios y permisos</b>.</span>
+            <span>Solo ingresan cuentas activas creadas en <b>Configuración → Usuarios y permisos</b>.</span>
           </div>
 
           <div className="login-module-list">
@@ -67,7 +89,7 @@ export function DeploymentSetupScreen({ missing }: { missing: string[] }) {
     <section className="login-access-panel"><div className="login-card access-denied-card">
       <div className="login-secure-label denied"><ShieldAlert size={15} /> CONFIGURACIÓN PENDIENTE</div>
       <h2>Faltan variables en Vercel</h2>
-      <p>Conecta Supabase PostgreSQL y Clerk al proyecto y agrega estas variables:</p>
+      <p>Conecta Supabase PostgreSQL y Supabase Auth al proyecto y agrega estas variables:</p>
       <div className="login-security-note"><ShieldCheck size={18} /><span><b>{missing.join(", ")}</b></span></div>
       <p>Después vuelve a desplegar la rama <strong>main</strong>.</p>
     </div></section>
@@ -85,9 +107,9 @@ export function AccessDeniedScreen({ email, signOutPath }: { email: string; sign
     </section>
     <section className="login-access-panel"><div className="login-card access-denied-card">
       <div className="login-secure-label denied"><ShieldAlert size={15} /> ACCESO NO AUTORIZADO</div>
-      <h2>Correo sin permiso</h2>
+      <h2>Usuario sin permiso</h2>
       <p>La cuenta <strong>{email}</strong> no está registrada o se encuentra inactiva.</p>
-      <div className="login-security-note"><ShieldCheck size={18} /><span>Pide al Administrador que registre este correo exacto en <b>Configuración → Usuarios y permisos</b>.</span></div>
+      <div className="login-security-note"><ShieldCheck size={18} /><span>Pide al Administrador que habilite tu usuario en <b>Configuración → Usuarios y permisos</b>.</span></div>
       <a className="login-submit" href={signOutPath} target="_top"><LogOut size={18} />Cerrar sesión y cambiar cuenta</a>
     </div></section>
   </main>;

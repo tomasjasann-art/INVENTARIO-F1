@@ -1,16 +1,40 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
+import { cookies } from "next/headers";
 import { getDb } from "../db";
 import { appUsers } from "../db/schema";
+import { F1_ACCESS_COOKIE, userFromAccessToken } from "../lib/supabase-auth";
+import { isClerkConfigured } from "./deployment-config";
 
 export type AuthenticatedUser = {
   userId: string;
   displayName: string;
   email: string;
   fullName: string | null;
+  authProvider: "supabase" | "clerk";
 };
 
 export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> {
+  const cookieStore = await cookies();
+  const accessToken = cookieStore.get(F1_ACCESS_COOKIE)?.value ?? "";
+  if (accessToken) {
+    const supabaseUser = await userFromAccessToken(accessToken);
+    const email = supabaseUser?.email?.trim().toLowerCase();
+    if (supabaseUser && email) {
+      const displayName = typeof supabaseUser.user_metadata?.display_name === "string"
+        ? supabaseUser.user_metadata.display_name.trim()
+        : "";
+      return {
+        userId: supabaseUser.id,
+        displayName: displayName || email.split("@")[0],
+        email,
+        fullName: displayName || null,
+        authProvider: "supabase",
+      };
+    }
+  }
+
+  if (!isClerkConfigured()) return null;
   const user = await currentUser();
   if (!user) return null;
 
@@ -25,6 +49,7 @@ export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> 
     displayName: fullName ?? primaryEmail,
     email: primaryEmail.toLowerCase(),
     fullName,
+    authProvider: "clerk",
   };
 }
 
@@ -38,17 +63,44 @@ export function isKardexAdminEmail(email: string): boolean {
 }
 
 export async function isAuthorizedKardexUser(email: string): Promise<boolean> {
+  return Boolean((await getKardexAccess(email))?.active);
+}
+
+export async function getKardexAccess(
+  email: string,
+  authUserId = "",
+  authProvider: AuthenticatedUser["authProvider"] = "clerk",
+) {
   const normalized = email.trim().toLowerCase();
-  if (isKardexAdminEmail(normalized)) return true;
+  if (authProvider === "clerk" && isKardexAdminEmail(normalized)) {
+    return {
+      id: 0,
+      email: normalized,
+      username: "",
+      authUserId: "",
+      displayName: "Administrador",
+      role: "ADMINISTRADOR" as const,
+      active: true,
+      mustChangePassword: false,
+      passwordUpdatedAt: "",
+      lastLoginAt: "",
+      invitationStatus: "LEGACY",
+      invitedAt: "",
+      createdAt: "",
+      updatedAt: "",
+    };
+  }
 
   const db = getDb();
   const [record] = await db
-    .select({ active: appUsers.active })
+    .select()
     .from(appUsers)
-    .where(eq(appUsers.email, normalized))
+    .where(authProvider === "supabase" && authUserId
+      ? eq(appUsers.authUserId, authUserId)
+      : eq(appUsers.email, normalized))
     .limit(1);
 
-  return record?.active === true;
+  return record ?? null;
 }
 
 export function signInPath(returnTo = "/"): string {

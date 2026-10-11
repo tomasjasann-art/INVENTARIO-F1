@@ -199,9 +199,14 @@ type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA";
 type AppUser = {
   id: number;
   email: string;
+  username: string;
+  authUserId: string;
   displayName: string;
   role: UserRole;
   active: boolean;
+  mustChangePassword: boolean;
+  passwordUpdatedAt: string;
+  lastLoginAt: string;
   invitationStatus: string;
   invitedAt: string;
 };
@@ -218,7 +223,7 @@ type KardexData = {
   auditHistoryRecords: AuditRecord[];
   equipmentRequests: EquipmentRequest[];
   appUsers: AppUser[];
-  currentUser?: { email: string; displayName: string; role: UserRole; active: boolean };
+  currentUser?: { email: string; displayName: string; role: UserRole; active: boolean; authProvider?: "supabase" | "clerk"; mustChangePassword?: boolean };
 };
 type View = "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
 
@@ -1669,6 +1674,8 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
   const [scope, setScope] = useState<"operations" | "all">("operations");
   const [confirmation, setConfirmation] = useState("");
   const [backupDownloaded, setBackupDownloaded] = useState(false);
+  const [resetUserId, setResetUserId] = useState<number | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
   const phrase = scope === "all" ? "BORRAR TODO" : "LIMPIAR PRUEBAS";
 
   async function downloadBackup() {
@@ -1696,6 +1703,18 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
     if (ok) form.reset();
   }
 
+  async function resetPassword() {
+    if (!resetUserId || temporaryPassword.length < 10) return;
+    const ok = await onSave(
+      { action: "appUserResetPassword", userId: resetUserId, temporaryPassword },
+      "Contraseña temporal actualizada. El usuario deberá cambiarla al ingresar.",
+    );
+    if (ok) {
+      setResetUserId(null);
+      setTemporaryPassword("");
+    }
+  }
+
   return <section className="settings-grid">
     <article className="panel backup-card"><span><Download size={23} /></span><div><small>RESPALDO · OPCIONAL Y RECOMENDADO</small><h2>Descargar respaldo completo</h2><p>Genera un Excel con maestro, movimientos, conciliaciones, auditorías, proveedores, coordinadores y solicitudes antes de limpiar.</p><button className="secondary-button" onClick={() => void downloadBackup()}><Download size={16} />{backupDownloaded ? "Respaldo descargado" : "Descargar respaldo Excel"}</button></div></article>
     <article className="panel cleanup-card"><div className="cleanup-head"><span><ShieldCheck size={23} /></span><div><small>PASO 2 · LIMPIEZA PROTEGIDA</small><h2>Preparar la carga real</h2><p>Selecciona exactamente qué deseas borrar.</p></div></div>
@@ -1703,7 +1722,31 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
       <div className="cleanup-confirm"><label className="field"><span>Escribe <b>{phrase}</b> para confirmar</span><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={phrase} /></label><button className="danger-button cleanup-action" disabled={saving || confirmation.trim().toUpperCase() !== phrase} onClick={() => void cleanup()}>{saving ? "Limpiando..." : "Ejecutar limpieza"}</button></div>
       <p className="cleanup-note">Estado actual: {number.format(data.movements.length)} movimientos · {number.format(data.installationValidations.length)} conciliaciones · {number.format(data.auditImports.length)} cortes · {number.format(data.equipmentRequests.length)} solicitudes.</p>
     </article>
-    <article className="panel access-card"><div className="panel-title"><div><h2>Usuarios y permisos</h2><p>Crea o actualiza usuarios corporativos @f1.services. Al registrar uno nuevo se envía una invitación segura para que defina su acceso.</p></div><ShieldCheck size={21} /></div><form className="access-form" onSubmit={saveUser}><label className="field"><span>Nombre</span><input name="displayName" placeholder="Nombre del colaborador" /></label><label className="field"><span>Correo corporativo *</span><input name="email" type="email" autoComplete="email" required placeholder="nombre@f1.services" pattern=".+@f1\\.services" /></label><label className="field"><span>Rol *</span><select name="role" defaultValue="SOLO_LECTURA"><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></label><button className="primary-button" type="submit" disabled={saving}><Plus size={15} />Invitar usuario</button></form><div className="role-guide"><span><b>Administrador</b> configura usuarios y limpia datos.</span><span><b>Logística</b> registra y carga operaciones.</span><span><b>Coordinador</b> crea solicitudes.</span><span><b>Solo lectura</b> consulta sin editar.</span></div><div className="table-wrap"><table><thead><tr><th>Usuario</th><th>Correo de acceso</th><th>Rol</th><th>Estado</th><th>Invitación</th></tr></thead><tbody>{!data.appUsers.length ? <tr><td colSpan={5}><Empty text="Agrega el correo @f1.services de cada integrante para enviarle su invitación." /></td></tr> : data.appUsers.map((appUser) => <tr key={appUser.id}><td><strong>{appUser.displayName || "Sin nombre"}</strong></td><td>{appUser.email}</td><td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", email: appUser.email, displayName: appUser.displayName, role: event.target.value, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></td><td><select value={appUser.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "appUser", email: appUser.email, displayName: appUser.displayName, role: appUser.role, active: event.target.value === "ACTIVO" }, "Estado del usuario actualizado.")}><option>ACTIVO</option><option>INACTIVO</option></select></td><td><small>{appUser.invitationStatus || (appUser.invitedAt ? "ENVIADA" : "PENDIENTE")}</small></td></tr>)}</tbody></table></div></article>
+    <article className="panel access-card">
+      <div className="panel-title">
+        <div><h2>Usuarios y permisos</h2><p>Crea cuentas internas con usuario y contraseña. No necesitan un correo real ni una cuenta de ChatGPT.</p></div>
+        <ShieldCheck size={21} />
+      </div>
+      <form className="access-form internal-user-form" onSubmit={saveUser}>
+        <label className="field"><span>Nombre *</span><input name="displayName" required placeholder="Nombre del colaborador" /></label>
+        <label className="field"><span>Usuario *</span><input name="username" required minLength={4} maxLength={40} pattern="[a-zA-Z0-9._-]+" autoComplete="off" placeholder="nombre.apellido" /></label>
+        <label className="field"><span>Contraseña temporal *</span><input name="temporaryPassword" type="password" required minLength={10} autoComplete="new-password" placeholder="Mínimo 10 caracteres" /></label>
+        <label className="field"><span>Rol *</span><select name="role" defaultValue="SOLO_LECTURA"><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></label>
+        <button className="primary-button" type="submit" disabled={saving}><Plus size={15} />Crear usuario</button>
+      </form>
+      <div className="role-guide"><span><b>Administrador</b> configura usuarios y limpia datos.</span><span><b>Logística</b> registra y carga operaciones.</span><span><b>Coordinador</b> crea solicitudes.</span><span><b>Solo lectura</b> consulta sin editar.</span></div>
+      <div className="table-wrap"><table className="user-access-table"><thead><tr><th>Colaborador</th><th>Usuario</th><th>Rol</th><th>Estado</th><th>Seguridad</th><th>Último acceso</th></tr></thead><tbody>
+        {!data.appUsers.length ? <tr><td colSpan={6}><Empty text="Crea la primera cuenta interna para tu equipo." /></td></tr> : data.appUsers.map((appUser) => <tr key={appUser.id}>
+          <td><strong>{appUser.displayName || "Sin nombre"}</strong><small>{appUser.username ? "Cuenta interna" : "Acceso anterior por correo"}</small></td>
+          <td><b>{appUser.username || appUser.email}</b></td>
+          <td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: event.target.value, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></td>
+          <td><select value={appUser.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: appUser.role, active: event.target.value === "ACTIVO" }, "Estado del usuario actualizado.")}><option>ACTIVO</option><option>INACTIVO</option></select></td>
+          <td>{appUser.authUserId ? <div className="password-state"><span className={appUser.mustChangePassword ? "warning" : "ok"}>{appUser.mustChangePassword ? "Cambio pendiente" : "Contraseña definida"}</span><button type="button" className="text-action" disabled={saving} onClick={() => { setResetUserId(appUser.id); setTemporaryPassword(""); }}><RefreshCw size={12} />Restablecer</button></div> : <small>Cuenta heredada</small>}</td>
+          <td><small>{appUser.lastLoginAt ? new Date(appUser.lastLoginAt).toLocaleString("es-PE") : "Sin ingreso"}</small></td>
+        </tr>)}
+      </tbody></table></div>
+      {resetUserId !== null && <div className="password-reset-bar"><div><strong>Restablecer contraseña temporal</strong><small>El usuario deberá reemplazarla la próxima vez que ingrese.</small></div><input type="password" value={temporaryPassword} onChange={(event) => setTemporaryPassword(event.target.value)} minLength={10} autoComplete="new-password" placeholder="Nueva contraseña temporal" /><button type="button" className="primary-button" disabled={saving || temporaryPassword.length < 10} onClick={() => void resetPassword()}>Guardar</button><button type="button" className="secondary-button" onClick={() => { setResetUserId(null); setTemporaryPassword(""); }}>Cancelar</button></div>}
+    </article>
   </section>;
 }
 
