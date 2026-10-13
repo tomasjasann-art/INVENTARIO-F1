@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import AuditView, { type AuditImportRow, type AuditRecord } from "./AuditView";
+import GrIngresoImport from "./GrIngresoImport";
 import { kardexDate, normalizeKardexDate } from "../lib/kardex-date";
 
 type Product = {
@@ -433,7 +434,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
   const [error, setError] = useState("");
   const [view, setView] = useState<View>("resumen");
   const [search, setSearch] = useState("");
-  const [modal, setModal] = useState<"movement" | "product" | null>(null);
+  const [modal, setModal] = useState<"movement" | "product" | "grIngreso" | null>(null);
   const [movementType, setMovementType] = useState<Movement["type"]>("entrada");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [equipmentModuleOpen, setEquipmentModuleOpen] = useState(true);
@@ -702,6 +703,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
               </div>}
             </div>
             {!isCoordinator && !(["solicitudes", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
+            {canOperate && view === "ingresos" && <button className="secondary-button quick-movement gr-read-button" onClick={() => setModal("grIngreso")}><FileSpreadsheet size={17} />Leer GR de ingreso</button>}
             {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
             {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
             {canOperate && view === "carga" && <button className="secondary-button product-button" onClick={() => setModal("product")}><PackagePlus size={17} />Nuevo SKU</button>}
@@ -768,6 +770,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
 
       {modal === "movement" && <MovementModal products={data.products} coordinators={data.coordinators} suppliers={data.suppliers} initialType={movementType} warehouse={warehouse} saving={saving} onClose={() => setModal(null)} onSave={(payload) => void save(payload, "Movimiento registrado correctamente.")} onNewProduct={() => setModal("product")} />}
       {modal === "product" && <ProductModal products={data.products} saving={saving} onClose={() => setModal(null)} onSave={(payload) => void save(payload, "SKU guardado correctamente.")} />}
+      {modal === "grIngreso" && <GrIngresoImport products={data.products} coordinators={data.coordinators} suppliers={data.suppliers} saving={saving} onClose={() => setModal(null)} onSave={(payload) => save(payload, "Ingreso desde GR registrado correctamente.")} />}
       {message && <div className="toast"><span>✓</span>{message}</div>}
       {sidebarOpen && <button className="overlay" onClick={() => setSidebarOpen(false)} aria-label="Cerrar menú" />}
     </div>
