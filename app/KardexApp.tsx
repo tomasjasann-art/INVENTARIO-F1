@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import AuditView, { type AuditImportRow, type AuditRecord } from "./AuditView";
+import EquipmentReturnsView, { type EquipmentReturnRecord, type ProductIdentifier } from "./EquipmentReturnsView";
 import GrIngresoImport from "./GrIngresoImport";
 import { kardexDate, normalizeKardexDate } from "../lib/kardex-date";
 
@@ -244,11 +245,13 @@ type KardexData = {
   auditRecords: AuditRecord[];
   auditHistoryRecords: AuditRecord[];
   equipmentRequests: EquipmentRequest[];
+  equipmentReturns: EquipmentReturnRecord[];
+  productIdentifiers: ProductIdentifier[];
   appUsers: AppUser[];
   coordinatorSummary?: CoordinatorSummary | null;
   currentUser?: { email: string; displayName: string; role: UserRole; active: boolean; authProvider?: "supabase" | "clerk"; mustChangePassword?: boolean; coordinatorId?: number | null; coordinatorName?: string };
 };
-type View = "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
+type View = "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "devoluciones" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
 
 const money = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" });
 const number = new Intl.NumberFormat("es-PE");
@@ -427,7 +430,7 @@ function userInitials(value: string) {
 }
 
 export default function KardexApp({ user, signOutPath }: { user: KardexUser; signOutPath: string }) {
-  const [data, setData] = useState<KardexData>({ products: [], movements: [], stockMovements: [], stockReservations: [], sourceRecords: [], coordinators: [], suppliers: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], appUsers: [] });
+  const [data, setData] = useState<KardexData>({ products: [], movements: [], stockMovements: [], stockReservations: [], sourceRecords: [], coordinators: [], suppliers: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], equipmentReturns: [], productIdentifiers: [], appUsers: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -468,6 +471,8 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
         auditRecords: body.auditRecords ?? [],
         auditHistoryRecords: body.auditHistoryRecords ?? [],
         equipmentRequests: body.equipmentRequests ?? [],
+        equipmentReturns: body.equipmentReturns ?? [],
+        productIdentifiers: body.productIdentifiers ?? [],
         appUsers: body.appUsers ?? [],
         coordinatorSummary: body.coordinatorSummary,
         currentUser: body.currentUser,
@@ -674,6 +679,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
             <button className={view === "stock" ? "active" : ""} onClick={() => { setView("stock"); setSidebarOpen(false); }}><Boxes size={19} />{isCoordinator ? "Stock disponible" : "Stock actual"}</button>
             {!isCoordinator && <button className={view === "lotes" ? "active" : ""} onClick={() => { setView("lotes"); setSidebarOpen(false); }}><Layers3 size={19} />Series y Lotes</button>}
             <button className={view === "solicitudes" ? "active" : ""} onClick={() => { setView("solicitudes"); setSidebarOpen(false); }}><ShoppingCart size={19} />Solicitudes</button>
+            {canOperate && <button className={view === "devoluciones" ? "active" : ""} onClick={() => { setView("devoluciones"); setSidebarOpen(false); }}><RefreshCw size={19} />Devoluciones</button>}
             {canOperate && <button className={view === "carga" ? "active" : ""} onClick={() => { setView("carga"); setSidebarOpen(false); }}><Upload size={19} />Carga masiva</button>}
             {!isCoordinator && <button className={view === "conciliacion" ? "active" : ""} onClick={() => { setView("conciliacion"); setSidebarOpen(false); }}><Scale size={19} />Conciliación</button>}
             {!isCoordinator && <button className={view === "auditoria" ? "active" : ""} onClick={() => { setView("auditoria"); setSidebarOpen(false); }}><Database size={19} />Auditoría Entel</button>}
@@ -702,7 +708,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
                 {notificationRequests.length > 0 && <button className="notification-footer" onClick={() => { setView("solicitudes"); setNotificationsOpen(false); }}>Ver todas las solicitudes</button>}
               </div>}
             </div>
-            {!isCoordinator && !(["solicitudes", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
+            {!isCoordinator && !(["solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
             {canOperate && view === "ingresos" && <button className="secondary-button quick-movement gr-read-button" onClick={() => setModal("grIngreso")}><FileSpreadsheet size={17} />Leer GR de ingreso</button>}
             {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
             {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
@@ -712,7 +718,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
 
         <div className="content">
           <section className="page-heading">
-            <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? (isCoordinator ? "Mi panel de coordinador" : "Resumen de equipos") : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? (isCoordinator ? "Stock disponible para solicitar" : "Stock y trazabilidad") : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? (isCoordinator ? "Consulta tus costos despachados, solicitudes y pendientes de cierre." : "Control centralizado por SKU, Serie/Lote, pedido y proyecto.") : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? (isCoordinator ? "Disponibilidad global sin costos ni movimientos de otros coordinadores." : "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU.") : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
+            <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? (isCoordinator ? "Mi panel de coordinador" : "Resumen de equipos") : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? (isCoordinator ? "Stock disponible para solicitar" : "Stock y trazabilidad") : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "devoluciones" ? "Devoluciones y recepción física" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? (isCoordinator ? "Consulta tus costos despachados, solicitudes y pendientes de cierre." : "Control centralizado por SKU, Serie/Lote, pedido y proyecto.") : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? (isCoordinator ? "Disponibilidad global sin costos ni movimientos de otros coordinadores." : "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU.") : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "devoluciones" ? "Registra primero la carga lógica y suma el equipo al stock solo cuando llegue físicamente a MO Company." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
           </section>
 
@@ -758,6 +764,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
             : <StockTable products={filteredProducts} movements={data.movements} loading={loading} />)}
           {view === "lotes" && <LotView movements={filteredMovements} loading={loading} />}
           {view === "solicitudes" && <RequestView products={data.products} movements={data.stockMovements} reservations={data.stockReservations} coordinators={data.coordinators} suppliers={data.suppliers} requests={data.equipmentRequests} warehouse={warehouse} loading={loading} saving={saving} canRequest={canRequest} canOperate={canOperate} coordinatorMode={isCoordinator} assignedCoordinatorName={data.currentUser?.coordinatorName ?? ""} focusedRequestCode={focusedRequestCode} onSave={save} />}
+          {view === "devoluciones" && canOperate && <EquipmentReturnsView products={data.products} productIdentifiers={data.productIdentifiers} movements={data.movements} coordinators={data.coordinators} returns={data.equipmentReturns} loading={loading} saving={saving} onSave={save} />}
           {view === "conciliacion" && <ConciliationView movements={data.movements} validations={data.installationValidations} auditImports={data.auditImports} auditRecords={data.auditRecords} auditHistoryRecords={data.auditHistoryRecords} loading={loading} saving={saving} onSave={(payload) => void save(payload, "Validación de instalación guardada.")} onOpenAudit={() => setView("auditoria")} />}
           {view === "auditoria" && <AuditView imports={data.auditImports} records={data.auditRecords} movements={data.movements} loading={loading} saving={saving} onSave={save} />}
           {view === "coordinadores" && <CoordinatorView coordinators={data.coordinators} loading={loading} saving={saving} onSave={(payload) => save(payload, "Coordinador actualizado correctamente.")} />}
@@ -1809,7 +1816,7 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
     const backup = await response.json() as Record<string, Array<Record<string, unknown>>>;
     const XLSX = await import("xlsx");
     const workbook = XLSX.utils.book_new();
-    const sheets: Array<[string, string]> = [["products", "Maestro SKU"], ["movements", "Movimientos"], ["sourceRecords", "Fuentes externas"], ["coordinators", "Coordinadores"], ["suppliers", "Proveedores"], ["installationValidations", "Conciliaciones"], ["auditImports", "Cortes auditoría"], ["auditRecords", "Detalle auditoría"], ["equipmentRequests", "Solicitudes"]];
+    const sheets: Array<[string, string]> = [["products", "Maestro SKU"], ["movements", "Movimientos"], ["sourceRecords", "Fuentes externas"], ["coordinators", "Coordinadores"], ["suppliers", "Proveedores"], ["installationValidations", "Conciliaciones"], ["auditImports", "Cortes auditoría"], ["auditRecords", "Detalle auditoría"], ["equipmentRequests", "Solicitudes"], ["equipmentReturns", "Devoluciones"], ["productIdentifiers", "Part Number SKU"]];
     sheets.forEach(([key, name]) => XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(backup[key] ?? []), name));
     XLSX.writeFile(workbook, `respaldo-logistica-f1-control-equipos-${today()}.xlsx`, { compression: true });
     setBackupDownloaded(true);
@@ -1841,11 +1848,11 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
   }
 
   return <section className="settings-grid">
-    <article className="panel backup-card"><span><Download size={23} /></span><div><small>RESPALDO · OPCIONAL Y RECOMENDADO</small><h2>Descargar respaldo completo</h2><p>Genera un Excel con maestro, movimientos, conciliaciones, auditorías, proveedores, coordinadores y solicitudes antes de limpiar.</p><button className="secondary-button" onClick={() => void downloadBackup()}><Download size={16} />{backupDownloaded ? "Respaldo descargado" : "Descargar respaldo Excel"}</button></div></article>
+    <article className="panel backup-card"><span><Download size={23} /></span><div><small>RESPALDO · OPCIONAL Y RECOMENDADO</small><h2>Descargar respaldo completo</h2><p>Genera un Excel con maestro, movimientos, conciliaciones, auditorías, solicitudes, devoluciones y relaciones Part Number–SKU antes de limpiar.</p><button className="secondary-button" onClick={() => void downloadBackup()}><Download size={16} />{backupDownloaded ? "Respaldo descargado" : "Descargar respaldo Excel"}</button></div></article>
     <article className="panel cleanup-card"><div className="cleanup-head"><span><ShieldCheck size={23} /></span><div><small>PASO 2 · LIMPIEZA PROTEGIDA</small><h2>Preparar la carga real</h2><p>Selecciona exactamente qué deseas borrar.</p></div></div>
-      <div className="cleanup-options"><label className={scope === "operations" ? "selected" : ""}><input type="radio" checked={scope === "operations"} onChange={() => { setScope("operations"); setConfirmation(""); }} /><strong>Limpiar operaciones de prueba</strong><span>Borra movimientos, conciliaciones, auditorías y solicitudes. Conserva maestro SKU y coordinadores.</span></label><label className={scope === "all" ? "selected danger" : "danger"}><input type="radio" checked={scope === "all"} onChange={() => { setScope("all"); setConfirmation(""); }} /><strong>Reinicio total</strong><span>También borra el maestro SKU y los coordinadores. El sistema quedará completamente vacío.</span></label></div>
+      <div className="cleanup-options"><label className={scope === "operations" ? "selected" : ""}><input type="radio" checked={scope === "operations"} onChange={() => { setScope("operations"); setConfirmation(""); }} /><strong>Limpiar operaciones de prueba</strong><span>Borra movimientos, conciliaciones, auditorías, solicitudes y devoluciones. Conserva maestro SKU, relaciones Part Number y coordinadores.</span></label><label className={scope === "all" ? "selected danger" : "danger"}><input type="radio" checked={scope === "all"} onChange={() => { setScope("all"); setConfirmation(""); }} /><strong>Reinicio total</strong><span>También borra el maestro SKU, relaciones Part Number y coordinadores. El sistema quedará completamente vacío.</span></label></div>
       <div className="cleanup-confirm"><label className="field"><span>Escribe <b>{phrase}</b> para confirmar</span><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={phrase} /></label><button className="danger-button cleanup-action" disabled={saving || confirmation.trim().toUpperCase() !== phrase} onClick={() => void cleanup()}>{saving ? "Limpiando..." : "Ejecutar limpieza"}</button></div>
-      <p className="cleanup-note">Estado actual: {number.format(data.movements.length)} movimientos · {number.format(data.installationValidations.length)} conciliaciones · {number.format(data.auditImports.length)} cortes · {number.format(data.equipmentRequests.length)} solicitudes.</p>
+      <p className="cleanup-note">Estado actual: {number.format(data.movements.length)} movimientos · {number.format(data.installationValidations.length)} conciliaciones · {number.format(data.auditImports.length)} cortes · {number.format(data.equipmentRequests.length)} solicitudes · {number.format(data.equipmentReturns.length)} devoluciones.</p>
     </article>
     <article className="panel access-card">
       <div className="panel-title">

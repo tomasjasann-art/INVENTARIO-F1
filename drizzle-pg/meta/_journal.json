@@ -64,6 +64,20 @@
       "when": 1791682382530,
       "tag": "0008_broad_pyro",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792002486400,
+      "tag": "0009_lame_dakota_north",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792002736924,
+      "tag": "0010_graceful_sue_storm",
+      "breakpoints": true
     }
   ]
 }

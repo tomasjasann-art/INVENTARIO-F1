@@ -6,8 +6,10 @@ import {
   auditRecords,
   coordinators,
   equipmentRequests,
+  equipmentReturns,
   installationValidations,
   movements,
+  productIdentifiers,
   products,
   sourceRecords,
   suppliers,
@@ -216,6 +218,31 @@ type RequestLogisticsInput = {
   logisticsNotes?: string;
 };
 
+type EquipmentReturnCreateInput = {
+  action?: "equipmentReturnCreate";
+  productId?: number;
+  coordinatorF1?: string;
+  orderNumber?: string;
+  serial?: string;
+  partNumber?: string;
+  sourceMovementId?: number | null;
+  matchMethod?: string;
+  matchConfidence?: number;
+  rawOcrText?: string;
+  evidenceImage?: string;
+  rememberIdentifier?: boolean;
+  notes?: string;
+};
+
+type EquipmentReturnStatus = "PENDIENTE_APROBACION" | "OBSERVADA" | "APROBADA_PENDIENTE_RECEPCION" | "RECIBIDA_FISICA" | "RECHAZADA";
+
+type EquipmentReturnStatusInput = {
+  action?: "equipmentReturnStatus";
+  returnId?: number;
+  status?: EquipmentReturnStatus;
+  notes?: string;
+};
+
 type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA";
 
 type AppUserInput = {
@@ -252,6 +279,10 @@ function validSupplierDocument(value: string) {
 
 function normalizeParty(value: unknown) {
   return clean(value).toUpperCase().replace(/\s+/g, " ");
+}
+
+function normalizeEquipmentIdentifier(value: unknown) {
+  return clean(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 function clean(value: unknown) {
@@ -341,7 +372,7 @@ async function latestEntelUnitCosts(db: ReturnType<typeof getDb>) {
 function errorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : "Error inesperado";
   if (message.includes("UNIQUE constraint failed") || message.includes("duplicate key value violates unique constraint")) return "El registro ya existe.";
-  if (message.includes("no such table") || message.includes("relation") && message.includes("does not exist")) return "La base de datos todavía no está inicializada. Ejecuta las migraciones de Neon.";
+  if (message.includes("no such table") || message.includes("relation") && message.includes("does not exist")) return "La base de datos todavía no está inicializada. Ejecuta las migraciones de Supabase.";
   return message;
 }
 
@@ -442,7 +473,7 @@ export async function GET(request: Request) {
     }
     if (new URL(request.url).searchParams.get("backup") === "1") {
       if (!mayOperate(access.role)) return Response.json({ error: "Tu perfil no puede descargar respaldos operativos." }, { status: 403 });
-      const [productRows, movementRows, sourceRows, coordinatorRows, supplierRows, validationRows, importRows, recordRows, requestRows, userRows] = await Promise.all([
+      const [productRows, movementRows, sourceRows, coordinatorRows, supplierRows, validationRows, importRows, recordRows, requestRows, returnRows, identifierRows, userRows] = await Promise.all([
         db.select().from(products),
         db.select().from(movements),
         db.select().from(sourceRecords),
@@ -452,9 +483,11 @@ export async function GET(request: Request) {
         db.select().from(auditImports),
         db.select().from(auditRecords),
         db.select().from(equipmentRequests),
+        db.select().from(equipmentReturns),
+        db.select().from(productIdentifiers),
         db.select().from(appUsers),
       ]);
-      return Response.json({ products: productRows, movements: movementRows, sourceRecords: sourceRows, coordinators: coordinatorRows, suppliers: supplierRows, installationValidations: validationRows, auditImports: importRows, auditRecords: recordRows, equipmentRequests: requestRows, appUsers: userRows });
+      return Response.json({ products: productRows, movements: movementRows, sourceRecords: sourceRows, coordinators: coordinatorRows, suppliers: supplierRows, installationValidations: validationRows, auditImports: importRows, auditRecords: recordRows, equipmentRequests: requestRows, equipmentReturns: returnRows, productIdentifiers: identifierRows, appUsers: userRows });
     }
     const productRows = await db.select().from(products).orderBy(products.description);
     const sourceRows = await db.select().from(sourceRecords).orderBy(desc(sourceRecords.id)).limit(3000);
@@ -462,6 +495,8 @@ export async function GET(request: Request) {
     const supplierRows = await db.select().from(suppliers).orderBy(suppliers.businessName);
     const validationRows = await db.select().from(installationValidations).orderBy(desc(installationValidations.id));
     const requestRows = await db.select().from(equipmentRequests).orderBy(desc(equipmentRequests.id)).limit(1200);
+    const returnRows = access.role === "COORDINADOR" ? [] : await db.select().from(equipmentReturns).orderBy(desc(equipmentReturns.id)).limit(1200);
+    const identifierRows = access.role === "COORDINADOR" ? [] : await db.select().from(productIdentifiers).orderBy(desc(productIdentifiers.id));
     const userRows = access.role === "ADMINISTRADOR" ? await db.select().from(appUsers).orderBy(appUsers.displayName, appUsers.email) : [];
     const [auditHistory, latestEntelRows, latestOracleRows] = await Promise.all([
       db.select().from(auditImports).where(eq(auditImports.status, "READY")).orderBy(desc(auditImports.id)).limit(12),
@@ -627,6 +662,12 @@ export async function GET(request: Request) {
         outboundGuidePhoto: await resolveEvidenceImage(row.outboundGuidePhoto),
         shippingTicketPhoto: await resolveEvidenceImage(row.shippingTicketPhoto),
       }))),
+      equipmentReturns: await Promise.all(returnRows.map(async (row) => ({
+        ...row,
+        evidenceImageStored: row.evidenceImage,
+        evidenceImage: await resolveEvidenceImage(row.evidenceImage),
+      }))),
+      productIdentifiers: identifierRows,
       appUsers: userRows,
       coordinatorSummary,
       currentUser: { email: user.email.toLowerCase(), displayName: user.displayName, role: access.role, active: access.active, authProvider: user.authProvider, mustChangePassword: "mustChangePassword" in access ? access.mustChangePassword : false, coordinatorId: assignedCoordinator?.id ?? null, coordinatorName: assignedCoordinator?.name ?? "" },
@@ -652,7 +693,7 @@ export async function POST(request: Request) {
         eq(coordinators.active, true),
       )).limit(1)
       : [];
-    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | AppUserInput | AppUserResetPasswordInput | CleanupInput;
+    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | EquipmentReturnCreateInput | EquipmentReturnStatusInput | AppUserInput | AppUserResetPasswordInput | CleanupInput;
     const action = clean(payload.action);
     if (!access.active) return Response.json({ error: "Tu usuario está inactivo. Comunícate con un administrador." }, { status: 403 });
     if (access.role === "COORDINADOR" && !assignedCoordinator) return Response.json({ error: "Tu cuenta no está vinculada a un Coordinador F1 activo." }, { status: 403 });
@@ -766,11 +807,13 @@ export async function POST(request: Request) {
       await db.transaction(async (tx) => {
         await tx.delete(installationValidations);
         await tx.delete(equipmentRequests);
+        await tx.delete(equipmentReturns);
         await tx.delete(movements);
         await tx.delete(sourceRecords);
         await tx.delete(auditRecords);
         await tx.delete(auditImports);
         if (scope === "all") {
+          await tx.delete(productIdentifiers);
           await tx.delete(products);
           await tx.delete(coordinators);
           await tx.delete(suppliers);
@@ -847,6 +890,164 @@ export async function POST(request: Request) {
         imported += 1;
       }
       return Response.json({ ok: true, imported, rejected: rejected.length, rejectionDetails: rejected.slice(0, 25) }, { status: 201 });
+    }
+
+    if (payload.action === "equipmentReturnCreate") {
+      const returnPayload = payload as EquipmentReturnCreateInput;
+      const productId = Number(returnPayload.productId);
+      const serial = clean(returnPayload.serial).toUpperCase();
+      const serialKey = normalizeEquipmentIdentifier(serial);
+      const partNumber = clean(returnPayload.partNumber).toUpperCase();
+      const normalizedPartNumber = normalizeEquipmentIdentifier(partNumber);
+      const coordinatorF1 = normalizeParty(returnPayload.coordinatorF1);
+      const orderNumber = clean(returnPayload.orderNumber).toUpperCase();
+      const evidence = normalizeEvidenceImage(returnPayload.evidenceImage);
+      if (!productId || serialKey.length < 5 || !coordinatorF1 || !evidence) {
+        return Response.json({ error: "Foto, serie, SKU y Coordinador F1 son obligatorios para la carga lógica." }, { status: 400 });
+      }
+      const [[product], [coordinator], activeReturns, serialMovementCandidates] = await Promise.all([
+        db.select().from(products).where(eq(products.id, productId)).limit(1),
+        db.select().from(coordinators).where(and(eq(coordinators.organization, "F1"), eq(coordinators.name, coordinatorF1), eq(coordinators.active, true))).limit(1),
+        db.select().from(equipmentReturns).where(eq(equipmentReturns.serialKey, serialKey)),
+        db.select().from(movements).where(sql`regexp_replace(upper(${movements.serials}), '[^A-Z0-9]', '', 'g') LIKE ${`%${serialKey}%`}`).orderBy(desc(movements.id)).limit(100),
+      ]);
+      if (!product) return Response.json({ error: "El SKU seleccionado ya no existe." }, { status: 404 });
+      if (!coordinator) return Response.json({ error: "Selecciona un Coordinador F1 activo." }, { status: 400 });
+      if (activeReturns.some((row) => !["RECIBIDA_FISICA", "RECHAZADA"].includes(row.status))) {
+        return Response.json({ error: `La serie ${serial} ya tiene una devolución activa.` }, { status: 409 });
+      }
+      const exactHistoricalMovements = serialMovementCandidates.filter((movement) => splitSeries(movement.serials).some((token) => normalizeEquipmentIdentifier(token) === serialKey));
+      const historicalMovement = exactHistoricalMovements.find((movement) => ["salida", "baja"].includes(movement.type)) ?? exactHistoricalMovements[0];
+      if (historicalMovement && historicalMovement.productId !== product.id) {
+        const [historicalProduct] = await db.select().from(products).where(eq(products.id, historicalMovement.productId)).limit(1);
+        return Response.json({ error: `La serie ${serial} pertenece históricamente al SKU ${historicalProduct?.sku || historicalMovement.productId}. Revisa la selección.` }, { status: 409 });
+      }
+      if (returnPayload.rememberIdentifier && normalizedPartNumber.length >= 5) {
+        const [existingIdentifier] = await db.select().from(productIdentifiers).where(eq(productIdentifiers.normalizedIdentifier, normalizedPartNumber)).limit(1);
+        if (existingIdentifier && existingIdentifier.productId !== product.id) {
+          const [mappedProduct] = await db.select().from(products).where(eq(products.id, existingIdentifier.productId)).limit(1);
+          return Response.json({ error: `El part number ${partNumber} ya está relacionado con ${mappedProduct?.sku || "otro SKU"}. Desmarca “Recordar relación” o corrige el dato.` }, { status: 409 });
+        }
+      }
+      const sequenceRows = await db.execute<{ returnSequence: string }>(sql`select nextval('equipment_return_code_seq')::text as "returnSequence"`);
+      const returnSequence = Number(sequenceRows[0]?.returnSequence);
+      if (!Number.isFinite(returnSequence)) return Response.json({ error: "No se pudo generar el código de devolución." }, { status: 500 });
+      const returnDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date()).replaceAll("-", "");
+      const returnCode = `DEV-F1-${returnDate}-${String(returnSequence).padStart(6, "0")}`;
+      const storedEvidence = await storeEvidenceImage(evidence, `devoluciones/${returnCode}/etiqueta`);
+      const createdBy = access.displayName || user.displayName || user.email;
+      const matchMethods = ["HISTORIAL_SERIE", "PART_NUMBER_GUARDADO", "PART_NUMBER_DESCRIPCION", "SKU_VISIBLE", "MANUAL"];
+      const [created] = await db.transaction(async (tx) => {
+        const rows = await tx.insert(equipmentReturns).values({
+          returnCode,
+          productId: product.id,
+          coordinatorId: coordinator.id,
+          sourceMovementId: historicalMovement?.id || Number(returnPayload.sourceMovementId) || null,
+          coordinatorF1: coordinator.name,
+          orderNumber: orderNumber || historicalMovement?.orderNumber || "",
+          serial,
+          serialKey,
+          detectedPartNumber: partNumber,
+          skuSnapshot: product.sku,
+          descriptionSnapshot: product.description,
+          matchMethod: historicalMovement ? "HISTORIAL_SERIE" : matchMethods.includes(clean(returnPayload.matchMethod)) ? clean(returnPayload.matchMethod) : "MANUAL",
+          matchConfidence: historicalMovement ? 100 : Math.min(100, Math.max(0, Math.round(Number(returnPayload.matchConfidence) || 0))),
+          rawOcrText: clean(returnPayload.rawOcrText).slice(0, 12_000),
+          evidenceImage: storedEvidence,
+          status: "PENDIENTE_APROBACION",
+          createdBy,
+          notes: clean(returnPayload.notes),
+        }).returning();
+        if (returnPayload.rememberIdentifier && normalizedPartNumber.length >= 5) {
+          await tx.insert(productIdentifiers).values({
+            productId: product.id,
+            identifier: partNumber,
+            normalizedIdentifier: normalizedPartNumber,
+            active: true,
+            createdBy,
+          }).onConflictDoUpdate({
+            target: productIdentifiers.normalizedIdentifier,
+            set: { identifier: partNumber, active: true, updatedAt: sql`CURRENT_TIMESTAMP` },
+          });
+        }
+        return rows;
+      });
+      return Response.json({ ok: true, returnCode, equipmentReturn: created }, { status: 201 });
+    }
+
+    if (payload.action === "equipmentReturnStatus") {
+      const statusPayload = payload as EquipmentReturnStatusInput;
+      const returnId = Number(statusPayload.returnId);
+      const allowed: EquipmentReturnStatus[] = ["PENDIENTE_APROBACION", "OBSERVADA", "APROBADA_PENDIENTE_RECEPCION", "RECIBIDA_FISICA", "RECHAZADA"];
+      const status = allowed.includes(statusPayload.status as EquipmentReturnStatus) ? statusPayload.status as EquipmentReturnStatus : undefined;
+      if (!returnId || !status) return Response.json({ error: "Devolución o estado inválido." }, { status: 400 });
+      const [record] = await db.select().from(equipmentReturns).where(eq(equipmentReturns.id, returnId)).limit(1);
+      if (!record) return Response.json({ error: "La devolución ya no existe." }, { status: 404 });
+      if (record.status === "RECIBIDA_FISICA") return Response.json({ error: "La recepción física ya fue confirmada y no puede repetirse." }, { status: 409 });
+      const notes = clean(statusPayload.notes);
+      if (status === "OBSERVADA" && !notes) return Response.json({ error: "Escribe la observación que debe corregirse." }, { status: 400 });
+      const operator = access.displayName || user.displayName || user.email;
+      if (status === "RECIBIDA_FISICA") {
+        if (record.status !== "APROBADA_PENDIENTE_RECEPCION") return Response.json({ error: "Primero debes aprobar la carga lógica." }, { status: 409 });
+        const [product] = await db.select().from(products).where(eq(products.id, record.productId)).limit(1);
+        if (!product) return Response.json({ error: "El SKU relacionado ya no existe." }, { status: 404 });
+        const existing = await db.select().from(movements).where(eq(movements.productId, product.id));
+        const serialBalance = existing.reduce((total, movement) => {
+          const contains = splitSeries(movement.serials).some((token) => normalizeEquipmentIdentifier(token) === record.serialKey);
+          if (!contains) return total;
+          return total + stockEffect(movement.type) * (splitSeries(movement.serials).length > 1 ? 1 : movement.quantity);
+        }, 0);
+        if (serialBalance > 0) return Response.json({ error: `La serie ${record.serial} ya figura disponible en el stock. No se duplicó el ingreso.` }, { status: 409 });
+        const entelCostCents = (await latestEntelUnitCosts(db)).get(product.sku.toUpperCase()) || 0;
+        const movementDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date());
+        const updated = await db.transaction(async (tx) => {
+          const [stockMovement] = await tx.insert(movements).values({
+            productId: product.id,
+            type: "devolucion",
+            quantity: 1,
+            movementDate,
+            document: record.returnCode,
+            project: product.defaultProject,
+            coordinatorF1: record.coordinatorF1,
+            serials: record.serial,
+            lotAssignment: "ORIGINAL",
+            stockLocation: "MO COMPANY",
+            unitMeasure: product.unit,
+            unitCostCents: product.unitCostCents || entelCostCents,
+            equipmentType: product.category,
+            orderNumber: record.orderNumber,
+            equipmentStatus: "DEVOLUCIÓN",
+            condition: "OPERATIVO",
+            origin: "CAMPO / COORDINADOR F1",
+            owner: product.owner,
+            recordStatus: "Disponible",
+            registeredBy: operator,
+            notes: `Recepción física desde ${record.returnCode}${notes ? ` · ${notes}` : ""}`,
+          }).returning();
+          const [returnRecord] = await tx.update(equipmentReturns).set({
+            status: "RECIBIDA_FISICA",
+            stockMovementId: stockMovement.id,
+            physicallyReceivedAt: sql`CURRENT_TIMESTAMP`,
+            receivedBy: operator,
+            notes,
+            updatedAt: sql`CURRENT_TIMESTAMP`,
+          }).where(eq(equipmentReturns.id, record.id)).returning();
+          return returnRecord;
+        });
+        return Response.json({ ok: true, equipmentReturn: updated, stockUpdated: true });
+      }
+      const transitionAllowed = status === "RECHAZADA"
+        || status === "OBSERVADA"
+        || (status === "APROBADA_PENDIENTE_RECEPCION" && ["PENDIENTE_APROBACION", "OBSERVADA"].includes(record.status));
+      if (!transitionAllowed) return Response.json({ error: "Ese cambio de estado no corresponde al flujo de devolución." }, { status: 409 });
+      const [updated] = await db.update(equipmentReturns).set({
+        status,
+        approvedAt: status === "APROBADA_PENDIENTE_RECEPCION" ? sql`CURRENT_TIMESTAMP` : record.approvedAt,
+        approvedBy: status === "APROBADA_PENDIENTE_RECEPCION" ? operator : record.approvedBy,
+        notes,
+        updatedAt: sql`CURRENT_TIMESTAMP`,
+      }).where(eq(equipmentReturns.id, record.id)).returning();
+      return Response.json({ ok: true, equipmentReturn: updated });
     }
 
     if (payload.action === "request") {

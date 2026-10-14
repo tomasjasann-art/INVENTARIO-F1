@@ -6,6 +6,11 @@ export const equipmentRequestCodeSequence = pgSequence("equipment_request_code_s
   increment: 1,
 });
 
+export const equipmentReturnCodeSequence = pgSequence("equipment_return_code_seq", {
+  startWith: 1,
+  increment: 1,
+});
+
 export const products = pgTable("products", {
   id: serial("id").primaryKey(),
   sku: text("sku").notNull().unique(),
@@ -283,5 +288,73 @@ export const appUsers = pgTable(
     uniqueIndex("app_users_username_unique").on(table.username).where(sql`${table.username} <> ''`),
     uniqueIndex("app_users_auth_user_id_unique").on(table.authUserId).where(sql`${table.authUserId} <> ''`),
     index("app_users_coordinator_id_idx").on(table.coordinatorId),
+  ],
+);
+
+export const productIdentifiers = pgTable(
+  "product_identifiers",
+  {
+    id: serial("id").primaryKey(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    identifier: text("identifier").notNull(),
+    normalizedIdentifier: text("normalized_identifier").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdBy: text("created_by").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("product_identifiers_normalized_unique").on(table.normalizedIdentifier),
+    index("product_identifiers_product_id_idx").on(table.productId),
+  ],
+);
+
+export const equipmentReturns = pgTable(
+  "equipment_returns",
+  {
+    id: serial("id").primaryKey(),
+    returnCode: text("return_code").notNull(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => products.id),
+    coordinatorId: integer("coordinator_id").references(() => coordinators.id, { onDelete: "set null" }),
+    sourceMovementId: integer("source_movement_id").references(() => movements.id, { onDelete: "set null" }),
+    stockMovementId: integer("stock_movement_id").references(() => movements.id, { onDelete: "set null" }),
+    coordinatorF1: text("coordinator_f1").notNull(),
+    orderNumber: text("order_number").notNull().default(""),
+    serial: text("serial").notNull(),
+    serialKey: text("serial_key").notNull(),
+    detectedPartNumber: text("detected_part_number").notNull().default(""),
+    skuSnapshot: text("sku_snapshot").notNull(),
+    descriptionSnapshot: text("description_snapshot").notNull(),
+    matchMethod: text("match_method").notNull().default("MANUAL"),
+    matchConfidence: integer("match_confidence").notNull().default(0),
+    rawOcrText: text("raw_ocr_text").notNull().default(""),
+    evidenceImage: text("evidence_image").notNull().default(""),
+    status: text("status", {
+      enum: ["PENDIENTE_APROBACION", "OBSERVADA", "APROBADA_PENDIENTE_RECEPCION", "RECIBIDA_FISICA", "RECHAZADA"],
+    }).notNull().default("PENDIENTE_APROBACION"),
+    logicalRegisteredAt: text("logical_registered_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    approvedAt: text("approved_at").notNull().default(""),
+    approvedBy: text("approved_by").notNull().default(""),
+    physicallyReceivedAt: text("physically_received_at").notNull().default(""),
+    receivedBy: text("received_by").notNull().default(""),
+    createdBy: text("created_by").notNull().default(""),
+    notes: text("notes").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("equipment_returns_active_serial_unique")
+      .on(table.serialKey)
+      .where(sql`${table.status} NOT IN ('RECIBIDA_FISICA', 'RECHAZADA')`),
+    uniqueIndex("equipment_returns_return_code_unique").on(table.returnCode),
+    index("equipment_returns_status_idx").on(table.status, table.id),
+    index("equipment_returns_product_id_idx").on(table.productId),
+    index("equipment_returns_coordinator_id_idx").on(table.coordinatorId),
+    index("equipment_returns_source_movement_id_idx").on(table.sourceMovementId),
+    index("equipment_returns_stock_movement_id_idx").on(table.stockMovementId),
   ],
 );
