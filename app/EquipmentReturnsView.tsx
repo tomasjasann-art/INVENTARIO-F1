@@ -23,6 +23,7 @@ import {
 import Image from "next/image";
 import { FormEvent, useMemo, useState } from "react";
 import type { ClipboardEvent, DragEvent } from "react";
+import { parseEquipmentReturnExcel } from "../lib/equipment-return-excel";
 import { normalizeEquipmentIdentifier, recognizeEquipmentReturn } from "../lib/equipment-return-recognition";
 
 type ReturnStatus = "PENDIENTE_APROBACION" | "OBSERVADA" | "APROBADA_PENDIENTE_RECEPCION" | "RECIBIDA_FISICA" | "RECHAZADA";
@@ -367,6 +368,24 @@ async function preparePhoto(file: File) {
   return { ocrCanvas, evidence };
 }
 
+function combineOcrCanvases(canvases: HTMLCanvasElement[]) {
+  if (!canvases.length) return null;
+  const width = Math.max(...canvases.map((canvas) => canvas.width));
+  const height = canvases.reduce((sum, canvas) => sum + canvas.height, 0);
+  const combined = document.createElement("canvas");
+  combined.width = width;
+  combined.height = height;
+  const context = combined.getContext("2d");
+  if (context) context.fillStyle = "#ffffff";
+  context?.fillRect(0, 0, width, height);
+  let top = 0;
+  canvases.forEach((canvas) => {
+    context?.drawImage(canvas, 0, top);
+    top += canvas.height;
+  });
+  return combined;
+}
+
 function returnExportRows(batch: ReturnBatch) {
   return batch.rows.map((record) => ({
     ID: record.batchItem,
@@ -419,6 +438,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   const [comments, setComments] = useState("");
   const [processingKey, setProcessingKey] = useState("");
   const [progress, setProgress] = useState(0);
+  const [excelImportStatus, setExcelImportStatus] = useState("");
   const [error, setError] = useState("");
   const [receivingBatch, setReceivingBatch] = useState("");
   const [receiptDrafts, setReceiptDrafts] = useState<ReceiptDraft[]>([]);
@@ -569,7 +589,170 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     setOrderNumber("");
     setComments("");
     setProgress(0);
+    setExcelImportStatus("");
     setError("");
+  }
+
+  async function importExcel(file?: File) {
+    if (!file || processingKey) return;
+    setProcessingKey("excel-import");
+    setProgress(1);
+    setError("");
+    setExcelImportStatus(`Leyendo ${file.name}…`);
+    let worker: Awaited<ReturnType<(typeof import("tesseract.js"))["createWorker"]>> | null = null;
+    let activeRowIndex = 0;
+    let totalRows = 1;
+    try {
+      const imported = await parseEquipmentReturnExcel(file);
+      totalRows = imported.rows.length;
+      const draftRows = imported.rows.map((source) => {
+        const product = products.find((item) => normalizeEquipmentIdentifier(item.sku) === normalizeEquipmentIdentifier(source.sku))
+          ?? products.find((item) => source.description && normalizeEquipmentIdentifier(item.description) === normalizeEquipmentIdentifier(source.description));
+        return {
+          ...newDraftRow(),
+          productId: product?.id ?? null,
+          productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
+          serial: source.serial.toUpperCase(),
+          quantity: source.quantity,
+          networkComponent: source.networkComponent.toUpperCase(),
+          subProject: source.subProject.toUpperCase(),
+          sourceProject: source.sourceProject.toUpperCase(),
+          hardwareTask: source.hardwareTask.toUpperCase(),
+          length: source.length,
+          condition: source.condition.toUpperCase(),
+          volumeM3: source.volumeM3,
+          matchMethod: product ? "SKU_VISIBLE" : "MANUAL",
+          matchConfidence: product ? 100 : 0,
+          notes: source.notes,
+          warnings: [...source.warnings],
+        } satisfies DraftRow;
+      });
+
+      setRows(draftRows);
+      const firstWithCoordinator = imported.rows.find((row) => row.coordinatorF1)?.coordinatorF1;
+      const firstWithSite = imported.rows.find((row) => row.site)?.site;
+      const firstWithWarehouse = imported.rows.find((row) => row.warehouse)?.warehouse;
+      const firstWithOrder = imported.rows.find((row) => row.orderNumber)?.orderNumber;
+      const firstWithComments = imported.rows.find((row) => row.comments)?.comments;
+      if (firstWithCoordinator) setCoordinatorF1(firstWithCoordinator.toUpperCase());
+      if (firstWithSite) setSite(firstWithSite.toUpperCase());
+      if (firstWithWarehouse) setWarehouse(firstWithWarehouse.toUpperCase());
+      if (firstWithOrder) setOrderNumber(firstWithOrder.toUpperCase());
+      if (firstWithComments) setComments(firstWithComments);
+
+      const needsOcr = imported.rows.some((source, index) => {
+        const draft = draftRows[index];
+        return (!draft.serial || !draft.productId) && Boolean(source.photos.serie || source.photos.modelo);
+      });
+      if (needsOcr) {
+        const { createWorker, PSM } = await import("tesseract.js");
+        worker = await createWorker("eng", 1, {
+          logger: (message) => {
+            if (message.status !== "recognizing text") return;
+            const rowProgress = Math.max(0, Math.min(1, message.progress));
+            setProgress(Math.round(((activeRowIndex + rowProgress) / totalRows) * 100));
+          },
+        });
+        await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT, preserve_interword_spaces: "1" });
+      }
+
+      let readyRows = 0;
+      const preparedPhotoCache = new Map<string, Awaited<ReturnType<typeof preparePhoto>>>();
+      const storedPhotoCache = new Map<string, string>();
+      for (const [index, source] of imported.rows.entries()) {
+        activeRowIndex = index;
+        const draft = draftRows[index];
+        setExcelImportStatus(`Procesando fila ${index + 1} de ${imported.rows.length} · Excel ${source.excelRow}…`);
+        const preparedPhotos: Partial<Record<PhotoKind, Awaited<ReturnType<typeof preparePhoto>>>> = {};
+        const rowWarnings = [...source.warnings];
+        try {
+          for (const kind of PHOTO_KINDS) {
+            const photo = source.photos[kind];
+            if (!photo) continue;
+            const cached = preparedPhotoCache.get(photo.archivePath);
+            const prepared = cached ?? await preparePhoto(photo.file);
+            preparedPhotoCache.set(photo.archivePath, prepared);
+            preparedPhotos[kind] = prepared;
+          }
+          updateRow(draft.key, {
+            evidencePreview: preparedPhotos.serie?.evidence ?? "",
+            modelPreview: preparedPhotos.modelo?.evidence ?? "",
+            panoramicPreview: preparedPhotos.panoramica?.evidence ?? "",
+            entelLabelPreview: preparedPhotos.entel?.evidence ?? "",
+          });
+
+          let ocrText = "";
+          let recognized: ReturnType<typeof recognizeEquipmentReturn> | null = null;
+          if (worker && (!draft.serial || !draft.productId)) {
+            const combined = combineOcrCanvases([preparedPhotos.serie?.ocrCanvas, preparedPhotos.modelo?.ocrCanvas].filter((canvas): canvas is HTMLCanvasElement => Boolean(canvas)));
+            if (combined) {
+              const result = await worker.recognize(combined);
+              ocrText = result.data.text || "";
+              recognized = recognizeEquipmentReturn({ text: ocrText, products, identifiers: productIdentifiers, movements });
+            }
+          }
+          const spreadsheetProduct = draft.productId ? products.find((item) => item.id === draft.productId) : undefined;
+          const recognizedProduct = recognized?.productId ? products.find((item) => item.id === recognized.productId) : undefined;
+          const product = spreadsheetProduct ?? recognizedProduct;
+          const serial = draft.serial || recognized?.serial || "";
+          if (source.sku && !spreadsheetProduct) rowWarnings.push(`El SKU ${source.sku} no coincide con el maestro; confirma el equipo.`);
+          if (!serial) rowWarnings.push("No se reconoció la serie/lote; debes escribirla manualmente.");
+          if (!product) rowWarnings.push("No se pudo relacionar el equipo con el maestro SKU.");
+          if (source.quantity > 1 && serial) rowWarnings.push("La cantidad es mayor a 1; confirma si corresponde a un lote o separa las series en filas distintas.");
+
+          const storedPhotos = await Promise.all(PHOTO_KINDS.map(async (kind) => {
+            const prepared = preparedPhotos[kind];
+            if (!prepared) return [kind, ""] as const;
+            try {
+              const archivePath = source.photos[kind]?.archivePath ?? "";
+              const cached = archivePath ? storedPhotoCache.get(archivePath) : "";
+              const storedImage = cached || await uploadPreparedImage(draft, kind, prepared.evidence);
+              if (archivePath) storedPhotoCache.set(archivePath, storedImage);
+              return [kind, storedImage] as const;
+            } catch (caught) {
+              rowWarnings.push(caught instanceof Error ? caught.message : `No se pudo almacenar la foto ${kind}.`);
+              return [kind, ""] as const;
+            }
+          }));
+          const stored = Object.fromEntries(storedPhotos) as Record<PhotoKind, string>;
+          const recognitionWarnings = (recognized?.warnings ?? []).filter((warning) => {
+            if (serial && warning.startsWith("No se detectó claramente la serie")) return false;
+            if (product && (warning.startsWith("No hubo una relación única") || warning.startsWith("El part number coincide"))) return false;
+            return true;
+          });
+          updateRow(draft.key, {
+            productId: product?.id ?? null,
+            productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
+            serial,
+            partNumber: recognized?.partNumber || "",
+            sourceMovementId: recognized?.sourceMovementId ?? null,
+            matchMethod: spreadsheetProduct ? "SKU_VISIBLE" : recognized?.matchMethod ?? "MANUAL",
+            matchConfidence: spreadsheetProduct ? 100 : recognized?.matchConfidence ?? 0,
+            rawOcrText: ocrText,
+            evidenceImage: stored.serie,
+            modelImage: stored.modelo,
+            panoramicImage: stored.panoramica,
+            entelLabelImage: stored.entel,
+            warnings: [...new Set([...rowWarnings, ...recognitionWarnings])],
+          });
+          if (!firstWithOrder && recognized?.orderNumber) setOrderNumber(recognized.orderNumber);
+          if (!firstWithCoordinator && recognized?.coordinatorF1) setCoordinatorF1(recognized.coordinatorF1);
+          if (serial && product) readyRows += 1;
+        } catch (caught) {
+          rowWarnings.push(caught instanceof Error ? caught.message : "No se pudo procesar completamente esta fila.");
+          updateRow(draft.key, { warnings: [...new Set(rowWarnings)] });
+        }
+        setProgress(Math.round(((index + 1) / imported.rows.length) * 100));
+      }
+      const reviewRows = imported.rows.length - readyRows;
+      setExcelImportStatus(`${file.name}: ${imported.rows.length} filas cargadas · ${readyRows} listas · ${reviewRows} por revisar.`);
+    } catch (caught) {
+      setExcelImportStatus("");
+      setError(caught instanceof Error ? caught.message : "No se pudo importar el Excel de devolución.");
+    } finally {
+      await worker?.terminate();
+      setProcessingKey("");
+    }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -703,6 +886,12 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     <section className="panel return-batch-builder">
       <div className="panel-title"><div><h2>Nueva carga lógica por site</h2><p>Una carga genera un número F1 y puede incluir varias series, lotes y SKU.</p></div><span className="logical-badge">NO AFECTA STOCK</span></div>
       <form onSubmit={submit}>
+        <div className="return-excel-import">
+          <span className="return-excel-icon"><FileSpreadsheet size={22} /></span>
+          <div><strong>Cargar Excel de devolución</strong><small>Importa cada fila con sus fotos incrustadas. Podrás revisar y corregir antes de registrar.</small>{excelImportStatus && <p>{excelImportStatus}</p>}</div>
+          <label className={`secondary-button ${processingKey === "excel-import" ? "is-busy" : ""}`}><FileSpreadsheet size={15} />{processingKey === "excel-import" ? `Procesando ${progress}%` : "Seleccionar Excel"}<input type="file" hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={Boolean(processingKey)} onChange={(event) => { const selected = event.target.files?.[0]; event.target.value = ""; void importExcel(selected); }} /></label>
+          {processingKey === "excel-import" && <div className="return-excel-progress" aria-label={`Importación ${progress}%`}><span style={{ width: `${progress}%` }} /></div>}
+        </div>
         <div className="return-batch-header">
           <label className="field"><span>Coordinador F1 *</span><input list="return-f1-coordinators" value={coordinatorF1} onChange={(event) => setCoordinatorF1(event.target.value.toUpperCase())} placeholder="Busca al coordinador" required /><datalist id="return-f1-coordinators">{f1Coordinators.map((coordinator) => <option value={coordinator.name} key={coordinator.id} />)}</datalist></label>
           <label className="field"><span>Site de desmontaje *</span><input value={site} onChange={(event) => setSite(event.target.value.toUpperCase())} placeholder="Código o nombre del site" required /></label>
