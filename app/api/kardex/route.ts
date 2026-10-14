@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
 import {
   appUsers,
@@ -38,7 +38,7 @@ type ProductInput = {
 type MovementInput = {
   action?: "movement";
   productId?: number;
-  type?: "entrada" | "salida" | "devolucion" | "traslado" | "regularizacion" | "baja" | "ajuste";
+  type?: "entrada" | "salida" | "devolucion" | "desinstalacion" | "traslado" | "regularizacion" | "baja" | "ajuste";
   quantity?: number;
   movementDate?: string;
   document?: string;
@@ -241,6 +241,73 @@ type EquipmentReturnStatusInput = {
   returnId?: number;
   status?: EquipmentReturnStatus;
   notes?: string;
+};
+
+type EquipmentReturnBatchRowInput = {
+  productId?: number;
+  serial?: string;
+  partNumber?: string;
+  quantity?: number;
+  networkComponent?: string;
+  subProject?: string;
+  sourceProject?: string;
+  hardwareTask?: string;
+  length?: string;
+  condition?: string;
+  volumeM3?: string;
+  sourceMovementId?: number | null;
+  matchMethod?: string;
+  matchConfidence?: number;
+  rawOcrText?: string;
+  evidenceImage?: string;
+  entelLabelImage?: string;
+  modelImage?: string;
+  panoramicImage?: string;
+  rememberIdentifier?: boolean;
+  notes?: string;
+};
+
+type EquipmentReturnEvidenceUploadInput = {
+  action?: "equipmentReturnEvidenceUpload";
+  evidenceImage?: string;
+  folderKey?: string;
+  kind?: string;
+};
+
+type EquipmentReturnBatchCreateInput = {
+  action?: "equipmentReturnBatchCreate";
+  coordinatorF1?: string;
+  orderNumber?: string;
+  site?: string;
+  warehouse?: string;
+  comments?: string;
+  rows?: EquipmentReturnBatchRowInput[];
+};
+
+type EquipmentReturnReceiptInput = {
+  returnId?: number;
+  movementDate?: string;
+  document?: string;
+  grLink?: string;
+  orderNumber?: string;
+  project?: string;
+  origin?: string;
+  coordinatorEntel?: string;
+  originSite?: string;
+  stockLocation?: string;
+  unitMeasure?: string;
+  equipmentStatus?: string;
+  condition?: string;
+  unitCost?: number;
+  notes?: string;
+};
+
+type EquipmentReturnBatchStatusInput = {
+  action?: "equipmentReturnBatchStatus";
+  batchCode?: string;
+  status?: EquipmentReturnStatus;
+  notes?: string;
+  receipts?: EquipmentReturnReceiptInput[];
 };
 
 type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA";
@@ -665,7 +732,13 @@ export async function GET(request: Request) {
       equipmentReturns: await Promise.all(returnRows.map(async (row) => ({
         ...row,
         evidenceImageStored: row.evidenceImage,
+        entelLabelImageStored: row.entelLabelImage,
+        modelImageStored: row.modelImage,
+        panoramicImageStored: row.panoramicImage,
         evidenceImage: await resolveEvidenceImage(row.evidenceImage),
+        entelLabelImage: await resolveEvidenceImage(row.entelLabelImage),
+        modelImage: await resolveEvidenceImage(row.modelImage),
+        panoramicImage: await resolveEvidenceImage(row.panoramicImage),
       }))),
       productIdentifiers: identifierRows,
       appUsers: userRows,
@@ -693,7 +766,7 @@ export async function POST(request: Request) {
         eq(coordinators.active, true),
       )).limit(1)
       : [];
-    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | EquipmentReturnCreateInput | EquipmentReturnStatusInput | AppUserInput | AppUserResetPasswordInput | CleanupInput;
+    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | EquipmentReturnCreateInput | EquipmentReturnStatusInput | EquipmentReturnEvidenceUploadInput | EquipmentReturnBatchCreateInput | EquipmentReturnBatchStatusInput | AppUserInput | AppUserResetPasswordInput | CleanupInput;
     const action = clean(payload.action);
     if (!access.active) return Response.json({ error: "Tu usuario está inactivo. Comunícate con un administrador." }, { status: 403 });
     if (access.role === "COORDINADOR" && !assignedCoordinator) return Response.json({ error: "Tu cuenta no está vinculada a un Coordinador F1 activo." }, { status: 403 });
@@ -890,6 +963,293 @@ export async function POST(request: Request) {
         imported += 1;
       }
       return Response.json({ ok: true, imported, rejected: rejected.length, rejectionDetails: rejected.slice(0, 25) }, { status: 201 });
+    }
+
+    if (payload.action === "equipmentReturnEvidenceUpload") {
+      const uploadPayload = payload as EquipmentReturnEvidenceUploadInput;
+      const evidence = normalizeEvidenceImage(uploadPayload.evidenceImage);
+      if (!evidence) return Response.json({ error: "Selecciona una fotografía válida." }, { status: 400 });
+      const folderKey = normalizeEquipmentIdentifier(uploadPayload.folderKey).slice(0, 60) || crypto.randomUUID();
+      const kind = lotTokenPart(uploadPayload.kind, "evidencia").toLowerCase();
+      const storedImage = await storeEvidenceImage(evidence, `devoluciones/temporales/${folderKey}/${kind}`);
+      return Response.json({ ok: true, storedImage, imageUrl: await resolveEvidenceImage(storedImage) }, { status: 201 });
+    }
+
+    if (payload.action === "equipmentReturnBatchCreate") {
+      const batchPayload = payload as EquipmentReturnBatchCreateInput;
+      const coordinatorF1 = normalizeParty(batchPayload.coordinatorF1);
+      const orderNumber = clean(batchPayload.orderNumber).toUpperCase();
+      const site = normalizeParty(batchPayload.site);
+      const warehouse = normalizeParty(batchPayload.warehouse) || "RED";
+      const comments = clean(batchPayload.comments);
+      const batchRows = Array.isArray(batchPayload.rows) ? batchPayload.rows.slice(0, 100) : [];
+      if (!coordinatorF1 || !site || !batchRows.length) {
+        return Response.json({ error: "Selecciona Coordinador F1, ingresa el site y agrega al menos una fila." }, { status: 400 });
+      }
+      const [coordinator] = await db.select().from(coordinators).where(and(
+        eq(coordinators.organization, "F1"),
+        eq(coordinators.name, coordinatorF1),
+        eq(coordinators.active, true),
+      )).limit(1);
+      if (!coordinator) return Response.json({ error: "Selecciona un Coordinador F1 activo." }, { status: 400 });
+
+      const normalizedRows = batchRows.map((row, index) => ({
+        input: row,
+        item: index + 1,
+        productId: Number(row.productId),
+        serial: clean(row.serial).toUpperCase(),
+        serialKey: normalizeEquipmentIdentifier(row.serial),
+        partNumber: clean(row.partNumber).toUpperCase(),
+        normalizedPartNumber: normalizeEquipmentIdentifier(row.partNumber),
+        quantity: Math.max(1, Math.min(100_000, Math.round(Number(row.quantity) || 1))),
+      }));
+      const repeatedSerials = new Set<string>();
+      const seenSerials = new Set<string>();
+      normalizedRows.forEach((row) => {
+        if (seenSerials.has(row.serialKey)) repeatedSerials.add(row.serialKey);
+        seenSerials.add(row.serialKey);
+      });
+      const invalidRow = normalizedRows.find((row) => !row.productId || row.serialKey.length < 5 || repeatedSerials.has(row.serialKey));
+      if (invalidRow) {
+        const reason = repeatedSerials.has(invalidRow.serialKey) ? "la serie/lote está repetida en esta carga" : "falta SKU o Serie/Lote válido";
+        return Response.json({ error: `Fila ${invalidRow.item}: ${reason}.` }, { status: 400 });
+      }
+
+      const productIds = [...new Set(normalizedRows.map((row) => row.productId))];
+      const productRows = await db.select().from(products).where(inArray(products.id, productIds));
+      const productById = new Map(productRows.map((product) => [product.id, product]));
+      const missingProduct = normalizedRows.find((row) => !productById.has(row.productId));
+      if (missingProduct) return Response.json({ error: `Fila ${missingProduct.item}: el SKU seleccionado ya no existe.` }, { status: 404 });
+
+      const activeReturnRows = await db.select().from(equipmentReturns).where(inArray(equipmentReturns.serialKey, normalizedRows.map((row) => row.serialKey)));
+      const activeReturn = activeReturnRows.find((row) => !["RECIBIDA_FISICA", "RECHAZADA"].includes(row.status));
+      if (activeReturn) return Response.json({ error: `La serie/lote ${activeReturn.serial} ya tiene una devolución activa.` }, { status: 409 });
+
+      const historicalMovements = await Promise.all(normalizedRows.map(async (row) => {
+        const candidates = await db.select().from(movements)
+          .where(sql`regexp_replace(upper(${movements.serials}), '[^A-Z0-9]', '', 'g') LIKE ${`%${row.serialKey}%`}`)
+          .orderBy(desc(movements.id))
+          .limit(100);
+        const exact = candidates.filter((movement) => splitSeries(movement.serials).some((token) => normalizeEquipmentIdentifier(token) === row.serialKey));
+        return exact.find((movement) => ["salida", "baja"].includes(movement.type)) ?? exact[0] ?? null;
+      }));
+      for (const [index, historical] of historicalMovements.entries()) {
+        if (historical && historical.productId !== normalizedRows[index].productId) {
+          const historicalProduct = productById.get(historical.productId)
+            ?? (await db.select().from(products).where(eq(products.id, historical.productId)).limit(1))[0];
+          return Response.json({ error: `Fila ${index + 1}: la serie pertenece históricamente al SKU ${historicalProduct?.sku || historical.productId}.` }, { status: 409 });
+        }
+      }
+
+      for (const row of normalizedRows) {
+        if (!row.input.rememberIdentifier || row.normalizedPartNumber.length < 5) continue;
+        const [existingIdentifier] = await db.select().from(productIdentifiers)
+          .where(eq(productIdentifiers.normalizedIdentifier, row.normalizedPartNumber)).limit(1);
+        if (existingIdentifier && existingIdentifier.productId !== row.productId) {
+          const mappedProduct = productById.get(existingIdentifier.productId)
+            ?? (await db.select().from(products).where(eq(products.id, existingIdentifier.productId)).limit(1))[0];
+          return Response.json({ error: `Fila ${row.item}: el part number ${row.partNumber} ya está relacionado con ${mappedProduct?.sku || "otro SKU"}.` }, { status: 409 });
+        }
+      }
+
+      const sequenceRows = await db.execute<{ returnSequence: string }>(sql`select nextval('equipment_return_code_seq')::text as "returnSequence"`);
+      const returnSequence = Number(sequenceRows[0]?.returnSequence);
+      if (!Number.isFinite(returnSequence)) return Response.json({ error: "No se pudo generar el número F1 de devolución." }, { status: 500 });
+      const returnDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date()).replaceAll("-", "");
+      const batchCode = `DEV-F1-${returnDate}-${String(returnSequence).padStart(6, "0")}`;
+      const createdBy = access.displayName || user.displayName || user.email;
+      const matchMethods = ["HISTORIAL_SERIE", "PART_NUMBER_GUARDADO", "PART_NUMBER_DESCRIPCION", "SKU_VISIBLE", "MANUAL"];
+
+      const preparedRows = await Promise.all(normalizedRows.map(async (row, index) => {
+        const input = row.input;
+        const product = productById.get(row.productId)!;
+        const imageFolder = `devoluciones/${batchCode}/${String(row.item).padStart(3, "0")}`;
+        const [evidenceImage, entelLabelImage, modelImage, panoramicImage] = await Promise.all([
+          storeEvidenceImage(normalizeEvidenceImage(input.evidenceImage), `${imageFolder}/serie`),
+          storeEvidenceImage(normalizeEvidenceImage(input.entelLabelImage), `${imageFolder}/etiqueta-entel`),
+          storeEvidenceImage(normalizeEvidenceImage(input.modelImage), `${imageFolder}/modelo`),
+          storeEvidenceImage(normalizeEvidenceImage(input.panoramicImage), `${imageFolder}/panoramica`),
+        ]);
+        const historical = historicalMovements[index];
+        return {
+          returnCode: `${batchCode}-${String(row.item).padStart(3, "0")}`,
+          batchCode,
+          batchItem: row.item,
+          productId: product.id,
+          coordinatorId: coordinator.id,
+          sourceMovementId: historical?.id || Number(input.sourceMovementId) || null,
+          coordinatorF1: coordinator.name,
+          orderNumber: orderNumber || historical?.orderNumber || "",
+          site,
+          warehouse,
+          batchComments: comments,
+          networkComponent: clean(input.networkComponent),
+          subProject: clean(input.subProject),
+          sourceProject: clean(input.sourceProject),
+          hardwareTask: clean(input.hardwareTask),
+          serial: row.serial,
+          serialKey: row.serialKey,
+          quantity: row.quantity,
+          length: clean(input.length),
+          condition: normalizeParty(input.condition) || "USADO OPERATIVO",
+          volumeM3: clean(input.volumeM3),
+          detectedPartNumber: row.partNumber,
+          skuSnapshot: product.sku,
+          descriptionSnapshot: product.description,
+          matchMethod: historical ? "HISTORIAL_SERIE" : matchMethods.includes(clean(input.matchMethod)) ? clean(input.matchMethod) : "MANUAL",
+          matchConfidence: historical ? 100 : Math.min(100, Math.max(0, Math.round(Number(input.matchConfidence) || 0))),
+          rawOcrText: clean(input.rawOcrText).slice(0, 12_000),
+          evidenceImage,
+          entelLabelImage,
+          modelImage,
+          panoramicImage,
+          status: "PENDIENTE_APROBACION" as const,
+          createdBy,
+          notes: clean(input.notes),
+        };
+      }));
+
+      const created = await db.transaction(async (tx) => {
+        const inserted = await tx.insert(equipmentReturns).values(preparedRows).returning();
+        for (const row of normalizedRows) {
+          if (!row.input.rememberIdentifier || row.normalizedPartNumber.length < 5) continue;
+          await tx.insert(productIdentifiers).values({
+            productId: row.productId,
+            identifier: row.partNumber,
+            normalizedIdentifier: row.normalizedPartNumber,
+            active: true,
+            createdBy,
+          }).onConflictDoUpdate({
+            target: productIdentifiers.normalizedIdentifier,
+            set: { identifier: row.partNumber, active: true, updatedAt: sql`CURRENT_TIMESTAMP` },
+          });
+        }
+        return inserted;
+      });
+      return Response.json({ ok: true, batchCode, rows: created.length }, { status: 201 });
+    }
+
+    if (payload.action === "equipmentReturnBatchStatus") {
+      const statusPayload = payload as EquipmentReturnBatchStatusInput;
+      const batchCode = clean(statusPayload.batchCode).toUpperCase();
+      const allowed: EquipmentReturnStatus[] = ["PENDIENTE_APROBACION", "OBSERVADA", "APROBADA_PENDIENTE_RECEPCION", "RECIBIDA_FISICA", "RECHAZADA"];
+      const status = allowed.includes(statusPayload.status as EquipmentReturnStatus) ? statusPayload.status as EquipmentReturnStatus : undefined;
+      if (!batchCode || !status) return Response.json({ error: "Carga de sitio o estado inválido." }, { status: 400 });
+      const records = await db.select().from(equipmentReturns).where(eq(equipmentReturns.batchCode, batchCode)).orderBy(equipmentReturns.batchItem);
+      if (!records.length) return Response.json({ error: "La carga de sitio ya no existe." }, { status: 404 });
+      const notes = clean(statusPayload.notes);
+      if (status === "OBSERVADA" && !notes) return Response.json({ error: "Escribe la observación que debe corregirse." }, { status: 400 });
+      const operator = access.displayName || user.displayName || user.email;
+
+      if (status === "RECIBIDA_FISICA") {
+        if (records.some((record) => record.status !== "APROBADA_PENDIENTE_RECEPCION")) {
+          return Response.json({ error: "Primero debes aprobar todas las filas de la carga del sitio." }, { status: 409 });
+        }
+        const receipts = Array.isArray(statusPayload.receipts) ? statusPayload.receipts : [];
+        const receiptById = new Map(receipts.map((receipt) => [Number(receipt.returnId), receipt]));
+        const missingReceipt = records.find((record) => !receiptById.has(record.id));
+        if (missingReceipt) return Response.json({ error: `Falta completar el ingreso de la fila ${missingReceipt.batchItem}.` }, { status: 400 });
+        const productIds = [...new Set(records.map((record) => record.productId))];
+        const [productRows, existingMovements, entelCosts] = await Promise.all([
+          db.select().from(products).where(inArray(products.id, productIds)),
+          db.select().from(movements).where(inArray(movements.productId, productIds)),
+          latestEntelUnitCosts(db),
+        ]);
+        const productById = new Map(productRows.map((product) => [product.id, product]));
+        for (const record of records) {
+          const product = productById.get(record.productId);
+          if (!product) return Response.json({ error: `El SKU ${record.skuSnapshot} ya no existe.` }, { status: 404 });
+          const serialBalance = existingMovements.reduce((total, movement) => {
+            if (movement.productId !== record.productId) return total;
+            const contains = splitSeries(movement.serials).some((token) => normalizeEquipmentIdentifier(token) === record.serialKey);
+            return contains ? total + stockEffect(movement.type) * (splitSeries(movement.serials).length > 1 ? 1 : movement.quantity) : total;
+          }, 0);
+          if (serialBalance > 0) return Response.json({ error: `La serie/lote ${record.serial} ya figura disponible en stock.` }, { status: 409 });
+        }
+
+        const movementDateFallback = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date());
+        await db.transaction(async (tx) => {
+          for (const record of records) {
+            const receipt = receiptById.get(record.id)!;
+            const product = productById.get(record.productId)!;
+            const movementDate = normalizeKardexDate(receipt.movementDate, movementDateFallback);
+            const document = clean(receipt.document).toUpperCase() || batchCode;
+            const receiptOrderNumber = clean(receipt.orderNumber).toUpperCase() || record.orderNumber;
+            const project = clean(receipt.project).toUpperCase() || product.defaultProject;
+            const origin = clean(receipt.origin).toUpperCase() || "DESINSTALACIÓN DE SITIO";
+            const coordinatorEntel = clean(receipt.coordinatorEntel).toUpperCase();
+            const originSite = clean(receipt.originSite).toUpperCase() || record.site;
+            const stockLocation = normalizeStockLocation(receipt.stockLocation);
+            const unitMeasure = clean(receipt.unitMeasure).toUpperCase() || product.unit || "UND";
+            const equipmentStatus = clean(receipt.equipmentStatus).toUpperCase() || "USADO";
+            const condition = clean(receipt.condition).toUpperCase() || record.condition || "OPERATIVO";
+            const requestedCostCents = Math.max(0, Math.round(Number(receipt.unitCost) * 100 || 0));
+            const unitCostCents = requestedCostCents || product.unitCostCents || entelCosts.get(product.sku.toUpperCase()) || 0;
+            const [stockMovement] = await tx.insert(movements).values({
+              productId: product.id,
+              type: "desinstalacion",
+              quantity: record.quantity,
+              movementDate,
+              document,
+              project,
+              coordinator: coordinatorEntel,
+              coordinatorF1: record.coordinatorF1,
+              serials: record.serial,
+              lotAssignment: "ORIGINAL",
+              sourceRow: record.returnCode,
+              originSite,
+              stockLocation,
+              unitMeasure,
+              unitCostCents,
+              equipmentType: product.category,
+              loadGr: document,
+              grLink: normalizeGrLink(receipt.grLink),
+              orderNumber: receiptOrderNumber,
+              equipmentStatus,
+              condition,
+              origin,
+              owner: product.owner,
+              recordStatus: "Disponible",
+              registeredBy: operator,
+              notes: `Desinstalación recibida desde ${record.returnCode}${clean(receipt.notes) ? ` · ${clean(receipt.notes)}` : ""}`,
+            }).returning();
+            await tx.update(equipmentReturns).set({
+              status: "RECIBIDA_FISICA",
+              stockMovementId: stockMovement.id,
+              physicallyReceivedAt: sql`CURRENT_TIMESTAMP`,
+              receivedBy: operator,
+              receiptMovementDate: movementDate,
+              receiptDocument: document,
+              receiptGrLink: normalizeGrLink(receipt.grLink),
+              receiptProject: project,
+              receiptOrigin: origin,
+              receiptCoordinatorEntel: coordinatorEntel,
+              receiptOriginSite: originSite,
+              receiptStockLocation: stockLocation,
+              receiptUnitMeasure: unitMeasure,
+              receiptEquipmentStatus: equipmentStatus,
+              receiptCondition: condition,
+              receiptUnitCostCents: unitCostCents,
+              notes: clean(receipt.notes) || record.notes,
+              updatedAt: sql`CURRENT_TIMESTAMP`,
+            }).where(eq(equipmentReturns.id, record.id));
+          }
+        });
+        return Response.json({ ok: true, batchCode, received: records.length, stockUpdated: true });
+      }
+
+      const transitionAllowed = status === "RECHAZADA"
+        || status === "OBSERVADA"
+        || (status === "APROBADA_PENDIENTE_RECEPCION" && records.every((record) => ["PENDIENTE_APROBACION", "OBSERVADA"].includes(record.status)));
+      if (!transitionAllowed) return Response.json({ error: "Ese cambio de estado no corresponde al flujo de la carga del sitio." }, { status: 409 });
+      await db.update(equipmentReturns).set({
+        status,
+        approvedAt: status === "APROBADA_PENDIENTE_RECEPCION" ? sql`CURRENT_TIMESTAMP` : records[0].approvedAt,
+        approvedBy: status === "APROBADA_PENDIENTE_RECEPCION" ? operator : records[0].approvedBy,
+        notes: notes || records[0].notes,
+        updatedAt: sql`CURRENT_TIMESTAMP`,
+      }).where(eq(equipmentReturns.batchCode, batchCode));
+      return Response.json({ ok: true, batchCode, updated: records.length });
     }
 
     if (payload.action === "equipmentReturnCreate") {
@@ -1130,7 +1490,7 @@ export async function POST(request: Request) {
       for (const item of requestedByControl.values()) {
         const { productId, requestedQuantity, seriesLot } = { productId: item.productId, requestedQuantity: item.quantity, seriesLot: item.seriesLot };
         const orderRows = movementRows.filter((row) => row.productId === productId && clean(row.orderNumber).toUpperCase() === normalizedOrder);
-        const hasIngreso = orderRows.some((row) => ["entrada", "devolucion", "regularizacion"].includes(row.type));
+        const hasIngreso = orderRows.some((row) => ["entrada", "devolucion", "desinstalacion", "regularizacion"].includes(row.type));
         const physicalAvailable = seriesLot
           ? orderRows.reduce((total, row) => total + stockEffect(row.type) * trackedSeriesQuantity(row.serials, row.quantity, seriesLot), 0)
           : orderRows.filter((row) => !splitSeries(row.serials).length).reduce((total, row) => total + stockEffect(row.type) * row.quantity, 0);
@@ -1736,7 +2096,7 @@ export async function POST(request: Request) {
     const productId = Number(movementPayload.productId);
     const quantity = Math.max(0, Number(movementPayload.quantity) || 0);
     const type = movementPayload.type;
-    const validTypes = ["entrada", "salida", "devolucion", "traslado", "regularizacion", "baja", "ajuste"];
+    const validTypes = ["entrada", "salida", "devolucion", "desinstalacion", "traslado", "regularizacion", "baja", "ajuste"];
     if (!productId || !quantity || !type || !validTypes.includes(type)) {
       return Response.json({ error: "Producto, tipo y cantidad son obligatorios." }, { status: 400 });
     }

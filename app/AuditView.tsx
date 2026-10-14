@@ -59,7 +59,7 @@ type MovementForAudit = {
   sku: string;
   serials: string;
   quantity: number;
-  type: "entrada" | "salida" | "devolucion" | "traslado" | "regularizacion" | "baja" | "ajuste";
+  type: "entrada" | "salida" | "devolucion" | "desinstalacion" | "traslado" | "regularizacion" | "baja" | "ajuste";
 };
 
 type UploadRecord = Omit<AuditRecord, "id" | "importId" | "source" | "totalCostCents" | "createdAt"> & {

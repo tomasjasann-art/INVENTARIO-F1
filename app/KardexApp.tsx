@@ -60,7 +60,7 @@ type Product = {
 type Movement = {
   id: number;
   productId: number;
-  type: "entrada" | "salida" | "devolucion" | "traslado" | "regularizacion" | "baja" | "ajuste";
+  type: "entrada" | "salida" | "devolucion" | "desinstalacion" | "traslado" | "regularizacion" | "baja" | "ajuste";
   quantity: number;
   movementDate: string;
   document: string;
@@ -511,7 +511,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
       (sum, product) => sum + product.stock * (product.unitCostCents / 100),
       0,
     );
-    const entries = quantityByMeasure(data.movements.filter((movement) => movement.type === "entrada" && movement.movementDate.startsWith(currentMonth)));
+    const entries = quantityByMeasure(data.movements.filter((movement) => ["entrada", "devolucion", "desinstalacion", "regularizacion"].includes(movement.type) && movement.movementDate.startsWith(currentMonth)));
     const exits = quantityByMeasure(data.movements.filter((movement) => movement.type === "salida" && movement.movementDate.startsWith(currentMonth)));
     const movedProductIds = new Set(data.movements.map((movement) => movement.productId));
     const traceControlledProductIds = new Set(data.movements
@@ -757,7 +757,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           )}
 
           {view === "movimientos" && <MovementTable movements={filteredMovements} loading={loading} title="Todos los movimientos" subtitle={`${filteredMovements.length} operaciones encontradas`} />}
-          {view === "ingresos" && <OperationalMovementTable mode="entrada" movements={filteredMovements.filter((movement) => ["entrada", "devolucion", "regularizacion"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
+          {view === "ingresos" && <OperationalMovementTable mode="entrada" movements={filteredMovements.filter((movement) => ["entrada", "devolucion", "desinstalacion", "regularizacion"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
           {view === "salidas" && <OperationalMovementTable mode="salida" movements={filteredMovements.filter((movement) => ["salida", "baja"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
           {view === "stock" && (isCoordinator
             ? <CoordinatorStockView products={filteredProducts} movements={data.stockMovements} reservations={data.stockReservations} loading={loading} />
@@ -1271,7 +1271,7 @@ function ConciliationView({ movements, validations, auditImports, auditRecords, 
   const auditImportMap = useMemo(() => new Map(auditImports.map((item) => [item.id, item])), [auditImports]);
   const entriesBySeries = useMemo(() => {
     const map = new Map<string, Movement[]>();
-    movements.filter((movement) => ["entrada", "devolucion"].includes(movement.type)).forEach((movement) => {
+    movements.filter((movement) => ["entrada", "devolucion", "desinstalacion"].includes(movement.type)).forEach((movement) => {
       const series = movement.serials.split(/[,;\n]/).map((item) => item.trim().toUpperCase()).filter(Boolean);
       (series.length ? series : [""]).forEach((serial) => {
         const key = `${movement.productId}::${serial}`;
@@ -2012,7 +2012,7 @@ function ReportsView({ products, movements, requests }: { products: Product[]; m
     XLSX.writeFile(workbook, `reporte-control-equipos-entel-${today()}.xlsx`, { compression: true });
   }
 
-  const entries = movements.filter((movement) => movement.type === "entrada");
+  const entries = movements.filter((movement) => ["entrada", "devolucion", "desinstalacion", "regularizacion"].includes(movement.type));
   const exits = movements.filter((movement) => movement.type === "salida");
   const value = exits.reduce((sum, movement) => sum + (movement.unitCostCents || movement.productUnitCostCents || 0) * movement.quantity, 0);
   return <>

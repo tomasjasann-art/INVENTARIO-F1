@@ -78,6 +78,13 @@
       "when": 1792002736924,
       "tag": "0010_graceful_sue_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792008433877,
+      "tag": "0011_narrow_riptide",
+      "breakpoints": true
     }
   ]
 }
