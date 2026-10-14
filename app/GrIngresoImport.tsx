@@ -2,7 +2,7 @@
 
 import { AlertTriangle, CheckCircle2, ExternalLink, FileSearch, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { DragEvent, FormEvent, useMemo, useState } from "react";
-import { parseGrIngresoRecognition } from "../lib/gr-ingreso";
+import { normalizeSkuKey, parseGrIngresoRecognition, resolveKnownSku, type GrLayoutPage } from "../lib/gr-ingreso";
 
 type GrProduct = {
   id: number;
@@ -33,9 +33,6 @@ type EditableRow = {
   key: string;
   sku: string;
   description: string;
-  movementDate: string;
-  document: string;
-  orderNumber: string;
   quantity: number;
   seriesLot: string;
   lotMode: "ORIGINAL" | "MANUAL" | "AUTOMATICO";
@@ -99,17 +96,15 @@ async function canvasesFromPdf(file: File) {
 }
 
 function emptyRow(products: GrProduct[], shared?: Partial<EditableRow>): EditableRow {
-  const product = shared?.sku ? products.find((item) => item.sku.toUpperCase() === shared.sku?.toUpperCase()) : undefined;
+  const resolvedSku = shared?.sku ? resolveKnownSku(shared.sku, products.map((item) => item.sku)) || shared.sku : "";
+  const product = resolvedSku ? products.find((item) => normalizeSkuKey(item.sku) === normalizeSkuKey(resolvedSku)) : undefined;
   return {
     key: newKey(),
-    sku: shared?.sku ?? "",
+    sku: product?.sku ?? resolvedSku,
     description: product?.description ?? shared?.description ?? "",
-    movementDate: shared?.movementDate ?? "",
-    document: shared?.document ?? "",
-    orderNumber: shared?.orderNumber ?? "",
     quantity: Math.max(1, shared?.quantity ?? 1),
     seriesLot: shared?.seriesLot ?? "",
-    lotMode: shared?.lotMode ?? "ORIGINAL",
+    lotMode: shared?.lotMode ?? (shared?.seriesLot ? "MANUAL" : "ORIGINAL"),
     unit: product?.unit || shared?.unit || "UND",
     unitCost: shared?.unitCost ?? (product?.unitCostCents ? String(product.unitCostCents / 100) : ""),
     equipmentType: product?.category?.toUpperCase().includes("LOTE") ? "LOTE" : shared?.equipmentType ?? "EQUIPO",
@@ -126,6 +121,9 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
   const [fileName, setFileName] = useState("");
   const [fileUrl, setFileUrl] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const [movementDate, setMovementDate] = useState("");
+  const [documentNumber, setDocumentNumber] = useState("");
+  const [orderNumber, setOrderNumber] = useState("");
   const [ruc, setRuc] = useState("");
   const [coordinatorEntel, setCoordinatorEntel] = useState("");
   const [coordinatorF1, setCoordinatorF1] = useState("");
@@ -137,7 +135,7 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
   const [owner, setOwner] = useState("F1 SERVICES");
   const [grLink, setGrLink] = useState("");
 
-  const productsBySku = useMemo(() => new Map(products.map((product) => [product.sku.trim().toUpperCase(), product])), [products]);
+  const productsBySku = useMemo(() => new Map(products.map((product) => [normalizeSkuKey(product.sku), product])), [products]);
   const supplier = suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === ruc);
   const entelCoordinators = coordinators.filter((item) => item.active && item.organization === "ENTEL");
   const f1Coordinators = coordinators.filter((item) => item.active && item.organization === "F1");
@@ -145,14 +143,12 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
     const issues: string[] = [];
     if (!row.sku.trim()) issues.push("SKU");
     if (!row.description.trim()) issues.push("descripción");
-    if (!row.movementDate) issues.push("fecha");
-    if (!row.document.trim()) issues.push("GR");
-    if (!row.orderNumber.trim()) issues.push("pedido");
     if (!Number.isFinite(row.quantity) || row.quantity < 1) issues.push("cantidad");
     if (row.lotMode === "MANUAL" && !row.seriesLot.trim()) issues.push("serie/lote");
+    else if (row.equipmentType === "EQUIPO" && row.lotMode !== "AUTOMATICO" && !row.seriesLot.trim()) issues.push("serie");
     return issues;
   });
-  const sharedReady = Boolean(supplier && coordinatorEntel.trim() && coordinatorF1.trim());
+  const sharedReady = Boolean(movementDate && documentNumber.trim() && orderNumber.trim() && supplier && coordinatorEntel.trim() && coordinatorF1.trim());
   const ready = rows.length > 0 && rowErrors.every((issues) => issues.length === 0) && sharedReady;
 
   function replaceFileUrl(file: File) {
@@ -180,54 +176,47 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
       const pages = extension === "pdf"
         ? await canvasesFromPdf(file)
         : [{ canvas: await canvasFromImage(file), text: "" }];
-      const hasUsableText = pages.every((page) => page.text.replace(/\s/g, "").length > 80);
       const fullTexts: string[] = pages.map((page) => page.text);
       const headerTexts: string[] = [];
       const quantityTexts: string[] = [];
+      const layoutPages: GrLayoutPage[] = [];
 
-      if (!hasUsableText) {
-        const { createWorker, PSM } = await import("tesseract.js");
-        setStatusText("Iniciando reconocimiento de texto...");
-        worker = await createWorker("eng", 1, {
-          logger: (message) => {
-            if (message.status === "recognizing text") setProgress((value) => Math.max(value, Math.round(12 + message.progress * 78)));
-          },
-        });
+      const { createWorker, PSM } = await import("tesseract.js");
+      setStatusText("Iniciando reconocimiento por columnas...");
+      worker = await createWorker("eng", 1, {
+        logger: (message) => {
+          if (message.status === "recognizing text") setProgress((value) => Math.max(value, Math.round(12 + message.progress * 78)));
+        },
+      });
 
-        for (let index = 0; index < pages.length; index += 1) {
-          const page = pages[index];
-          setStatusText(`Leyendo página ${index + 1} de ${pages.length}...`);
-          await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT, preserve_interword_spaces: "1" });
-          const fullResult = await worker.recognize(page.canvas);
-          fullTexts[index] = `${page.text}\n${fullResult.data.text}`;
+      for (let index = 0; index < pages.length; index += 1) {
+        const page = pages[index];
+        setStatusText(`Leyendo columnas y líneas de la página ${index + 1} de ${pages.length}...`);
+        await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT, preserve_interword_spaces: "1" });
+        const fullResult = await worker.recognize(page.canvas);
+        fullTexts[index] = `${page.text}\n${fullResult.data.text}`;
 
-          if (index === 0) {
-            await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
-            const headerResult = await worker.recognize(page.canvas, {
-              rectangle: {
-                left: Math.round(page.canvas.width * 0.52),
-                top: 0,
-                width: Math.round(page.canvas.width * 0.48),
-                height: Math.round(page.canvas.height * 0.34),
-              },
-            });
-            headerTexts.push(headerResult.data.text);
-          }
-
+        if (index === 0) {
           await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
-          const quantityResult = await worker.recognize(page.canvas, {
+          const headerResult = await worker.recognize(page.canvas, {
             rectangle: {
-              left: Math.round(page.canvas.width * 0.75),
-              top: Math.round(page.canvas.height * 0.35),
-              width: Math.round(page.canvas.width * 0.25),
-              height: Math.round(page.canvas.height * 0.48),
+              left: Math.round(page.canvas.width * 0.52),
+              top: 0,
+              width: Math.round(page.canvas.width * 0.48),
+              height: Math.round(page.canvas.height * 0.34),
             },
           });
-          quantityTexts.push(quantityResult.data.text);
+          headerTexts.push(headerResult.data.text);
         }
-      } else {
-        headerTexts.push(pages[0]?.text ?? "");
-        quantityTexts.push(...pages.map((page) => page.text));
+
+        const tableTop = Math.round(page.canvas.height * 0.31);
+        const tableHeight = Math.round(page.canvas.height * 0.56);
+        await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK, preserve_interword_spaces: "1" });
+        const tableResult = await worker.recognize(page.canvas, {
+          rectangle: { left: 0, top: tableTop, width: page.canvas.width, height: tableHeight },
+        }, { text: true, tsv: true });
+        quantityTexts.push(tableResult.data.text);
+        layoutPages.push({ tsv: tableResult.data.tsv ?? "", width: page.canvas.width, height: tableHeight });
       }
 
       const result = parseGrIngresoRecognition({
@@ -235,19 +224,23 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
         headerText: headerTexts.join("\n"),
         quantityText: quantityTexts.join("\n"),
         fileName: file.name,
+        layoutPages,
+        knownProducts: products.map((product) => ({ sku: product.sku, category: product.category })),
       });
       setRows(result.rows.map((row) => emptyRow(products, {
         sku: row.sku,
         quantity: row.quantity,
-        movementDate: result.movementDate,
-        document: result.document,
-        orderNumber: result.orderNumber,
+        seriesLot: row.seriesLot,
       })));
+      setMovementDate(result.movementDate);
+      setDocumentNumber(result.document);
+      setOrderNumber(result.orderNumber);
       setWarnings(result.warnings);
       setProgress(100);
       setStatusText("Lectura terminada. Revisa y corrige antes de cargar.");
     } catch (recognitionError) {
-      setRows([emptyRow(products, { movementDate: currentDate() })]);
+      setMovementDate(currentDate());
+      setRows([emptyRow(products)]);
       setWarnings(["La lectura automática no terminó. El formato manual quedó disponible para completar la GR."]);
       setError(recognitionError instanceof Error ? recognitionError.message : "No se pudo leer la GR.");
     } finally {
@@ -257,7 +250,10 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
   }
 
   function startManual() {
-    setRows([emptyRow(products, { movementDate: currentDate() })]);
+    setMovementDate(currentDate());
+    setDocumentNumber("");
+    setOrderNumber("");
+    setRows([emptyRow(products)]);
     setWarnings(["Modo manual: completa todos los campos y confirma al final."]);
     setError("");
     setStatusText("Formato manual listo.");
@@ -267,13 +263,14 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
     setRows((current) => current.map((row, rowIndex) => {
       if (rowIndex !== index) return row;
       if (patch.sku === undefined) return { ...row, ...patch };
-      const sku = patch.sku.toUpperCase();
-      const product = productsBySku.get(sku.trim());
+      const typedSku = patch.sku.toUpperCase();
+      const resolvedSku = resolveKnownSku(typedSku, products.map((product) => product.sku));
+      const product = productsBySku.get(normalizeSkuKey(resolvedSku || typedSku));
       return {
         ...row,
         ...patch,
-        sku,
-        description: product?.description ?? "",
+        sku: product?.sku ?? typedSku,
+        description: product?.description ?? (normalizeSkuKey(typedSku) === normalizeSkuKey(row.sku) ? row.description : ""),
         unit: product?.unit || row.unit || "UND",
         unitCost: product?.unitCostCents ? String(product.unitCostCents / 100) : row.unitCost,
         equipmentType: product?.category?.toUpperCase().includes("LOTE") ? "LOTE" : row.equipmentType,
@@ -282,12 +279,7 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
   }
 
   function addRow() {
-    const base = rows[0];
-    setRows((current) => [...current, emptyRow(products, base ? {
-      movementDate: base.movementDate,
-      document: base.document,
-      orderNumber: base.orderNumber,
-    } : { movementDate: currentDate() })]);
+    setRows((current) => [...current, emptyRow(products)]);
   }
 
   function removeRow(index: number) {
@@ -309,10 +301,10 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
         Condición: condition,
         Proyecto: project,
         RUC: ruc,
-        "Fecha de Ingreso": row.movementDate,
-        "GR. de Ingreso": row.document.trim(),
+        "Fecha de Ingreso": movementDate,
+        "GR. de Ingreso": documentNumber.trim(),
         "Link de GR. de Ingreso": grLink,
-        "N° Pedido": row.orderNumber.trim(),
+        "N° Pedido": orderNumber.trim(),
         "Coordinador Entel": coordinatorEntel,
         "Coordinador F1": coordinatorF1,
         "Site Origen": originSite,
@@ -336,9 +328,9 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
   }
 
   return <div className="modal-layer"><div className="modal-card gr-import-modal">
-    <div className="modal-head"><div><span className="modal-kicker">INGRESO DESDE GUÍA DE REMISIÓN</span><h2>Leer GR y revisar antes de cargar</h2><p>Reconoce fecha, SKU, GR, pedido y cantidad. La descripción siempre se consulta en Maestro SKU.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar"><X size={19} /></button></div>
+    <div className="modal-head"><div><span className="modal-kicker">INGRESO DESDE GUÍA DE REMISIÓN</span><h2>Leer GR y revisar en tabla</h2><p>Relaciona SKU, cantidad y Serie/Lote por línea. La descripción siempre se consulta en Maestro SKU.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar"><X size={19} /></button></div>
     {rows.length === 0 ? <div className="gr-import-start">
-      <div className="gr-read-fields"><span>Se leerá</span><b>Fecha de Ingreso</b><b>SKU</b><b>GR. de Ingreso</b><b>N° Pedido</b><b>Cantidad</b></div>
+      <div className="gr-read-fields"><span>Se leerá</span><b>Fecha de Ingreso</b><b>SKU</b><b>GR. de Ingreso</b><b>N° Pedido</b><b>Cantidad por SKU</b><b>Serie/Lote</b></div>
       <label className={`gr-import-drop ${dragActive ? "drag-active" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragActive(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { event.preventDefault(); setDragActive(false); }} onDrop={dropFile}>
         <input type="file" accept=".pdf,image/jpeg,image/png,image/webp,application/pdf" disabled={processing} onChange={(event) => void recognizeFile(event.target.files?.[0])} />
         {processing ? <LoaderCircle className="spin" size={34} /> : <FileSearch size={34} />}
@@ -352,8 +344,11 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
       <div className="gr-review-bar"><div><CheckCircle2 size={18} /><span><strong>Vista previa editable</strong><small>Nada se guardará hasta que pulses “Cargar ingreso”.</small></span></div>{fileName ? <div className="gr-file-actions"><span>{fileName}</span>{fileUrl ? <a href={fileUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} />Ver GR</a> : null}</div> : null}</div>
       {warnings.length ? <div className="gr-warning"><AlertTriangle size={17} /><div><strong>Revisión requerida</strong>{warnings.map((warning) => <span key={warning}>{warning}</span>)}</div></div> : null}
 
-      <section className="gr-section"><div className="gr-section-head"><div><span>PASO 1</span><strong>Datos generales del ingreso</strong></div><small>Completa lo que no aparece en la GR.</small></div>
+      <section className="gr-section"><div className="gr-section-head"><div><span>DATOS GENERALES</span><strong>Información que se aplicará a todas las líneas</strong></div><small>Se llena una sola vez para toda la GR.</small></div>
         <div className="form-grid">
+          <label className="field"><span>Fecha de Ingreso *</span><input type="date" required value={movementDate} onChange={(event) => setMovementDate(event.target.value)} /></label>
+          <label className="field"><span>GR. de Ingreso *</span><input required value={documentNumber} onChange={(event) => setDocumentNumber(event.target.value.toUpperCase())} placeholder="T217-00047707" /></label>
+          <label className="field"><span>N° Pedido/Cod. Oracle *</span><input required value={orderNumber} onChange={(event) => setOrderNumber(event.target.value.toUpperCase())} /></label>
           <label className="field"><span>RUC de empresa de origen *</span><input inputMode="numeric" pattern="[0-9]{11}" required value={ruc} onChange={(event) => setRuc(event.target.value.replace(/\D/g, "").slice(0, 11))} placeholder="11 dígitos" /><small>{supplier ? `Proviene: ${supplier.businessName}` : ruc.length === 11 ? "RUC no registrado o inactivo en Empresas y personas." : "El nombre se completa desde el maestro."}</small></label>
           <label className="field"><span>Proviene</span><input value={supplier?.businessName ?? ""} readOnly placeholder="Automático según RUC" /></label>
           <label className="field"><span>Coordinador Entel *</span><input required list="gr-entel-coordinators" value={coordinatorEntel} onChange={(event) => setCoordinatorEntel(event.target.value)} /><datalist id="gr-entel-coordinators">{entelCoordinators.map((item) => <option key={item.id} value={item.name}>{item.email}</option>)}</datalist></label>
@@ -368,27 +363,24 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
         </div>
       </section>
 
-      <section className="gr-section"><div className="gr-section-head"><div><span>PASO 2</span><strong>Líneas detectadas y formato de ingreso</strong></div><button type="button" className="secondary-button" onClick={addRow}><Plus size={15} />Agregar línea</button></div>
+      <section className="gr-section gr-table-section"><div className="gr-section-head"><div><span>DETALLE DE LA GR</span><strong>Tabla editable de SKU, series/lotes y cantidades</strong></div><button type="button" className="secondary-button" onClick={addRow}><Plus size={15} />Agregar línea</button></div>
         <datalist id="gr-sku-options">{products.map((product) => <option key={product.id} value={product.sku}>{product.description}</option>)}</datalist>
-        <div className="gr-lines">{rows.map((row, index) => {
-          const knownProduct = productsBySku.get(row.sku.trim().toUpperCase());
-          return <article className={`gr-line ${rowErrors[index].length ? "has-errors" : ""}`} key={row.key}>
-            <div className="gr-line-title"><div><span>LÍNEA {index + 1}</span><strong>{row.sku || "SKU pendiente"}</strong><small>{rowErrors[index].length ? `Revisar: ${rowErrors[index].join(", ")}` : "Lista para cargar"}</small></div>{rows.length > 1 ? <button type="button" className="icon-button" onClick={() => removeRow(index)} aria-label={`Eliminar línea ${index + 1}`}><Trash2 size={16} /></button> : null}</div>
-            <div className="form-grid">
-              <label className="field"><span>SKU *</span><input required list="gr-sku-options" value={row.sku} onChange={(event) => updateRow(index, { sku: event.target.value })} placeholder="Ej. ENT96008303" /><small>{knownProduct ? "Relacionado con Maestro SKU." : "SKU nuevo: completa su descripción para crearlo."}</small></label>
-              <label className="field"><span>Descripción SKU *</span><input required readOnly={Boolean(knownProduct)} value={row.description} onChange={(event) => updateRow(index, { description: event.target.value })} placeholder="Se completa desde Maestro SKU" /><small>{knownProduct ? "Nombre oficial; no proviene del OCR." : "No existe aún en el maestro."}</small></label>
-              <label className="field"><span>Fecha de Ingreso *</span><input type="date" required value={row.movementDate} onChange={(event) => updateRow(index, { movementDate: event.target.value })} /></label>
-              <label className="field"><span>GR. de Ingreso *</span><input required value={row.document} onChange={(event) => updateRow(index, { document: event.target.value.toUpperCase() })} /></label>
-              <label className="field"><span>N° Pedido/Cod. Oracle *</span><input required value={row.orderNumber} onChange={(event) => updateRow(index, { orderNumber: event.target.value.toUpperCase() })} /></label>
-              <label className="field"><span>Cantidad *</span><input type="number" min="1" step="1" required value={row.quantity} onChange={(event) => updateRow(index, { quantity: Math.max(0, Number(event.target.value)) })} /></label>
-              <label className="field"><span>Serie / Lote</span><input value={row.seriesLot} onChange={(event) => updateRow(index, { seriesLot: event.target.value.toUpperCase() })} placeholder="Opcional según control" /></label>
-              <label className="field"><span>Asignación de Serie/Lote</span><select value={row.lotMode} onChange={(event) => updateRow(index, { lotMode: event.target.value as EditableRow["lotMode"] })}><option value="ORIGINAL">Sin asignación</option><option value="MANUAL">Manual</option><option value="AUTOMATICO">Automática para transferencia</option></select></label>
-              <label className="field"><span>Unidad de Medida</span><input value={row.unit} onChange={(event) => updateRow(index, { unit: event.target.value.toUpperCase() })} /></label>
-              <label className="field"><span>Tipo de Equipo</span><select value={row.equipmentType} onChange={(event) => updateRow(index, { equipmentType: event.target.value as EditableRow["equipmentType"] })} disabled={Boolean(knownProduct)}><option value="EQUIPO">Equipo</option><option value="LOTE">Lote</option></select></label>
-              <label className="field"><span>Costo unitario</span><input type="number" min="0" step="0.01" value={row.unitCost} onChange={(event) => updateRow(index, { unitCost: event.target.value })} placeholder="Usará costo Entel si está vacío" /></label>
-            </div>
-          </article>;
-        })}</div>
+        <div className="gr-edit-table-wrap"><table className="gr-edit-table"><thead><tr><th>#</th><th>SKU *</th><th>Descripción SKU *</th><th>Serie / Lote *</th><th>Cantidad *</th><th>Unidad</th><th>Control</th><th>Costo unitario</th><th>Resultado</th><th /></tr></thead><tbody>{rows.map((row, index) => {
+          const knownProduct = productsBySku.get(normalizeSkuKey(row.sku));
+          return <tr className={rowErrors[index].length ? "has-errors" : ""} key={row.key}>
+            <td><strong>{index + 1}</strong></td>
+            <td><input required list="gr-sku-options" value={row.sku} onChange={(event) => updateRow(index, { sku: event.target.value })} placeholder="ENT..." aria-label={`SKU línea ${index + 1}`} /></td>
+            <td><input required readOnly={Boolean(knownProduct)} value={row.description} onChange={(event) => updateRow(index, { description: event.target.value })} placeholder={knownProduct ? "Descripción del maestro" : "SKU nuevo: escribir descripción"} aria-label={`Descripción línea ${index + 1}`} /></td>
+            <td><input value={row.seriesLot} onChange={(event) => updateRow(index, { seriesLot: event.target.value.toUpperCase(), lotMode: event.target.value ? "MANUAL" : row.lotMode })} placeholder={row.equipmentType === "EQUIPO" ? "Una serie por línea" : "Lote"} aria-label={`Serie o lote línea ${index + 1}`} /></td>
+            <td><input type="number" min="1" step="1" required value={row.quantity} readOnly={row.equipmentType === "EQUIPO" && Boolean(row.seriesLot)} onChange={(event) => updateRow(index, { quantity: Math.max(0, Number(event.target.value)) })} aria-label={`Cantidad línea ${index + 1}`} /></td>
+            <td><input value={row.unit} onChange={(event) => updateRow(index, { unit: event.target.value.toUpperCase() })} aria-label={`Unidad línea ${index + 1}`} /></td>
+            <td><select value={row.lotMode} onChange={(event) => updateRow(index, { lotMode: event.target.value as EditableRow["lotMode"] })} aria-label={`Control de serie o lote línea ${index + 1}`}><option value="ORIGINAL">Original</option><option value="MANUAL">Manual</option><option value="AUTOMATICO">Automático</option></select><small>{row.equipmentType}</small></td>
+            <td><input type="number" min="0" step="0.01" value={row.unitCost} onChange={(event) => updateRow(index, { unitCost: event.target.value })} placeholder="Costo Entel" aria-label={`Costo línea ${index + 1}`} /></td>
+            <td><span className={`gr-row-status ${rowErrors[index].length ? "review" : "ready"}`}>{rowErrors[index].length ? `Revisar ${rowErrors[index].join(", ")}` : knownProduct ? "Maestro OK" : "SKU nuevo"}</span></td>
+            <td>{rows.length > 1 ? <button type="button" className="icon-button" onClick={() => removeRow(index)} aria-label={`Eliminar línea ${index + 1}`}><Trash2 size={16} /></button> : null}</td>
+          </tr>;
+        })}</tbody></table></div>
+        <div className="gr-table-help"><span><b>Equipo seriado:</b> una fila por serie, cantidad 1 y SKU asociado.</span><span><b>Lote:</b> una fila con su cantidad total.</span><span><b>Descripción:</b> se completa desde Maestro SKU.</span></div>
       </section>
 
       {!sharedReady ? <div className="gr-submit-note"><AlertTriangle size={16} /><span>Para cargar necesitas un RUC activo, Coordinador Entel y Coordinador F1.</span></div> : null}
