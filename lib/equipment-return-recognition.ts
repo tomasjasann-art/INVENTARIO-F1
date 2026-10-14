@@ -54,6 +54,24 @@ function labelledValue(text: string, labels: RegExp) {
   return "";
 }
 
+function serialImmediatelyAfterLabel(text: string) {
+  const normalizedText = text.toUpperCase().replace(/[|]/g, " ");
+  const serialLabel = /(?:^|[\s(])(?:S\s*[\/\\-]?\s*N|5\s*N|SERIAL(?:\s*(?:NO|NUMBER|N[°º]))?|SERIE)\s*(?:N[°ºO.]*)?\s*[:#=-]?\s*/i;
+  const lines = normalizedText.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  for (const [index, line] of lines.entries()) {
+    const label = line.match(serialLabel);
+    if (!label || label.index === undefined) continue;
+    const valueStart = label.index + label[0].length;
+    const sections = [line.slice(valueStart), ...lines.slice(index + 1, index + 3)];
+    for (const section of sections) {
+      const labelledSection = section.split(/\s+(?:Y|P\/?N|PART|MODEL(?:O)?|SKU)\s+/i)[0];
+      const joinedCandidate = normalizeEquipmentIdentifier(labelledSection);
+      if (joinedCandidate.length >= 5 && joinedCandidate.length <= 32 && /\d/.test(joinedCandidate)) return joinedCandidate;
+    }
+  }
+  return "";
+}
+
 function serialTokens(value: string) {
   return value.split(/[,;\n]/).map((item) => normalizeEquipmentIdentifier(item)).filter(Boolean);
 }
@@ -107,7 +125,12 @@ export function recognizeEquipmentReturn({
   const explicitPartNumber = usefulIdentifier(explicitPartNumberValue) ? explicitPartNumberValue : "";
   const excludedSerials = new Set(products.map((product) => normalizeEquipmentIdentifier(product.sku)));
   if (explicitPartNumber) excludedSerials.add(normalizeEquipmentIdentifier(explicitPartNumber));
-  const serial = labelledValue(upperText, /S\/?N|SERIAL(?:\s*(?:NO|NUMBER))?|SERIE/) || fallbackSerial(upperText, excludedSerials);
+  // La etiqueta puede contener dos códigos de barras. La serie válida es el
+  // primer valor que aparece inmediatamente después de SN/S/N, no el último
+  // código que Tesseract encuentre en la fotografía.
+  const serial = serialImmediatelyAfterLabel(upperText)
+    || labelledValue(upperText, /S\/?N|SERIAL(?:\s*(?:NO|NUMBER))?|SERIE/)
+    || fallbackSerial(upperText, excludedSerials);
   const serialKey = normalizeEquipmentIdentifier(serial);
   const warnings: string[] = [];
 

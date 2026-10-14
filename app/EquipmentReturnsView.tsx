@@ -8,6 +8,7 @@ import {
   Copy,
   Download,
   FileSpreadsheet,
+  FolderOpen,
   Image as ImageIcon,
   LoaderCircle,
   PackageCheck,
@@ -20,9 +21,22 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { FormEvent, useMemo, useState } from "react";
+import type { ClipboardEvent, DragEvent } from "react";
 import { normalizeEquipmentIdentifier, recognizeEquipmentReturn } from "../lib/equipment-return-recognition";
 
 type ReturnStatus = "PENDIENTE_APROBACION" | "OBSERVADA" | "APROBADA_PENDIENTE_RECEPCION" | "RECIBIDA_FISICA" | "RECHAZADA";
+type PhotoKind = "serie" | "modelo" | "panoramica" | "entel";
+
+const PHOTO_KINDS: PhotoKind[] = ["serie", "modelo", "panoramica", "entel"];
+const DEFAULT_RETURN_CONDITIONS = [
+  "USADO OPERATIVO",
+  "USADO NO OPERATIVO",
+  "OPERATIVO",
+  "INOPERATIVO",
+  "NUEVO",
+  "DAÑADO",
+  "PARA REPARACIÓN",
+];
 
 export type EquipmentReturnRecord = {
   id: number;
@@ -283,15 +297,30 @@ function csvPayload(values: {
   return [values.item, values.coordinatorF1, values.warehouse, values.networkComponent, values.subProject, values.sourceProject, values.hardwareTask, values.sku, values.serial, values.quantity, values.condition, values.volumeM3, values.site].map(csvCell).join(",");
 }
 
+function photoKindFromName(fileName: string) {
+  const name = fileName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (/(serie|serial|ssnn|(^|[^a-z])sn([^a-z]|$))/.test(name)) return "serie" as const;
+  if (/(modelo|model|part|sku|(^|[^a-z])pn([^a-z]|$))/.test(name)) return "modelo" as const;
+  if (/(panoram|general|equipo)/.test(name)) return "panoramica" as const;
+  if (/(entel|etiqueta|label)/.test(name)) return "entel" as const;
+  return null;
+}
+
 async function preparePhoto(file: File) {
   if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) throw new Error("Usa una imagen JPG, PNG o WEBP.");
   if (file.size > 10_000_000) throw new Error("La imagen supera 10 MB.");
   const bitmap = await createImageBitmap(file);
-  const ocrScale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
+  const ocrScale = Math.min(3, Math.max(1, 2400 / Math.max(bitmap.width, bitmap.height)));
   const ocrCanvas = document.createElement("canvas");
   ocrCanvas.width = Math.max(1, Math.round(bitmap.width * ocrScale));
   ocrCanvas.height = Math.max(1, Math.round(bitmap.height * ocrScale));
-  ocrCanvas.getContext("2d")?.drawImage(bitmap, 0, 0, ocrCanvas.width, ocrCanvas.height);
+  const ocrContext = ocrCanvas.getContext("2d");
+  if (ocrContext) {
+    ocrContext.imageSmoothingEnabled = true;
+    ocrContext.imageSmoothingQuality = "high";
+    ocrContext.filter = "grayscale(1) contrast(1.55)";
+    ocrContext.drawImage(bitmap, 0, 0, ocrCanvas.width, ocrCanvas.height);
+  }
   const storageScale = Math.min(1, 1400 / Math.max(bitmap.width, bitmap.height));
   const storageCanvas = document.createElement("canvas");
   storageCanvas.width = Math.max(1, Math.round(bitmap.width * storageScale));
@@ -322,10 +351,6 @@ function returnExportRows(batch: ReturnBatch) {
     Condición: record.condition,
     "M3": record.volumeM3,
     Site: record.site,
-    "Foto serie": record.evidenceImage,
-    "Foto modelo": record.modelImage,
-    "Foto panorámica": record.panoramicImage,
-    "Etiqueta Entel": record.entelLabelImage,
     Observación: record.notes,
     Estado: statusLabel(record.status),
     CSV: csvPayload({
@@ -343,6 +368,10 @@ function returnExportRows(batch: ReturnBatch) {
       volumeM3: record.volumeM3,
       site: record.site,
     }),
+    "Foto serie": record.evidenceImage,
+    "Foto modelo": record.modelImage,
+    "Foto panorámica": record.panoramicImage,
+    "Etiqueta Entel": record.entelLabelImage,
   }));
 }
 
@@ -394,6 +423,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       average: averageHours >= 24 ? `${Math.round(averageHours / 24)} días` : `${averageHours} h`,
     };
   }, [batches]);
+  const conditionOptions = useMemo(() => [...new Set([
+    ...DEFAULT_RETURN_CONDITIONS,
+    ...returns.map((record) => record.condition),
+    ...returns.map((record) => record.receiptCondition),
+    ...rows.map((row) => row.condition),
+    ...receiptDrafts.map((receipt) => receipt.condition),
+  ].map((value) => value.trim().toUpperCase()).filter(Boolean))].toSorted(), [receiptDrafts, returns, rows]);
 
   function updateRow(key: string, patch: Partial<DraftRow>) {
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
@@ -410,7 +446,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     return body.storedImage;
   }
 
-  async function attachPhoto(row: DraftRow, kind: "serie" | "modelo" | "panoramica" | "entel", file?: File) {
+  async function attachPhoto(row: DraftRow, kind: PhotoKind, file?: File) {
     if (!file || processingKey) return;
     const operationKey = `${row.key}:${kind}`;
     setProcessingKey(operationKey);
@@ -464,6 +500,19 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       await worker?.terminate();
       setProcessingKey("");
     }
+  }
+
+  async function attachPhotoFolder(row: DraftRow, selectedFiles: File[]) {
+    const files = selectedFiles.filter((file) => file.type.startsWith("image/")).slice(0, 4);
+    if (!files.length) return setError("La carpeta no contiene fotografías JPG, PNG o WEBP.");
+    const assigned = new Set<PhotoKind>();
+    const assignments = files.map((file) => {
+      const inferred = photoKindFromName(file.name);
+      const kind = inferred && !assigned.has(inferred) ? inferred : PHOTO_KINDS.find((candidate) => !assigned.has(candidate));
+      if (kind) assigned.add(kind);
+      return { file, kind };
+    }).filter((entry): entry is { file: File; kind: PhotoKind } => Boolean(entry.kind));
+    for (const assignment of assignments) await attachPhoto(row, assignment.kind, assignment.file);
   }
 
   function selectProduct(row: DraftRow, value: string) {
@@ -583,6 +632,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     const XLSX = await import("xlsx");
     const workbook = XLSX.utils.book_new();
     const sheet = XLSX.utils.json_to_sheet(returnExportRows(batch));
+    sheet["!cols"] = [
+      { wch: 7 }, { wch: 22 }, { wch: 24 }, { wch: 14 }, { wch: 25 }, { wch: 16 },
+      { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 28 }, { wch: 24 },
+      { wch: 10 }, { wch: 11 }, { wch: 22 }, { wch: 10 }, { wch: 22 }, { wch: 28 },
+      { wch: 18 }, { wch: 55 }, { wch: 45 }, { wch: 45 }, { wch: 45 }, { wch: 45 },
+    ];
+    if (sheet["!ref"]) sheet["!autofilter"] = { ref: sheet["!ref"] };
     XLSX.utils.book_append_sheet(workbook, sheet, "Devolución por site");
     XLSX.writeFile(workbook, `${batch.code}-${batch.site.replace(/[^A-Z0-9]+/gi, "-")}.xlsx`);
   }
@@ -620,39 +676,39 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           <label className="field field-wide"><span>Comentario general</span><input value={comments} onChange={(event) => setComments(event.target.value)} placeholder="Referencia de la desinstalación o devolución" /></label>
         </div>
         <datalist id="return-product-options">{products.map((item) => <option value={`${item.sku} — ${item.description}`} key={item.id} />)}</datalist>
+        <datalist id="return-condition-options">{conditionOptions.map((condition) => <option value={condition} key={condition} />)}</datalist>
 
-        <div className="return-draft-list">
-          {rows.map((row, index) => {
-            const product = products.find((item) => item.id === row.productId);
-            const rowCsv = csvPayload({ item: index + 1, coordinatorF1, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site });
-            return <article className="return-draft-row" key={row.key}>
-              <div className="return-row-heading"><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{product?.sku || "Fila manual / por imagen"}</strong><small>{product?.description || "Carga una foto o selecciona el SKU"}</small></div>{rows.length > 1 && <button type="button" className="icon-button danger-text" onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))} aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={16} /></button>}</div>
-              <div className="return-row-fields">
-                <label className="field"><span>SKU / descripción *</span><input list="return-product-options" value={row.productSearch} onChange={(event) => selectProduct(row, event.target.value)} placeholder="Busca por SKU o descripción" required /><small>{row.productId ? `Coincidencia ${row.matchConfidence}% · ${row.matchMethod.replaceAll("_", " ").toLowerCase()}` : "Selecciona una opción del maestro."}</small></label>
-                <label className="field"><span>Serie / Lote *</span><input value={row.serial} onChange={(event) => updateRow(row.key, { serial: event.target.value.toUpperCase() })} placeholder="Serie única o lote" required /></label>
-                <label className="field"><span>Part number</span><input value={row.partNumber} onChange={(event) => updateRow(row.key, { partNumber: event.target.value.toUpperCase() })} placeholder="Editable después del OCR" /></label>
-                <label className="field"><span>Cantidad *</span><input type="number" min={1} value={row.quantity} onChange={(event) => updateRow(row.key, { quantity: Math.max(1, Number(event.target.value) || 1) })} required /></label>
-                <label className="field"><span>Componente</span><input value={row.networkComponent} onChange={(event) => updateRow(row.key, { networkComponent: event.target.value.toUpperCase() })} placeholder="Rack / antena / radio" /></label>
-                <label className="field"><span>Sub proyecto</span><input value={row.subProject} onChange={(event) => updateRow(row.key, { subProject: event.target.value.toUpperCase() })} /></label>
-                <label className="field"><span>Proyecto origen</span><input value={row.sourceProject} onChange={(event) => updateRow(row.key, { sourceProject: event.target.value.toUpperCase() })} /></label>
-                <label className="field"><span>Tarea hardware</span><input value={row.hardwareTask} onChange={(event) => updateRow(row.key, { hardwareTask: event.target.value.toUpperCase() })} /></label>
-                <label className="field"><span>Largo</span><input value={row.length} onChange={(event) => updateRow(row.key, { length: event.target.value })} placeholder="20" /></label>
-                <label className="field"><span>Condición</span><input value={row.condition} onChange={(event) => updateRow(row.key, { condition: event.target.value.toUpperCase() })} /></label>
-                <label className="field"><span>Volumen M3</span><input value={row.volumeM3} onChange={(event) => updateRow(row.key, { volumeM3: event.target.value })} placeholder="0.32" /></label>
-                <label className="field"><span>Observación de fila</span><input value={row.notes} onChange={(event) => updateRow(row.key, { notes: event.target.value })} /></label>
-              </div>
-              <div className="return-photo-grid">
-                <PhotoBox label="Foto serie · OCR" preview={row.evidencePreview} busy={processingKey === `${row.key}:serie`} onFile={(file) => void attachPhoto(row, "serie", file)} />
-                <PhotoBox label="Foto modelo" preview={row.modelPreview} busy={processingKey === `${row.key}:modelo`} onFile={(file) => void attachPhoto(row, "modelo", file)} />
-                <PhotoBox label="Foto panorámica" preview={row.panoramicPreview} busy={processingKey === `${row.key}:panoramica`} onFile={(file) => void attachPhoto(row, "panoramica", file)} />
-                <PhotoBox label="Etiqueta Entel · opcional" preview={row.entelLabelPreview} busy={processingKey === `${row.key}:entel`} onFile={(file) => void attachPhoto(row, "entel", file)} />
-              </div>
-              {processingKey === `${row.key}:serie` && <div className="ocr-progress"><LoaderCircle className="spin" size={15} />Reconociendo serie, part number y SKU… {progress}%</div>}
-              {row.partNumber && <label className="remember-part compact"><input type="checkbox" checked={row.rememberIdentifier} onChange={(event) => updateRow(row.key, { rememberIdentifier: event.target.checked })} /><span><strong>Recordar Part Number → SKU</strong><small>Mejora las siguientes lecturas.</small></span></label>}
-              {row.warnings.map((warning) => <div className="inline-warning" key={warning}><AlertTriangle size={15} />{warning}</div>)}
-              <div className="return-csv-preview"><span>CSV</span><code>{rowCsv}</code><button type="button" className="icon-button" onClick={() => void navigator.clipboard.writeText(rowCsv)} aria-label={`Copiar CSV de fila ${index + 1}`}><Copy size={14} /></button></div>
-            </article>;
-          })}
+        <div className="table-wrap return-entry-table-wrap">
+          <table className="return-entry-table">
+            <thead><tr><th>#</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
+            <tbody>{rows.map((row, index) => {
+              const product = products.find((item) => item.id === row.productId);
+              const rowCsv = csvPayload({ item: index + 1, coordinatorF1, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site });
+              return <tr key={row.key}>
+                <td className="return-row-number"><strong>{index + 1}</strong></td>
+                <td><input className="table-input" aria-label={`Componente fila ${index + 1}`} value={row.networkComponent} onChange={(event) => updateRow(row.key, { networkComponent: event.target.value.toUpperCase() })} placeholder="Rack / antena" /></td>
+                <td><input className="table-input" aria-label={`Subproyecto fila ${index + 1}`} value={row.subProject} onChange={(event) => updateRow(row.key, { subProject: event.target.value.toUpperCase() })} /></td>
+                <td><input className="table-input" aria-label={`Proyecto origen fila ${index + 1}`} value={row.sourceProject} onChange={(event) => updateRow(row.key, { sourceProject: event.target.value.toUpperCase() })} /></td>
+                <td><input className="table-input" aria-label={`Tarea hardware fila ${index + 1}`} value={row.hardwareTask} onChange={(event) => updateRow(row.key, { hardwareTask: event.target.value.toUpperCase() })} /></td>
+                <td className="return-product-cell"><input className="table-input" aria-label={`SKU o descripción fila ${index + 1}`} list="return-product-options" value={row.productSearch} onChange={(event) => selectProduct(row, event.target.value)} placeholder="Buscar SKU o descripción" required /><strong>{product?.description || "Selecciona del maestro"}</strong><small>{row.productId ? `Coincidencia ${row.matchConfidence}% · ${row.matchMethod.replaceAll("_", " ").toLowerCase()}` : "Pendiente de seleccionar"}</small>{row.warnings.map((warning) => <span className="return-table-warning" key={warning}><AlertTriangle size={12} />{warning}</span>)}</td>
+                <td><input className="table-input serial-input" aria-label={`Serie o lote fila ${index + 1}`} value={row.serial} onChange={(event) => updateRow(row.key, { serial: event.target.value.toUpperCase() })} placeholder="Serie única o lote" required /></td>
+                <td className="return-part-cell"><input className="table-input" aria-label={`Part number fila ${index + 1}`} value={row.partNumber} onChange={(event) => updateRow(row.key, { partNumber: event.target.value.toUpperCase() })} placeholder="Editable" />{row.partNumber && <label><input type="checkbox" checked={row.rememberIdentifier} onChange={(event) => updateRow(row.key, { rememberIdentifier: event.target.checked })} />Recordar PN → SKU</label>}</td>
+                <td><input className="table-input numeric-input" aria-label={`Cantidad fila ${index + 1}`} type="number" min={1} value={row.quantity} onChange={(event) => updateRow(row.key, { quantity: Math.max(1, Number(event.target.value) || 1) })} required /></td>
+                <td><input className="table-input numeric-input" aria-label={`Largo fila ${index + 1}`} value={row.length} onChange={(event) => updateRow(row.key, { length: event.target.value })} placeholder="20" /></td>
+                <td className="return-condition-cell"><input className="table-input" aria-label={`Condición fila ${index + 1}`} list="return-condition-options" value={row.condition} onChange={(event) => updateRow(row.key, { condition: event.target.value.toUpperCase() })} /><small>Elige o escribe otra; se guardará al registrar.</small></td>
+                <td><input className="table-input numeric-input" aria-label={`Volumen fila ${index + 1}`} value={row.volumeM3} onChange={(event) => updateRow(row.key, { volumeM3: event.target.value })} placeholder="0.32" /></td>
+                <td><textarea className="table-input" aria-label={`Observación fila ${index + 1}`} value={row.notes} onChange={(event) => updateRow(row.key, { notes: event.target.value })} rows={3} /></td>
+                <td><div className="return-table-csv"><code>{rowCsv}</code><button type="button" className="icon-button" onClick={() => void navigator.clipboard.writeText(rowCsv)} aria-label={`Copiar CSV de fila ${index + 1}`}><Copy size={14} /></button></div></td>
+                <td className="return-table-photo-cell"><div className="return-photo-grid">
+                  <PhotoBox label="Serie · OCR" preview={row.evidencePreview} busy={processingKey === `${row.key}:serie`} onFile={(file) => void attachPhoto(row, "serie", file)} />
+                  <PhotoBox label="Modelo" preview={row.modelPreview} busy={processingKey === `${row.key}:modelo`} onFile={(file) => void attachPhoto(row, "modelo", file)} />
+                  <PhotoBox label="Panorámica" preview={row.panoramicPreview} busy={processingKey === `${row.key}:panoramica`} onFile={(file) => void attachPhoto(row, "panoramica", file)} />
+                  <PhotoBox label="Etiqueta Entel" preview={row.entelLabelPreview} busy={processingKey === `${row.key}:entel`} onFile={(file) => void attachPhoto(row, "entel", file)} />
+                </div><FolderPhotoPicker busy={processingKey.startsWith(`${row.key}:`)} onFiles={(files) => void attachPhotoFolder(row, files)} />{processingKey === `${row.key}:serie` && <div className="ocr-progress"><LoaderCircle className="spin" size={14} />Leyendo SN… {progress}%</div>}</td>
+                <td>{rows.length > 1 && <button type="button" className="icon-button danger-text" onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))} aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={16} /></button>}</td>
+              </tr>;
+            })}</tbody>
+          </table>
         </div>
         <div className="return-add-row"><button className="secondary-button" type="button" onClick={() => setRows((current) => [...current, newDraftRow()])}><Plus size={16} />Agregar fila manual</button><small>Las filas seriadas deben mantenerse separadas con su SKU asociado.</small></div>
         {error && <div className="inline-error">{error}</div>}
@@ -680,7 +736,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             <label className="field"><span>Ubicación de stock</span><select value={receipt.stockLocation} onChange={(event) => updateReceipt(record.id, { stockLocation: event.target.value })}><option>MO COMPANY</option><option>F1 - TRÁNSITO</option></select></label>
             <label className="field"><span>Unidad de medida</span><input value={receipt.unitMeasure} onChange={(event) => updateReceipt(record.id, { unitMeasure: event.target.value.toUpperCase() })} /></label>
             <label className="field"><span>Estado del equipo</span><input value={receipt.equipmentStatus} onChange={(event) => updateReceipt(record.id, { equipmentStatus: event.target.value.toUpperCase() })} /></label>
-            <label className="field"><span>Condición</span><input value={receipt.condition} onChange={(event) => updateReceipt(record.id, { condition: event.target.value.toUpperCase() })} /></label>
+            <label className="field"><span>Condición</span><input list="return-condition-options" value={receipt.condition} onChange={(event) => updateReceipt(record.id, { condition: event.target.value.toUpperCase() })} /><small>Selecciona una guardada o escribe una nueva.</small></label>
             <label className="field"><span>Costo unitario S/</span><input type="number" min="0" step="0.01" value={receipt.unitCost} onChange={(event) => updateReceipt(record.id, { unitCost: event.target.value })} placeholder="Automático si queda vacío" /></label>
             <label className="field"><span>Observación</span><input value={receipt.notes} onChange={(event) => updateReceipt(record.id, { notes: event.target.value })} /></label>
           </div>
@@ -700,14 +756,14 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             <button className="secondary-button" onClick={() => void copyCsvColumn(batch)}><Copy size={15} />Copiar columna CSV</button>
             <span>Registro lógico: {displayDate(batch.createdAt)} · Almacén: {batch.warehouse}</span>
           </div>
-          <div className="table-wrap"><table className="return-site-table"><thead><tr><th>Ítem</th><th>SKU / Descripción</th><th>Serie / Lote</th><th>Cant.</th><th>Condición / M3</th><th>Evidencias</th><th>CSV</th></tr></thead><tbody>{batch.rows.map((record) => <tr key={record.id}>
+          <div className="table-wrap"><table className="return-site-table"><thead><tr><th>Ítem</th><th>SKU / Descripción</th><th>Serie / Lote</th><th>Cant.</th><th>Condición / M3</th><th>CSV</th><th>Evidencias fotográficas</th></tr></thead><tbody>{batch.rows.map((record) => <tr key={record.id}>
             <td><strong>{record.batchItem}</strong></td>
             <td><strong>{record.skuSnapshot}</strong><small>{record.descriptionSnapshot}</small></td>
             <td><strong>{record.serial}</strong><small>PN: {record.detectedPartNumber || "—"}</small></td>
             <td><strong>{record.quantity}</strong><small>{record.length ? `Largo: ${record.length}` : ""}</small></td>
             <td><strong>{record.condition}</strong><small>{record.volumeM3 ? `${record.volumeM3} m³` : "Sin volumen"}</small></td>
-            <td><div className="return-evidence-links">{record.evidenceImage && <a href={record.evidenceImage} target="_blank" rel="noreferrer">Serie</a>}{record.modelImage && <a href={record.modelImage} target="_blank" rel="noreferrer">Modelo</a>}{record.panoramicImage && <a href={record.panoramicImage} target="_blank" rel="noreferrer">Panorámica</a>}{record.entelLabelImage && <a href={record.entelLabelImage} target="_blank" rel="noreferrer">Entel</a>}</div></td>
             <td><button className="text-button csv-copy-button" onClick={() => void navigator.clipboard.writeText(returnExportRows(batch).find((row) => row.ID === record.batchItem)?.CSV || "")}><Copy size={13} />Copiar fila</button></td>
+            <td><div className="return-report-photos"><EvidenceThumb label="Serie" src={record.evidenceImage} /><EvidenceThumb label="Modelo" src={record.modelImage} /><EvidenceThumb label="Panorámica" src={record.panoramicImage} /><EvidenceThumb label="Entel" src={record.entelLabelImage} /></div></td>
           </tr>)}</tbody></table></div>
           <footer><div><strong>{batch.orderNumber || "Sin pedido asociado"}</strong><small>{batch.rows[0]?.batchComments || batch.rows[0]?.notes || "Sin observaciones"}</small></div><div className="return-actions">
             {["PENDIENTE_APROBACION", "OBSERVADA"].includes(batch.status) && <button className="secondary-button" disabled={saving} onClick={() => void changeBatchStatus(batch, "APROBADA_PENDIENTE_RECEPCION")}><CheckCircle2 size={14} />Aprobar carga</button>}
@@ -722,9 +778,52 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
 }
 
 function PhotoBox({ label, preview, busy, onFile }: { label: string; preview: string; busy: boolean; onFile: (file?: File) => void }) {
-  return <label className={`return-photo-box ${preview ? "has-photo" : ""}`}>
-    {preview ? <Image src={preview} alt={label} width={420} height={260} unoptimized /> : <span><Camera size={19} /><strong>{label}</strong><small>JPG, PNG o WEBP</small></span>}
-    <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => onFile(event.target.files?.[0])} />
+  const [dragging, setDragging] = useState(false);
+
+  function acceptDroppedFile(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setDragging(false);
+    onFile([...event.dataTransfer.files].find((file) => file.type.startsWith("image/")));
+  }
+
+  function acceptPastedFile(event: ClipboardEvent<HTMLLabelElement>) {
+    const file = [...event.clipboardData.items].find((item) => item.type.startsWith("image/"))?.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    onFile(file);
+  }
+
+  return <label
+    className={`return-photo-box ${preview ? "has-photo" : ""} ${dragging ? "is-dragging" : ""}`}
+    tabIndex={0}
+    aria-label={`${label}. Arrastra una foto, pega con Control V o selecciona un archivo.`}
+    onPaste={acceptPastedFile}
+    onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
+    onDragOver={(event) => event.preventDefault()}
+    onDragLeave={() => setDragging(false)}
+    onDrop={acceptDroppedFile}
+  >
+    {preview ? <Image src={preview} alt={label} width={420} height={260} unoptimized /> : <span><Camera size={18} /><strong>{label}</strong><small>Arrastra · Ctrl+V · clic</small></span>}
+    <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => { onFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
     {busy && <b><LoaderCircle className="spin" size={15} />Cargando…</b>}
   </label>;
+}
+
+function FolderPhotoPicker({ busy, onFiles }: { busy: boolean; onFiles: (files: File[]) => void }) {
+  return <label className={`return-folder-picker ${busy ? "is-busy" : ""}`}>
+    <FolderOpen size={14} /><span><strong>Seleccionar carpeta</strong><small>Asigna hasta 4 fotos por nombre o por orden.</small></span>
+    <input
+      type="file"
+      accept="image/jpeg,image/png,image/webp"
+      multiple
+      {...{ webkitdirectory: "", directory: "" }}
+      disabled={busy}
+      onChange={(event) => { onFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }}
+    />
+  </label>;
+}
+
+function EvidenceThumb({ label, src }: { label: string; src: string }) {
+  if (!src) return <span className="return-report-photo empty-photo"><ImageIcon size={15} /><small>{label}</small></span>;
+  return <a className="return-report-photo" href={src} target="_blank" rel="noreferrer" title={`Abrir foto ${label}`}><Image src={src} alt={`Foto ${label}`} width={120} height={78} unoptimized /><small>{label}</small></a>;
 }
