@@ -438,10 +438,13 @@ textarea.table-input { min-height: 68px; resize: vertical; }
 .return-table-csv code { max-width: 210px; overflow: hidden; font-size: 7px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .return-table-csv .icon-button { width: 26px; height: 26px; border-color: #4b555d; background: #343e46; color: #fff; }
 .return-table-photo-cell .return-photo-grid { grid-template-columns: repeat(4,minmax(0,1fr)); margin-top: 0; }
+.return-photo-slot { min-width: 0; display: grid; gap: 4px; }
 .return-table-photo-cell .return-photo-box { min-height: 94px; outline: none; }
 .return-table-photo-cell .return-photo-box:focus,.return-photo-box.is-dragging { border-color: #e1662d; background: #fff4ed; box-shadow: 0 0 0 2px rgba(225,102,45,.12); }
 .return-table-photo-cell .return-photo-box img { height: 94px; }
 .return-table-photo-cell .return-photo-box > span { padding: 9px 5px; }
+.return-paste-excel { min-height: 26px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 4px 5px; border: 1px solid #e2e5e7; border-radius: 6px; background: #fff; color: #ca5a27; font: inherit; font-size: 6px; font-weight: 850; cursor: pointer; }
+.return-paste-excel:hover { border-color: #e09266; background: #fff8f3; }.return-paste-excel:disabled { opacity: .55; cursor: wait; }
 .return-folder-picker { position: relative; min-height: 36px; display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 7px; padding: 6px 10px; overflow: hidden; border: 1px solid #e0e4e6; border-radius: 7px; background: #fafbfb; color: #636c73; cursor: pointer; }
 .return-folder-picker:hover { border-color: #e39468; background: #fffaf7; color: #c85d2a; }
 .return-folder-picker input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }

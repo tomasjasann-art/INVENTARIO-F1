@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock3,
   Copy,
+  ClipboardPaste,
   Download,
   FileSpreadsheet,
   FolderOpen,
@@ -303,6 +304,40 @@ function photoKindFromName(fileName: string) {
   if (/(modelo|model|part|sku|(^|[^a-z])pn([^a-z]|$))/.test(name)) return "modelo" as const;
   if (/(panoram|general|equipo)/.test(name)) return "panoramica" as const;
   if (/(entel|etiqueta|label)/.test(name)) return "entel" as const;
+  return null;
+}
+
+function imageExtension(mimeType: string) {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  return "png";
+}
+
+function imageFile(blob: Blob, prefix = "excel") {
+  return new File([blob], `${prefix}-${Date.now()}.${imageExtension(blob.type)}`, { type: blob.type || "image/png" });
+}
+
+async function imageFromClipboardEvent(event: ClipboardEvent<HTMLElement>) {
+  const directFile = [...event.clipboardData.files].find((file) => file.type.startsWith("image/"));
+  if (directFile) return directFile;
+  const imageItem = [...event.clipboardData.items].find((item) => item.type.startsWith("image/"));
+  const itemFile = imageItem?.getAsFile();
+  if (itemFile) return itemFile;
+  const html = event.clipboardData.getData("text/html");
+  const dataImage = html.match(/<img[^>]+src=["'](data:image\/(?:png|jpeg|webp);base64,[^"']+)["']/i)?.[1];
+  if (!dataImage) return null;
+  const response = await fetch(dataImage);
+  return imageFile(await response.blob());
+}
+
+async function imageFromSystemClipboard() {
+  if (!navigator.clipboard?.read) return null;
+  const items = await navigator.clipboard.read();
+  for (const item of items) {
+    const imageType = item.types.find((type) => /^image\/(png|jpeg|webp)$/i.test(type));
+    if (!imageType) continue;
+    return imageFile(await item.getType(imageType));
+  }
   return null;
 }
 
@@ -700,10 +735,10 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
                 <td><textarea className="table-input" aria-label={`Observación fila ${index + 1}`} value={row.notes} onChange={(event) => updateRow(row.key, { notes: event.target.value })} rows={3} /></td>
                 <td><div className="return-table-csv"><code>{rowCsv}</code><button type="button" className="icon-button" onClick={() => void navigator.clipboard.writeText(rowCsv)} aria-label={`Copiar CSV de fila ${index + 1}`}><Copy size={14} /></button></div></td>
                 <td className="return-table-photo-cell"><div className="return-photo-grid">
-                  <PhotoBox label="Serie · OCR" preview={row.evidencePreview} busy={processingKey === `${row.key}:serie`} onFile={(file) => void attachPhoto(row, "serie", file)} />
-                  <PhotoBox label="Modelo" preview={row.modelPreview} busy={processingKey === `${row.key}:modelo`} onFile={(file) => void attachPhoto(row, "modelo", file)} />
-                  <PhotoBox label="Panorámica" preview={row.panoramicPreview} busy={processingKey === `${row.key}:panoramica`} onFile={(file) => void attachPhoto(row, "panoramica", file)} />
-                  <PhotoBox label="Etiqueta Entel" preview={row.entelLabelPreview} busy={processingKey === `${row.key}:entel`} onFile={(file) => void attachPhoto(row, "entel", file)} />
+                  <PhotoBox label="Serie · OCR" preview={row.evidencePreview} busy={processingKey === `${row.key}:serie`} onFile={(file) => void attachPhoto(row, "serie", file)} onError={setError} />
+                  <PhotoBox label="Modelo" preview={row.modelPreview} busy={processingKey === `${row.key}:modelo`} onFile={(file) => void attachPhoto(row, "modelo", file)} onError={setError} />
+                  <PhotoBox label="Panorámica" preview={row.panoramicPreview} busy={processingKey === `${row.key}:panoramica`} onFile={(file) => void attachPhoto(row, "panoramica", file)} onError={setError} />
+                  <PhotoBox label="Etiqueta Entel" preview={row.entelLabelPreview} busy={processingKey === `${row.key}:entel`} onFile={(file) => void attachPhoto(row, "entel", file)} onError={setError} />
                 </div><FolderPhotoPicker busy={processingKey.startsWith(`${row.key}:`)} onFiles={(files) => void attachPhotoFolder(row, files)} />{processingKey === `${row.key}:serie` && <div className="ocr-progress"><LoaderCircle className="spin" size={14} />Leyendo SN… {progress}%</div>}</td>
                 <td>{rows.length > 1 && <button type="button" className="icon-button danger-text" onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))} aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={16} /></button>}</td>
               </tr>;
@@ -777,7 +812,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   </>;
 }
 
-function PhotoBox({ label, preview, busy, onFile }: { label: string; preview: string; busy: boolean; onFile: (file?: File) => void }) {
+function PhotoBox({ label, preview, busy, onFile, onError }: { label: string; preview: string; busy: boolean; onFile: (file?: File) => void; onError: (message: string) => void }) {
   const [dragging, setDragging] = useState(false);
 
   function acceptDroppedFile(event: DragEvent<HTMLLabelElement>) {
@@ -786,27 +821,44 @@ function PhotoBox({ label, preview, busy, onFile }: { label: string; preview: st
     onFile([...event.dataTransfer.files].find((file) => file.type.startsWith("image/")));
   }
 
-  function acceptPastedFile(event: ClipboardEvent<HTMLLabelElement>) {
-    const file = [...event.clipboardData.items].find((item) => item.type.startsWith("image/"))?.getAsFile();
-    if (!file) return;
+  async function acceptPastedFile(event: ClipboardEvent<HTMLLabelElement>) {
     event.preventDefault();
-    onFile(file);
+    try {
+      const file = await imageFromClipboardEvent(event) || await imageFromSystemClipboard();
+      if (!file) throw new Error("Excel no entregó una imagen compatible.");
+      onFile(file);
+    } catch {
+      onError("No se pudo leer la foto de Excel. Selecciona la imagen dentro de Excel —no solo la celda—, presiona Ctrl+C y luego usa “Pegar desde Excel”.");
+    }
   }
 
-  return <label
-    className={`return-photo-box ${preview ? "has-photo" : ""} ${dragging ? "is-dragging" : ""}`}
-    tabIndex={0}
-    aria-label={`${label}. Arrastra una foto, pega con Control V o selecciona un archivo.`}
-    onPaste={acceptPastedFile}
-    onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
-    onDragOver={(event) => event.preventDefault()}
-    onDragLeave={() => setDragging(false)}
-    onDrop={acceptDroppedFile}
-  >
-    {preview ? <Image src={preview} alt={label} width={420} height={260} unoptimized /> : <span><Camera size={18} /><strong>{label}</strong><small>Arrastra · Ctrl+V · clic</small></span>}
-    <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => { onFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
-    {busy && <b><LoaderCircle className="spin" size={15} />Cargando…</b>}
-  </label>;
+  async function pasteFromExcel() {
+    try {
+      const file = await imageFromSystemClipboard();
+      if (!file) throw new Error("No hay una imagen compatible en el portapapeles.");
+      onFile(file);
+    } catch {
+      onError("No se pudo leer la foto de Excel. Selecciona la imagen dentro de Excel —no solo la celda—, presiona Ctrl+C, permite el acceso al portapapeles y vuelve a intentarlo.");
+    }
+  }
+
+  return <div className="return-photo-slot">
+    <label
+      className={`return-photo-box ${preview ? "has-photo" : ""} ${dragging ? "is-dragging" : ""}`}
+      tabIndex={0}
+      aria-label={`${label}. Arrastra una foto, pega con Control V o selecciona un archivo.`}
+      onPaste={(event) => void acceptPastedFile(event)}
+      onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
+      onDragOver={(event) => event.preventDefault()}
+      onDragLeave={() => setDragging(false)}
+      onDrop={acceptDroppedFile}
+    >
+      {preview ? <Image src={preview} alt={label} width={420} height={260} unoptimized /> : <span><Camera size={18} /><strong>{label}</strong><small>Arrastra · Ctrl+V · clic</small></span>}
+      <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => { onFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+      {busy && <b><LoaderCircle className="spin" size={15} />Cargando…</b>}
+    </label>
+    <button type="button" className="return-paste-excel" disabled={busy} onClick={() => void pasteFromExcel()}><ClipboardPaste size={12} />Pegar desde Excel</button>
+  </div>;
 }
 
 function FolderPhotoPicker({ busy, onFiles }: { busy: boolean; onFiles: (files: File[]) => void }) {
