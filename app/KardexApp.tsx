@@ -356,6 +356,10 @@ function movementEffect(type: Movement["type"]) {
   return 1;
 }
 
+function isLotControlled(category: string, quantity = 1) {
+  return category.trim().toUpperCase().includes("LOTE") || quantity > 1;
+}
+
 function movementSeries(value: string) {
   return value.split(/[,;\n]/).map((item) => item.trim().toUpperCase()).filter(Boolean);
 }
@@ -2094,7 +2098,8 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
         if (duplicate) reason = "La misma GR y pedido ya fueron cargados para esta razón social.";
       }
 
-      if (!reason && movementType === "entrada" && product && serials) {
+      const lotControlled = isLotControlled(product?.category || equipmentType, quantity);
+      if (!reason && movementType === "entrada" && product && serials && !lotControlled) {
         const duplicate = movementSeries(serials).find((serial) => movements
           .filter((movement) => movement.productId === product.id)
           .reduce((balance, movement) => balance + movementEffect(movement.type) * seriesQuantity(movement.serials, movement.quantity, serial), 0) > 0);
@@ -2376,7 +2381,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       </> : <>
         <li><b>Campos obligatorios</b><span>Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Fuente oficial</b><span>Ingresos y salidas se relacionan por SKU y muestran estos nombres.</span></li><li><b>Correcciones</b><span>Al actualizar el maestro, el nuevo nombre se refleja en todo el historial.</span></li>
       </>}</ul>
-      {movementType !== "maestro" && <div className="mapping-note"><ShieldCheck size={17} /><span><b>Control de duplicados:</b> una GR y pedido pueden contener varias líneas dentro de la primera carga. Se bloquea volver a cargar la misma GR + pedido para la misma razón social; otra razón social sí se admite.</span></div>}
+      {movementType !== "maestro" && <div className="mapping-note"><ShieldCheck size={17} /><span><b>Control de duplicados:</b> una GR y pedido pueden contener varias líneas dentro de la primera carga. Las series de equipos son únicas; un mismo lote sí puede repetirse en pedidos diferentes. Se bloquea volver a cargar la misma GR + pedido para la misma razón social; otra razón social sí se admite.</span></div>}
       <div className="storage-note"><Database size={18} /><div><strong>¿Dónde se almacena?</strong><span>Maestro SKU en Productos; ingresos y salidas en el Historial de movimientos.</span></div></div>
       <div className="mapping-note"><AlertTriangle size={17} /><span>{movementType === "entrada" ? "Los ingresos suman stock y agrupan todos los SKU del mismo pedido/coordinador. Si el SKU ya existe, el Excel no reemplaza su descripción ni su tipo." : movementType === "salida" ? "Las salidas validan SKU + N° Pedido + CordEntelFinal + Serie/Lote antes de descontar." : "Usa esta plantilla como catálogo oficial. Los SKU faltantes todavía pueden crearse desde un ingreso y luego corregirse en el maestro."}</span></div>
     </aside>

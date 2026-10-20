@@ -449,6 +449,10 @@ function stockEffect(type: string) {
   return 1;
 }
 
+function isLotControlled(category: string, quantity = 1) {
+  return normalizeParty(category).includes("LOTE") || quantity > 1;
+}
+
 function splitSeries(value: string) {
   return value
     .split(/[,;\n]/)
@@ -1992,8 +1996,7 @@ export async function POST(request: Request) {
           }
 
           const serializedEquipment = movementType === "entrada"
-            && quantity === 1
-            && equipmentType.toUpperCase().includes("EQUIPO")
+            && !isLotControlled(product.category || equipmentType, quantity)
             && Boolean(seriesLot);
           if (serializedEquipment) {
             const duplicated = splitSeries(seriesLot).filter((token) => {
@@ -2201,7 +2204,7 @@ export async function POST(request: Request) {
       }
     }
 
-    if (type === "entrada" && serials) {
+    if (type === "entrada" && serials && !isLotControlled(product.category, quantity)) {
       const duplicated = splitSeries(serials).filter((token) => productMovements.reduce(
         (total, row) => total + stockEffect(row.type) * trackedSeriesQuantity(row.serials, row.quantity, token),
         0,
