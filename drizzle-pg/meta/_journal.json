@@ -85,6 +85,13 @@
       "when": 1792008433877,
       "tag": "0011_narrow_riptide",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792541627980,
+      "tag": "0012_thick_doctor_strange",
+      "breakpoints": true
     }
   ]
 }
