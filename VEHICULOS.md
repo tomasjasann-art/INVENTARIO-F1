@@ -1,6 +1,6 @@
 # Control de vehículos · Logística F1
 
-Ruta: `/vehiculos`, accesible desde el menú del Kardex. Producción se publica mediante la integración existente GitHub main → Vercel. Los datos residen en Supabase PostgreSQL y las evidencias en el bucket privado existente `kardex-evidencias`.
+Administración y Logística abren el desplegable **Control de vehículos** dentro del Kardex y eligen **Datos del vehículo → Agregar vehículo** para comenzar. Las secciones se muestran en el mismo Kardex. La ruta directa `/vehiculos` conserva el portal independiente, incluido el acceso de conductores. Producción se publica mediante la integración existente GitHub main → Vercel. Los datos residen en Supabase PostgreSQL y las evidencias en el bucket privado existente `kardex-evidencias`.
 
 ## Operación inicial
 
@@ -33,3 +33,9 @@ La API aplica permisos de servidor, propiedad de asignaciones y cambio obligator
 La migración `0013_control_vehiculos` es aditiva. El build existente aplica las migraciones pendientes mediante Drizzle antes de construir Next.js. No requiere nuevas variables de entorno.
 
 Comprobaciones: `node --test tests/fleet.test.mjs`, `pnpm exec tsc --noEmit`, `pnpm lint`, `pnpm build`.
+
+## Carga y recuperación
+
+El lector de flota consulta los catálogos en secuencia para no lanzar una ráfaga superior al pool de conexiones de la función. El API devuelve un error JSON a los 20 segundos si la lectura no responde. El navegador cancela la petición a los 25 segundos y muestra **Reintentar**, conservando el menú del Kardex. Una respuesta inválida no se interpreta como una flota vacía. Al cambiar de módulo se cancela la petición pendiente.
+
+Validación de regresión: `node --test tests/fleet.test.mjs tests/fleet-loading.test.mjs`. Los dobles de identidad y base de datos de estas pruebas son locales; no demuestran una sesión autenticada de producción.

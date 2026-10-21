@@ -23,7 +23,19 @@ const assignmentSchema = z.object({ id: optionalId, vehicleId: id, driverId: id,
 const expenseSchema = z.object({ vehicleId: id, assignmentId: optionalId, date, kind: z.enum(["COMBUSTIBLE", "PEAJE", "MANTENIMIENTO"]), amount: amount, quantity: z.coerce.number().min(0).max(1_000_000).default(0), unit: z.enum(["GAL", "L", "M3"]).default("GAL"), fuel: text, unitPrice: z.coerce.number().min(0).max(1_000_000).default(0), odometer: optionalKm, provider: text, collector: text, reference: z.string().trim().min(1, "Ingresa el número de servicio o comprobante").max(200), invoiceId: optionalId, maintenanceType: text, nextKm: optionalKm, attachment: text, notes: text });
 const stationSchema = z.object({ id: optionalId, name: z.string().trim().min(1).max(200), provider: text, address: z.string().trim().min(1).max(500), district: text, city: text, region: text, fuels: text, hours: text, restrictions: text, latitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-90).max(90).nullable()), longitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-180).max(180).nullable()), verified: z.boolean(), active: z.boolean().default(true) });
 
+// Always return a JSON error before the platform or browser times out.
 export async function GET(request: Request) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      readFleet(request),
+      new Promise<Response>((_, reject) => { timer = setTimeout(() => reject(new FleetError("La base de datos tardó demasiado. Pulsa Reintentar para volver a cargar.", 504)), 20000); }),
+    ]);
+  } catch (e) { return fleetFailure(e); }
+  finally { clearTimeout(timer); }
+}
+
+async function readFleet(request: Request) {
   try {
     const user = await fleetAccess(), db = getDb(), params = new URL(request.url).searchParams;
     if (params.has("evidence")) {
@@ -44,14 +56,15 @@ export async function GET(request: Request) {
     const driver = user.role === "CONDUCTOR";
     const assignmentRows = await db.select().from(assignments).where(driver ? eq(assignments.driverId, user.id) : undefined).orderBy(desc(assignments.serviceDate), desc(assignments.id));
     const vehicleIds = [...new Set(assignmentRows.map(a => a.vehicleId))];
-    const [vehicleRows, stationRows] = await Promise.all([
-      driver && !vehicleIds.length ? Promise.resolve([]) : db.select().from(vehicles).where(driver ? inArray(vehicles.id, vehicleIds) : undefined).orderBy(vehicles.plate),
-      db.select().from(stations).where(driver ? eq(stations.active, true) : undefined).orderBy(stations.name),
-    ]);
+    const vehicleRows = driver && !vehicleIds.length ? [] : await db.select().from(vehicles).where(driver ? inArray(vehicles.id, vehicleIds) : undefined).orderBy(vehicles.plate);
+    const stationRows = await db.select().from(stations).where(driver ? eq(stations.active, true) : undefined).orderBy(stations.name);
     const driverRows = await db.select({ id: appUsers.id, displayName: appUsers.displayName, role: appUsers.role, username: appUsers.username, active: appUsers.active }).from(appUsers).where(driver ? eq(appUsers.id, user.id) : inArray(appUsers.role, ["CONDUCTOR", "LOGISTICA", "ADMINISTRADOR"]));
-    const [expenseRows, documentRows, invoiceRows, paymentRows, idleRows, coordinatorRows] = driver ? [[], [], [], [], [], []] : await Promise.all([
-      db.select().from(expenses).orderBy(desc(expenses.date), desc(expenses.id)), db.select().from(documents).orderBy(desc(documents.expiryDate)), db.select().from(invoices).orderBy(desc(invoices.issueDate)), db.select().from(payments).orderBy(desc(payments.date)), db.select().from(idle).orderBy(desc(idle.date)), db.select({ name: coordinators.name }).from(coordinators).where(and(eq(coordinators.active, true), eq(coordinators.organization, "F1"))),
-    ]);
+    const expenseRows = driver ? [] : await db.select().from(expenses).orderBy(desc(expenses.date), desc(expenses.id));
+    const documentRows = driver ? [] : await db.select().from(documents).orderBy(desc(documents.expiryDate));
+    const invoiceRows = driver ? [] : await db.select().from(invoices).orderBy(desc(invoices.issueDate));
+    const paymentRows = driver ? [] : await db.select().from(payments).orderBy(desc(payments.date));
+    const idleRows = driver ? [] : await db.select().from(idle).orderBy(desc(idle.date));
+    const coordinatorRows = driver ? [] : await db.select({ name: coordinators.name }).from(coordinators).where(and(eq(coordinators.active, true), eq(coordinators.organization, "F1")));
     return Response.json({ user: { id: user.id, displayName: user.displayName, role: user.role, username: user.username }, vehicles: vehicleRows, assignments: assignmentRows, expenses: expenseRows, documents: documentRows, invoices: invoiceRows, payments: paymentRows, idle: idleRows, stations: stationRows, drivers: driverRows, coordinators: coordinatorRows.map(c => c.name) }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (e) { return fleetFailure(e); }
 }

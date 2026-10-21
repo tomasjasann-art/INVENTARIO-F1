@@ -35,11 +35,15 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import dynamic from "next/dynamic";
+import { fleetMenu, type FleetTab } from "./vehiculos/fleet-navigation";
 import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import AuditView, { type AuditImportRow, type AuditRecord } from "./AuditView";
 import EquipmentReturnsView, { type EquipmentReturnRecord, type ProductIdentifier } from "./EquipmentReturnsView";
 import GrIngresoImport from "./GrIngresoImport";
 import { kardexDate, normalizeKardexDate } from "../lib/kardex-date";
+
+const FleetApp = dynamic(() => import("./vehiculos/FleetApp"), { loading: () => <p role="status">Abriendo control de vehículos…</p> });
 
 type Product = {
   id: number;
@@ -251,7 +255,7 @@ type KardexData = {
   coordinatorSummary?: CoordinatorSummary | null;
   currentUser?: { email: string; displayName: string; role: UserRole; active: boolean; authProvider?: "supabase" | "clerk"; mustChangePassword?: boolean; coordinatorId?: number | null; coordinatorName?: string };
 };
-type View = "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "devoluciones" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
+type View = "flota" | "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "devoluciones" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
 
 const money = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" });
 const number = new Intl.NumberFormat("es-PE");
@@ -445,6 +449,8 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
   const [movementType, setMovementType] = useState<Movement["type"]>("entrada");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [equipmentModuleOpen, setEquipmentModuleOpen] = useState(true);
+  const [fleetModuleOpen, setFleetModuleOpen] = useState(false);
+  const [fleetTab, setFleetTab] = useState<FleetTab>("vehiculos");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [focusedRequestCode, setFocusedRequestCode] = useState("");
   const warehouse = "MO Company";
@@ -669,13 +675,13 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           type="button"
           aria-expanded={equipmentModuleOpen}
           aria-controls="equipment-module-navigation"
-          onClick={() => setEquipmentModuleOpen((open) => !open)}
+          onClick={() => { setEquipmentModuleOpen((open) => !open); if (!equipmentModuleOpen) setFleetModuleOpen(false); }}
         >
           <Boxes size={17} />
-          <span><small>MÓDULO ACTIVO</small><strong>Control de Equipos Entel</strong></span>
+          <span><small>{view === "flota" ? "MÓDULO" : "MÓDULO ACTIVO"}</small><strong>Control de Equipos Entel</strong></span>
           <ChevronDown className="module-chevron" size={16} />
         </button>
-        <div className={`module-nav-shell ${equipmentModuleOpen ? "module-nav-open" : ""}`}>
+        <div className={`module-nav-shell ${equipmentModuleOpen ? "module-nav-open" : ""}`} inert={!equipmentModuleOpen}>
           <nav id="equipment-module-navigation" className="nav-list" aria-label="Control de Equipos Entel">
             <button className={view === "resumen" ? "active" : ""} onClick={() => { setView("resumen"); setSidebarOpen(false); }}><LayoutDashboard size={19} />Resumen</button>
             {!isCoordinator && <button className={view === "ingresos" ? "active" : ""} onClick={() => { setView("ingresos"); setSidebarOpen(false); }}><ArrowDownLeft size={19} />Ingresos</button>}
@@ -693,7 +699,27 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
             {!isCoordinator && <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>}
           </nav>
         </div>
-        {!isCoordinator && <a className="module-pill" href="/vehiculos"><ClipboardList size={18} /><span><small>MÓDULO</small><strong>Control de vehículos</strong></span><ArrowUpRight size={17} /></a>}
+        {!isCoordinator && <>
+          <button
+            className="module-pill"
+            type="button"
+            aria-expanded={fleetModuleOpen}
+            aria-controls="fleet-module-navigation"
+            onClick={() => {
+              setFleetModuleOpen(open => !open);
+              if (!fleetModuleOpen) { setEquipmentModuleOpen(false); setView("flota"); }
+            }}
+          >
+            <ClipboardList size={18} />
+            <span><small>{view === "flota" ? "MÓDULO ACTIVO" : "MÓDULO"}</small><strong>Control de vehículos</strong></span>
+            <ChevronDown className="module-chevron" size={16} />
+          </button>
+          <div className={`module-nav-shell ${fleetModuleOpen ? "module-nav-open" : ""}`} inert={!fleetModuleOpen}>
+            <nav id="fleet-module-navigation" className="nav-list" aria-label="Control de vehículos">
+              {fleetMenu.map(item => <button key={item.id} className={view === "flota" && fleetTab === item.id ? "active" : ""} onClick={() => { setFleetTab(item.id); setView("flota"); setSidebarOpen(false); }}><item.icon size={19} />{item.label}</button>)}
+            </nav>
+          </div>
+        </>}
         <div className="sidebar-bottom">
           {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
           <div className="user-card"><span>{userInitials(user.displayName)}</span><div><strong>{user.displayName}</strong><small>{role.replaceAll("_", " ")} · {user.email}</small></div><a href={signOutPath} target="_top" aria-label="Cerrar sesión" title="Cerrar sesión"><LogOut size={16} /></a></div>
@@ -703,7 +729,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
       <main className="main-area">
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Abrir menú"><Menu size={21} /></button>
-          <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>
+          {view === "flota" ? <strong className="fleet-shell-title">Control de vehículos</strong> : <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>}
           <div className="top-actions">
             <div className="notification-center">
               <button className={`notification-button ${notificationRequests.length ? "has-alerts" : ""}`} onClick={() => setNotificationsOpen((open) => !open)} aria-label={`${notificationRequests.length} solicitudes nuevas`} aria-expanded={notificationsOpen}><Bell size={19} />{notificationRequests.length > 0 && <span>{notificationRequests.length > 99 ? "99+" : notificationRequests.length}</span>}</button>
@@ -713,7 +739,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
                 {notificationRequests.length > 0 && <button className="notification-footer" onClick={() => { setView("solicitudes"); setNotificationsOpen(false); }}>Ver todas las solicitudes</button>}
               </div>}
             </div>
-            {!isCoordinator && !(["solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
+            {!isCoordinator && !(["flota", "solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
             {canOperate && view === "ingresos" && <button className="secondary-button quick-movement gr-read-button" onClick={() => setModal("grIngreso")}><FileSpreadsheet size={17} />Leer GR de ingreso</button>}
             {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
             {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
@@ -721,13 +747,14 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           </div>
         </header>
 
-        <div className="content">
-          <section className="page-heading">
+        <div className={`content ${view === "flota" ? "fleet-shell-content" : ""}`}>
+          {view === "flota" && !isCoordinator && <FleetApp embedded activeTab={fleetTab} onTabChange={setFleetTab} />}
+          {view !== "flota" && <section className="page-heading">
             <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? (isCoordinator ? "Mi panel de coordinador" : "Resumen de equipos") : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? (isCoordinator ? "Stock disponible para solicitar" : "Stock y trazabilidad") : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "devoluciones" ? "Devoluciones y recepción física" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? (isCoordinator ? "Consulta tus costos despachados, solicitudes y pendientes de cierre." : "Control centralizado por SKU, Serie/Lote, pedido y proyecto.") : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? (isCoordinator ? "Disponibilidad global sin costos ni movimientos de otros coordinadores." : "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU.") : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "devoluciones" ? "Registra primero la carga lógica y suma el equipo al stock solo cuando llegue físicamente a MO Company." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
-          </section>
+          </section>}
 
-          {error && <div className="error-banner"><AlertTriangle size={18} /><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
+          {view !== "flota" && error && <div className="error-banner"><AlertTriangle size={18} /><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
 
           {view === "resumen" && isCoordinator && <CoordinatorOverview summary={data.coordinatorSummary} movements={data.movements} requests={data.equipmentRequests} loading={loading} />}
 

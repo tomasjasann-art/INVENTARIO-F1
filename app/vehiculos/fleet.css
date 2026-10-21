@@ -8,3 +8,12 @@
 @media(prefers-reduced-motion:reduce){.fl-spin{animation:none}.fl-sidebar{transition:none}}
 @media print{@page{size:A4 landscape;margin:10mm}.fleet-app{background:white;font-size:9px}.fl-sidebar,.fl-topbar,.fl-page-head .fl-head-actions,.fl-filters,.fl-panel-head>.fl-btn,.fl-banner,.fl-footnote,.fl-text-btn{display:none!important}.fl-main{margin:0}.fl-content{padding:0;max-width:none}.fl-page-head h1{font-size:20px}.fl-panel{break-inside:avoid;border:1px solid #ccc;box-shadow:none}.fl-table-wrap{overflow:visible}.fl-table{font-size:8px}.fl-table th,.fl-table td{padding:6px;min-width:0}.fl-table th{font-size:7px}.fl-kpi>strong{font-size:22px}.fl-two-col{grid-template-columns:1fr 1fr}.fl-kpis{grid-template-columns:repeat(4,1fr)}.fl-alert-strip{grid-template-columns:repeat(4,1fr)}}
 .fl-journey-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;padding:20px}.fl-journey-cards article{border:1px solid #dfe7f1;border-radius:10px;padding:20px}.fl-journey-cards article>div:first-child{display:flex;justify-content:space-between;align-items:center;gap:10px}.fl-journey-cards article>div>strong{font-size:24px;letter-spacing:.5px;color:#18375f}.fl-journey-cards h3{font-size:15px;margin:15px 0 7px;color:#2b4669}.fl-journey-cards p{font-size:11px;color:#7c8fa8;margin-top:6px}.fl-journey-km{display:flex;gap:28px;background:#f5f8fc;border-radius:6px;padding:12px 15px;margin:15px 0}.fl-journey-km span{color:#8191a8;font-size:10px}.fl-journey-km b{display:block;color:#304e73;font-size:14px;margin-top:3px}.fl-journey-cards .fl-row-actions .fl-btn{padding:12px;min-height:44px;font-size:11px!important}
+
+/* Fleet sections share the Kardex navigation when embedded. */
+.fleet-embedded{min-height:0;border-radius:12px;overflow:hidden}
+.fleet-embedded .fl-main{margin-left:0;min-width:0}
+.fleet-embedded.fl-loading{min-height:350px;text-align:center;padding:30px}
+.fleet-embedded .fl-content{max-width:none}
+.fleet-shell-content{padding:22px 24px 42px}
+.fleet-shell-title{color:#3c4652;font-size:14px;flex:1}
+@media(max-width:820px){.fleet-shell-content{padding:14px 0 30px}.fleet-embedded{border-radius:0}.fleet-shell-title{font-size:12px}}

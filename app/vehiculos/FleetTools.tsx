@@ -2,7 +2,7 @@
 import { useMemo, useState } from "react";
 import { Download, LocateFixed, MapPin, Navigation, Plus, Search, Upload } from "lucide-react";
 import { normalizedPlate, stationDistance, type FleetData, type Station } from "../../lib/fleet";
-import { Badge, Empty, Table } from "./FleetApp";
+import { Badge, Empty, Table } from "./FleetUI";
 import type { Save } from "./FleetForms";
 
 export function StationsPanel({ stations, manager, onEdit, onAdd }: { stations: Station[]; manager: boolean; onEdit: (s: Record<string, unknown>) => void; onAdd: () => void }) {
