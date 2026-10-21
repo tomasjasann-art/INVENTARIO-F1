@@ -1850,7 +1850,7 @@ export async function POST(request: Request) {
         const description = clean(rowValue(row, "Descripción Sku", "Descripción", "description"));
         const quantity = Math.max(1, numeric(rowValue(row, "Cantidad", "quantity")) || 1);
         const unitMeasure = clean(rowValue(row, "Unidad de Medida", "UnidadMedida", "Unidad", "unit")) || "UND";
-        const unitCost = Math.max(0, numeric(rowValue(row, "Costo", "Cost", "unitCost")));
+        const unitCost = Math.max(0, numeric(rowValue(row, "Costo Unitario", "Costo unitario", "Costo", "Cost", "unitCost")));
         const equipmentTypeFromFile = clean(rowValue(row, "Tipo de Equipo", "Categoría", "category"));
         const equipmentType = normalizeParty(equipmentTypeFromFile).includes("LOTE") ? "LOTE" : "EQUIPO";
         const project = clean(rowValue(row, "Proyecto", "ProyectoFinal", "project"));
@@ -1914,7 +1914,9 @@ export async function POST(request: Request) {
             set: {
               description,
               category: equipmentType,
-              unitCostCents: sql`CASE WHEN ${products.unitCostCents} = 0 THEN ${fileCostCents || entelCostCents} ELSE ${products.unitCostCents} END`,
+              unitCostCents: fileCostCents > 0
+                ? fileCostCents
+                : sql`CASE WHEN ${products.unitCostCents} = 0 THEN ${entelCostCents} ELSE ${products.unitCostCents} END`,
             },
           });
           imported += 1;
@@ -2054,7 +2056,7 @@ export async function POST(request: Request) {
             unitMeasure,
             unitCostCents: fileCostCents || product.unitCostCents || entelCostCents,
             equipmentType: product.category || equipmentType,
-            loadGr: clean(rowValue(row, "Cargar Gr", "Cargar GR")),
+            loadGr: movementType === "entrada" ? (grLink ? "SI" : "") : clean(rowValue(row, "Cargar Gr", "Cargar GR")),
             grLink,
             orderNumber,
             ticket: clean(rowValue(row, "Ticket/JIRA", "Ticket", "JIRA")),

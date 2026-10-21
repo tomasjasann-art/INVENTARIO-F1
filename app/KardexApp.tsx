@@ -1269,6 +1269,32 @@ function normalizedAgeBucket(value?: string) {
   return value || "Sin KPI";
 }
 
+function normalizedAuditValue(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function auditOrderMatches(recordOrder: string, movementOrder: string) {
+  const expected = normalizedAuditValue(movementOrder);
+  if (!expected) return false;
+  return recordOrder.split(/\s*·\s*|[,;\n]/).some((value) => normalizedAuditValue(value) === expected);
+}
+
+function findAuditMatch(records: AuditRecord[], movement: Movement, serial: string) {
+  const normalizedSerial = normalizedAuditValue(serial);
+  const sameSku = records.filter((record) => normalizedAuditValue(record.sku) === normalizedAuditValue(movement.sku));
+  if (normalizedSerial) {
+    const sameSeries = sameSku.filter((record) => normalizedAuditValue(record.seriesLot) === normalizedSerial);
+    const exact = sameSeries.find((record) => auditOrderMatches(record.orderNumber, movement.orderNumber));
+    if (exact) return { record: exact, basis: "pedido + serie" };
+    if (sameSeries.length) return { record: sameSeries[0], basis: "serie / lote" };
+    return undefined;
+  }
+  const sameOrder = sameSku.filter((record) => auditOrderMatches(record.orderNumber, movement.orderNumber));
+  if (sameOrder.length) return { record: sameOrder[0], basis: "pedido" };
+  if (sameSku.length === 1) return { record: sameSku[0], basis: "SKU único" };
+  return undefined;
+}
+
 function ConciliationView({ movements, validations, auditImports, auditRecords, auditHistoryRecords, loading, saving, onSave, onOpenAudit }: { movements: Movement[]; validations: InstallationValidation[]; auditImports: AuditImportRow[]; auditRecords: AuditRecord[]; auditHistoryRecords: AuditRecord[]; loading: boolean; saving: boolean; onSave: (payload: Record<string, unknown>) => void; onOpenAudit: () => void }) {
   const [grFilter, setGrFilter] = useState("");
   const [siteFilter, setSiteFilter] = useState("");
@@ -1280,8 +1306,14 @@ function ConciliationView({ movements, validations, auditImports, auditRecords, 
   const validationMap = useMemo(() => new Map(
     validations.map((validation) => [`${validation.movementId}::${validation.serial.toUpperCase()}`, validation]),
   ), [validations]);
-  const auditMap = useMemo(() => new Map(auditRecords.map((record) => [`${record.source}::${record.sourceKey.toUpperCase()}`, record])), [auditRecords]);
-  const auditHistoryMap = useMemo(() => new Map(auditHistoryRecords.map((record) => [`${record.source}::${record.sourceKey.toUpperCase()}`, record])), [auditHistoryRecords]);
+  const currentAuditBySource = useMemo(() => ({
+    ENTEL: auditRecords.filter((record) => record.source === "ENTEL"),
+    ORACLE: auditRecords.filter((record) => record.source === "ORACLE"),
+  }), [auditRecords]);
+  const historicalAuditBySource = useMemo(() => ({
+    ENTEL: auditHistoryRecords.filter((record) => record.source === "ENTEL"),
+    ORACLE: auditHistoryRecords.filter((record) => record.source === "ORACLE"),
+  }), [auditHistoryRecords]);
   const auditImportMap = useMemo(() => new Map(auditImports.map((item) => [item.id, item])), [auditImports]);
   const entriesBySeries = useMemo(() => {
     const map = new Map<string, Movement[]>();
@@ -1307,16 +1339,20 @@ function ConciliationView({ movements, validations, auditImports, auditRecords, 
           ?? candidates.find((entry) => entry.movementDate <= movement.movementDate)
           ?? candidates.find((entry) => entry.orderNumber === movement.orderNumber)
           ?? candidates[0];
-        const sourceKey = `${movement.sku.toUpperCase()}::${serial}`;
-        const entelAudit = auditMap.get(`ENTEL::${sourceKey}`);
-        const oracleAudit = auditMap.get(`ORACLE::${sourceKey}`);
-        const entelHistory = auditHistoryMap.get(`ENTEL::${sourceKey}`);
-        const oracleHistory = auditHistoryMap.get(`ORACLE::${sourceKey}`);
+        const entelCurrentMatch = findAuditMatch(currentAuditBySource.ENTEL, movement, serial);
+        const oracleCurrentMatch = findAuditMatch(currentAuditBySource.ORACLE, movement, serial);
+        const entelHistoricalMatch = findAuditMatch(historicalAuditBySource.ENTEL, movement, serial);
+        const oracleHistoricalMatch = findAuditMatch(historicalAuditBySource.ORACLE, movement, serial);
+        const entelAudit = entelCurrentMatch?.record;
+        const oracleAudit = oracleCurrentMatch?.record;
+        const entelHistory = entelHistoricalMatch?.record;
+        const oracleHistory = oracleHistoricalMatch?.record;
         const entelSnapshot = entelAudit ?? entelHistory;
-        return { movement, serial, validation, entryMovement, entelAudit, oracleAudit, entelHistory, oracleHistory, entelSnapshot, tracking: dispatchTracking(movement.movementDate, validation) };
+        const entelMatchBasis = entelCurrentMatch?.basis ?? entelHistoricalMatch?.basis ?? "";
+        return { movement, serial, validation, entryMovement, entelAudit, oracleAudit, entelHistory, oracleHistory, entelSnapshot, entelMatchBasis, tracking: dispatchTracking(movement.movementDate, validation) };
       });
     })
-    .sort((a, b) => b.movement.movementDate.localeCompare(a.movement.movementDate) || b.movement.id - a.movement.id), [movements, validationMap, entriesBySeries, auditMap, auditHistoryMap]);
+    .sort((a, b) => b.movement.movementDate.localeCompare(a.movement.movementDate) || b.movement.id - a.movement.id), [movements, validationMap, entriesBySeries, currentAuditBySource, historicalAuditBySource]);
 
   const normalizedGrFilter = grFilter.trim().toLowerCase();
   const normalizedSiteFilter = siteFilter.trim().toLowerCase();
@@ -1463,7 +1499,7 @@ function GrDocumentCell({ movement, kind, onPreview }: { movement?: Movement; ki
   return <><strong>{movement?.document || `SIN GR ${kind.toUpperCase()}`}</strong><small>{movement ? displayDate(movement.movementDate) : "No se encontró el ingreso"}</small>{previewUrl ? <button type="button" className="gr-view-button" onClick={() => onPreview({ kind, document: movement?.document ?? "", url: previewUrl, date: movement?.movementDate ?? "" })}><FileSpreadsheet size={13} />Visualizar GR</button> : <small className="gr-missing">Sin archivo adjunto</small>}</>;
 }
 
-function ReconciliationRow({ movement, serial, validation, entryMovement, entelAudit, oracleAudit, entelHistory, oracleHistory, entelSnapshot, auditImportMap, tracking, saving, onSave, onPreview }: { movement: Movement; serial: string; validation?: InstallationValidation; entryMovement?: Movement; entelAudit?: AuditRecord; oracleAudit?: AuditRecord; entelHistory?: AuditRecord; oracleHistory?: AuditRecord; entelSnapshot?: AuditRecord; auditImportMap: Map<number, AuditImportRow>; tracking: DispatchTracking; saving: boolean; onSave: (payload: Record<string, unknown>) => void; onPreview: (preview: GrPreview) => void }) {
+function ReconciliationRow({ movement, serial, validation, entryMovement, entelAudit, oracleAudit, entelHistory, oracleHistory, entelSnapshot, entelMatchBasis, auditImportMap, tracking, saving, onSave, onPreview }: { movement: Movement; serial: string; validation?: InstallationValidation; entryMovement?: Movement; entelAudit?: AuditRecord; oracleAudit?: AuditRecord; entelHistory?: AuditRecord; oracleHistory?: AuditRecord; entelSnapshot?: AuditRecord; entelMatchBasis: string; auditImportMap: Map<number, AuditImportRow>; tracking: DispatchTracking; saving: boolean; onSave: (payload: Record<string, unknown>) => void; onPreview: (preview: GrPreview) => void }) {
   const formId = `reconcile-${movement.id}-${(serial || "sin-serie").replace(/[^a-zA-Z0-9]/g, "").slice(-18)}`;
   const [editing, setEditing] = useState(!validation);
   const locked = Boolean(validation) && !editing;
@@ -1490,7 +1526,7 @@ function ReconciliationRow({ movement, serial, validation, entryMovement, entelA
     <td><strong>{movement.project || "—"}</strong><small>{movement.destinationSite || "Sin site destino"}</small></td>
     <td>{entelAudit ? <><span className="reconcile-status match">VIGENTE EN CORTE</span><strong>{number.format(entelAudit.quantity)} {entelAudit.unitMeasure}</strong><small>{entelAudit.category}</small></> : entelHistory ? <><span className="reconcile-status retired">RETIRADO DEL ÚLTIMO CORTE</span><strong>Último: {number.format(entelHistory.quantity)} {entelHistory.unitMeasure}</strong><small>{displayDate(entelLastSeen?.cutoffDate || entelLastSeen?.createdAt || "")}</small></> : <><span className="reconcile-status missing">NUNCA ENCONTRADO</span><small>No existe en los cortes Entel conservados</small></>}</td>
     <td>{oracleAudit ? <><span className={`reconcile-status ${oracleMatch ? "match" : entelAudit ? "surplus" : "match"}`}>{oracleMatch ? "COINCIDE" : entelAudit ? "DIFERENCIA" : "VIGENTE EN ORACLE"}</span><strong>{number.format(oracleAudit.quantity)} {oracleAudit.unitMeasure}</strong><small>{oracleAudit.project || oracleAudit.requester || "Stock Oracle"}</small></> : oracleHistory ? <><span className="reconcile-status retired">RETIRADO DEL ÚLTIMO CORTE</span><strong>Último: {number.format(oracleHistory.quantity)} {oracleHistory.unitMeasure}</strong><small>{displayDate(oracleLastSeen?.cutoffDate || oracleLastSeen?.createdAt || "")}</small></> : <><span className="reconcile-status missing">NUNCA ENCONTRADO</span><small>No existe en los cortes Oracle conservados</small></>}</td>
-    <td><strong>{money.format((entelSnapshot?.totalCostCents ?? 0) / 100)}</strong><small>{entelAudit ? "Costo Entel del último corte" : entelHistory ? "Último costo conocido Entel" : "Sin costo Entel"}</small><strong>{money.format((f1UnitCostCents * lineQuantity) / 100)}</strong><small>Costo control F1</small></td>
+    <td><strong>{money.format((entelSnapshot?.totalCostCents ?? 0) / 100)}</strong><small>{entelAudit ? `Costo Entel · ${entelMatchBasis}` : entelHistory ? `Último costo Entel · ${entelMatchBasis}` : "Sin costo Entel"}</small><strong>{money.format((f1UnitCostCents * lineQuantity) / 100)}</strong><small>Costo control F1</small></td>
     <td><span className={`age-kpi ${kpi === "Mayor a 1 año" ? "danger" : kpi === "Mayor a 6 meses" ? "warning" : "current"}`}>{kpi.toUpperCase()}</span><small>{entelSnapshot?.ageMonths ? `${entelSnapshot.ageMonths} meses en contrata${entelHistory && !entelAudit ? " · último dato" : ""}` : "Sin antigüedad Entel"}</small></td>
     <td><select form={formId} name="evidenceSsnn" defaultValue={validation?.evidenceSsnn || ""} disabled={locked}><option value="" disabled>Selecciona sustento</option><option>Instalación Site</option><option>Fisico en PDV</option><option>Devuelto por LI</option><option>Facturar a SSNN</option><option>Transferencia entre Contratas</option><option>Sin Sustento</option></select></td>
     <td><input form={formId} list="dispatch-site-options" name="installedSite" defaultValue={validation?.installedSite ?? movement.destinationSite} placeholder="Código o nombre del site" disabled={locked} /></td>
@@ -2071,7 +2107,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       const movementDate = normalizeKardexDate(bulkRowValue(row, movementType === "entrada" ? "Fecha de Ingreso" : "Fecha Salida", "Fecha de Salida", "Fecha"), today());
       const quantity = Math.max(1, bulkNumberValue(row, "Cantidad") || 1);
       const product = productsBySku.get(sku);
-      const rowUnitCostCents = Math.max(0, Math.round(bulkNumberValue(row, "Costo") * 100));
+      const rowUnitCostCents = Math.max(0, Math.round(bulkNumberValue(row, "Costo Unitario", "Costo") * 100));
       const unitCostCents = rowUnitCostCents || product?.unitCostCents || 0;
       const rowNumber = bulkRowValue(row, "ITEM", "Fila") || String(index + 2);
       let reason = "";
@@ -2095,7 +2131,8 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
 
       if (!reason && movementType === "maestro" && product
         && product.description.trim().toUpperCase() === description.trim().toUpperCase()
-        && product.category.trim().toUpperCase() === equipmentType.trim().toUpperCase()) {
+        && product.category.trim().toUpperCase() === equipmentType.trim().toUpperCase()
+        && (!rowUnitCostCents || product.unitCostCents === rowUnitCostCents)) {
         reason = "Este SKU ya está cargado y no tiene cambios.";
       }
 
@@ -2158,7 +2195,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
         coordinator: coordinator || "—",
         serials: serials || "SIN SERIE",
         quantity,
-        totalCostCents: movementType === "maestro" ? 0 : unitCostCents * quantity,
+        totalCostCents: movementType === "maestro" ? unitCostCents : unitCostCents * quantity,
         accepted: !reason,
         reason: reason || (autoLotGenerated ? "Lote automático de transferencia; se generará al confirmar." : "Lista para cargar"),
       };
@@ -2236,7 +2273,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       const availableHeaders = new Set(Object.keys(first).map(normalize));
       if (!availableHeaders.has(normalize("Sku"))) throw new Error("No se encontró la columna Sku en la primera hoja.");
       if (source === "F1" && movementType === "entrada") {
-        const requiredHeaders = ["Fila", "Sku", "Descripción Sku", "Estado de Equipo", "Condición", "Proyecto", "RUC", "Fecha de Ingreso", "GR. de Ingreso", "N° Pedido", "Coordinador Entel", "Coordinador F1", "Site Origen", "Serie/Lote", "Unidad de Medida", "Cantidad", "Tipo de Equipo", "Cargar Gr"];
+        const requiredHeaders = ["Fila", "Sku", "Descripción Sku", "Estado de Equipo", "Condición", "Proyecto", "RUC", "Fecha de Ingreso", "GR. de Ingreso", "N° Pedido", "Coordinador Entel", "Coordinador F1", "Site Origen", "Serie/Lote", "Unidad de Medida", "Cantidad", "Tipo de Equipo"];
         const missing = requiredHeaders.filter((header) => !availableHeaders.has(normalize(header)));
         if (!availableHeaders.has(normalize("Link de GR")) && !availableHeaders.has(normalize("Link de GR. de Ingreso"))) missing.push("Link de GR. de Ingreso");
         if (missing.length) throw new Error(`Faltan columnas de ingreso: ${missing.join(", ")}.`);
@@ -2281,7 +2318,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
   async function downloadTemplate() {
     const XLSX = await import("xlsx");
     const row = movementType === "entrada" ? {
-      Fila: 1, Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Estado de Equipo": "NUEVO", Condición: "OPERATIVO", Proyecto: "ENTEL", RUC: "20123456789", "Fecha de Ingreso": today(), "GR. de Ingreso": "GR-ING-001", "Link de GR. de Ingreso": "https://ejemplo.com/gr-ingreso.pdf", "N° Pedido": "PED-001", "Coordinador Entel": "COORDINADOR ENTEL", "Coordinador F1": "COORDINADOR F1", "Site Origen": "MO COMPANY", Ubicación: "MO COMPANY", "Serie/Lote": "SERIE001", "Modo de Lote": "MANUAL", "Unidad de Medida": "UND", Cantidad: 1, Costo: 100, "Tipo de Equipo": "EQUIPO", "Cargar Gr": "SI",
+      Fila: 1, Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Estado de Equipo": "NUEVO", Condición: "OPERATIVO", Proyecto: "ENTEL", RUC: "20123456789", "Fecha de Ingreso": today(), "GR. de Ingreso": "GR-ING-001", "Link de GR. de Ingreso": "https://ejemplo.com/gr-ingreso.pdf", "N° Pedido": "PED-001", "Coordinador Entel": "COORDINADOR ENTEL", "Coordinador F1": "COORDINADOR F1", "Site Origen": "MO COMPANY", Ubicación: "MO COMPANY", "Serie/Lote": "SERIE001", "Modo de Lote": "MANUAL", "Unidad de Medida": "UND", Cantidad: 1, "Costo Unitario": 100, "Tipo de Equipo": "EQUIPO",
     } : movementType === "salida" ? {
       ITEM: 1,
       "Fecha Salida": today(),
@@ -2310,7 +2347,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       "Persona que Registra": "USUARIO F1",
       "Cargar GR": "SI",
     } : {
-      Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Tipo de Equipo": "EQUIPO",
+      Sku: "ENT960000001", "Descripción Sku": "EQUIPO DE EJEMPLO", "Tipo de Equipo": "EQUIPO", "Costo Unitario": 100,
     };
     const sheet = XLSX.utils.json_to_sheet([row]);
     const workbook = XLSX.utils.book_new();
@@ -2370,17 +2407,17 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       {rows.length > 0 && movementType !== "maestro" && <div className="bulk-detected"><Layers3 size={18} /><div><strong>{detectedGroups} lotes/pedidos detectados</strong><span>Las filas se agruparán por N° Pedido + Coordinador Entel, aunque contengan varios SKU.</span></div></div>}
       {loadComplete && <div className="bulk-complete"><CheckCircle2 size={19} /><div><strong>Carga completada</strong><span>Este archivo ya fue procesado. Selecciona otro archivo para una nueva carga.</span></div></div>}
       {rows.length > 0 && <section className="bulk-preview">
-        <div className="bulk-preview-head"><div><strong>Previsualización antes de cargar</strong><small>{movementType === "maestro" ? "Valida los tres campos oficiales del maestro." : "Descripción y tipo se normalizan con el maestro según el SKU."}</small></div><div className="bulk-preview-metrics"><span className="accepted"><b>{acceptedPreviewRows.length}</b> cargarán</span><span className="rejected"><b>{rejectedPreviewRows.length}</b> no cargarán</span><span><b>{money.format(previewCostCents / 100)}</b> valor aprobado</span></div></div>
-        <div className="bulk-preview-table"><table><thead><tr><th>Fila</th><th>SKU</th><th>Nombre / Tipo maestro</th><th>Pedido / Coordinador</th><th>Serie / Lote</th><th className="align-right">Cantidad</th><th className="align-right">Costo total</th><th>Resultado</th></tr></thead><tbody>{previewRows.map((item, index) => <tr key={`${item.rowNumber}-${item.sku}-${index}`} className={item.accepted ? "preview-accepted" : "preview-rejected"}><td>{item.rowNumber}</td><td><strong>{item.sku}</strong></td><td><strong>{item.masterName}</strong><small>{item.masterType}</small></td><td><strong>{item.orderNumber}</strong><small>{item.coordinator}</small></td><td>{item.serials}</td><td className="align-right">{number.format(item.quantity)}</td><td className="align-right">{money.format(item.totalCostCents / 100)}</td><td><span className={`preview-status ${item.accepted ? "accepted" : "rejected"}`}>{item.accepted ? "SE CARGARÁ" : "NO SE CARGARÁ"}</span><small>{item.reason}</small></td></tr>)}</tbody></table></div>
+        <div className="bulk-preview-head"><div><strong>Previsualización antes de cargar</strong><small>{movementType === "maestro" ? "Valida SKU, descripción, tipo y costo unitario." : "Descripción, tipo y costo se relacionan con el Maestro SKU."}</small></div><div className="bulk-preview-metrics"><span className="accepted"><b>{acceptedPreviewRows.length}</b> cargarán</span><span className="rejected"><b>{rejectedPreviewRows.length}</b> no cargarán</span><span><b>{money.format(previewCostCents / 100)}</b> {movementType === "maestro" ? "costos a registrar" : "valor aprobado"}</span></div></div>
+        <div className="bulk-preview-table"><table><thead><tr><th>Fila</th><th>SKU</th><th>Nombre / Tipo maestro</th><th>Pedido / Coordinador</th><th>Serie / Lote</th><th className="align-right">Cantidad</th><th className="align-right">{movementType === "maestro" ? "Costo unitario" : "Costo total"}</th><th>Resultado</th></tr></thead><tbody>{previewRows.map((item, index) => <tr key={`${item.rowNumber}-${item.sku}-${index}`} className={item.accepted ? "preview-accepted" : "preview-rejected"}><td>{item.rowNumber}</td><td><strong>{item.sku}</strong></td><td><strong>{item.masterName}</strong><small>{item.masterType}</small></td><td><strong>{item.orderNumber}</strong><small>{item.coordinator}</small></td><td>{item.serials}</td><td className="align-right">{number.format(item.quantity)}</td><td className="align-right">{money.format(item.totalCostCents / 100)}</td><td><span className={`preview-status ${item.accepted ? "accepted" : "rejected"}`}>{item.accepted ? "SE CARGARÁ" : "NO SE CARGARÁ"}</span><small>{item.reason}</small></td></tr>)}</tbody></table></div>
         <p className="bulk-preview-note">La validación se repetirá al confirmar para proteger el stock si otro usuario registra movimientos al mismo tiempo.</p>
       </section>}
       <div className="upload-actions"><button className="secondary-button" onClick={() => void downloadTemplate()}><Download size={16} />Plantilla de {operationLabel}</button><button className={`primary-button ${movementType === "salida" ? "danger-button" : ""} ${loadComplete ? "load-complete-button" : ""}`} disabled={!acceptedPreviewRows.length || saving || loadComplete} onClick={() => void submitBulk()}>{saving ? "Procesando..." : loadComplete ? "✓ Carga completada" : `Cargar ${acceptedPreviewRows.length || ""} líneas aprobadas`}</button></div>
     </div>
     <aside className="panel mapping-panel">
-      <div className="panel-title"><div><h2>{movementType === "entrada" ? "Campos de ingresos" : movementType === "salida" ? "Campos de salidas" : "3 campos del maestro"}</h2><p>Plantilla diferenciada por proceso</p></div></div>
-      <div className={`operation-summary ${movementType}`}><span>{movementType === "entrada" ? <ArrowDownLeft size={19} /> : movementType === "salida" ? <ArrowUpRight size={19} /> : <Boxes size={19} />}</span><div><strong>{movementType === "entrada" ? "Ingreso al inventario" : movementType === "salida" ? "Salida del inventario" : "Maestro de productos"}</strong><small>{movementType === "entrada" ? "Los SKU existentes conservan el nombre y tipo oficiales del maestro." : movementType === "salida" ? "Acepta exactamente la estructura de tu Excel de despachos." : "Carga SKU, descripción oficial y tipo de equipo."}</small></div></div>
+      <div className="panel-title"><div><h2>{movementType === "entrada" ? "Campos de ingresos" : movementType === "salida" ? "Campos de salidas" : "Maestro SKU y costos"}</h2><p>Plantilla diferenciada por proceso</p></div></div>
+      <div className={`operation-summary ${movementType}`}><span>{movementType === "entrada" ? <ArrowDownLeft size={19} /> : movementType === "salida" ? <ArrowUpRight size={19} /> : <Boxes size={19} />}</span><div><strong>{movementType === "entrada" ? "Ingreso al inventario" : movementType === "salida" ? "Salida del inventario" : "Maestro de productos"}</strong><small>{movementType === "entrada" ? "Los SKU existentes conservan nombre, tipo y costo oficiales del maestro." : movementType === "salida" ? "Acepta exactamente la estructura de tu Excel de despachos." : "Carga SKU, descripción, tipo de equipo y costo unitario."}</small></div></div>
       <ul>{movementType === "entrada" ? <>
-        <li><b>Identificación</b><span>Fila, Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Estado y asignación</b><span>Estado de Equipo, Condición y Proyecto</span></li><li><b>Recepción</b><span>RUC, Fecha de Ingreso y GR. de Ingreso; Proviene se completa desde el maestro</span></li><li><b>Responsables</b><span>Coordinador Entel y Coordinador F1</span></li><li><b>Trazabilidad</b><span>N° Pedido, Site Origen, Serie/Lote y Modo de Lote opcional</span></li><li><b>Transferencias</b><span>Si no recibes Serie/Lote, usa Modo de Lote = AUTOMATICO para generar un código TRF.</span></li><li><b>Valorización</b><span>Unidad de Medida, Cantidad y costo opcional; si falta, usa Stock Contrata Entel</span></li><li><b>Evidencia</b><span>Cargar Gr y Link de GR. de Ingreso</span></li>
+        <li><b>Identificación</b><span>Fila, Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Estado y asignación</b><span>Estado de Equipo, Condición y Proyecto</span></li><li><b>Recepción</b><span>RUC, Fecha de Ingreso y GR. de Ingreso; Proviene se completa desde el maestro</span></li><li><b>Responsables</b><span>Coordinador Entel y Coordinador F1</span></li><li><b>Trazabilidad</b><span>N° Pedido, Site Origen, Serie/Lote y Modo de Lote opcional</span></li><li><b>Transferencias</b><span>Si no recibes Serie/Lote, usa Modo de Lote = AUTOMATICO para generar un código TRF.</span></li><li><b>Valorización</b><span>Unidad de Medida y Cantidad; el costo unitario usa primero la fila y luego el Maestro SKU.</span></li><li><b>Evidencia</b><span>Link de GR. de Ingreso; ya no se solicita la columna Cargar Gr.</span></li>
       </> : movementType === "salida" ? <>
         <li><b>Despacho</b><span>ITEM, Fecha Salida, NroGRSalida, IDDespacho y Link de GR</span></li>
         <li><b>Equipo</b><span>Sku, Descripción Sku, Serie/Lote, Cantidad, UnidadMedida y Tipo de Equipo</span></li>
@@ -2389,7 +2426,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
         <li><b>Control de correo</b><span>CorreoSolicitante, Estado Correo, EstadoCorreo y FechaEnvioCorreo</span></li>
         <li><b>Sin Ticket/JIRA</b><span>JIRA se completa únicamente en Conciliación.</span></li>
       </> : <>
-        <li><b>Campos obligatorios</b><span>Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Fuente oficial</b><span>Ingresos y salidas se relacionan por SKU y muestran estos nombres.</span></li><li><b>Correcciones</b><span>Al actualizar el maestro, el nuevo nombre se refleja en todo el historial.</span></li>
+        <li><b>Campos obligatorios</b><span>Sku, Descripción Sku y Tipo de Equipo</span></li><li><b>Costo unitario</b><span>Es opcional; si lo informas, actualiza el costo oficial del SKU.</span></li><li><b>Fuente oficial</b><span>Ingresos y salidas se relacionan por SKU y usan su nombre, tipo y costo.</span></li><li><b>Correcciones</b><span>Al actualizar el maestro, los movimientos sin costo propio toman el nuevo valor.</span></li>
       </>}</ul>
       {movementType !== "maestro" && <div className="mapping-note"><ShieldCheck size={17} /><span><b>Control de duplicados:</b> una GR y pedido pueden contener varias líneas dentro de la primera carga. Las series de equipos son únicas; un mismo lote sí puede repetirse en pedidos diferentes. Se bloquea volver a cargar la misma GR + pedido para la misma razón social; otra razón social sí se admite.</span></div>}
       <div className="storage-note"><Database size={18} /><div><strong>¿Dónde se almacena?</strong><span>Maestro SKU en Productos; ingresos y salidas en el Historial de movimientos.</span></div></div>
@@ -2486,6 +2523,7 @@ function ProductModal({ products, saving, onClose, onSave }: { products: Product
   const [sku, setSku] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("EQUIPO");
+  const [unitCost, setUnitCost] = useState("");
   const matchedProduct = products.find((product) => product.sku.trim().toUpperCase() === sku.trim().toUpperCase());
 
   function selectSku(value: string) {
@@ -2494,11 +2532,12 @@ function ProductModal({ products, saving, onClose, onSave }: { products: Product
     if (match) {
       setDescription(match.description);
       setCategory(match.category.toUpperCase().includes("LOT") ? "LOTE" : "EQUIPO");
+      setUnitCost(match.unitCostCents > 0 ? String(match.unitCostCents / 100) : "");
     }
   }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     onSave(Object.fromEntries(new FormData(event.currentTarget).entries()));
   }
-  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">MAESTRO SKU</span><h2>Registrar o actualizar SKU</h2><p>El maestro solo define SKU, descripción oficial y si se controla como Equipo o Lote.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="product" /><div className="form-grid"><label className="field"><span>SKU *</span><input name="sku" list="master-sku-options" required value={sku} onChange={(event) => selectSku(event.target.value)} placeholder="ENT960051349" /><datalist id="master-sku-options">{products.map((product) => <option key={product.id} value={product.sku}>{product.description}</option>)}</datalist><small>{matchedProduct ? "SKU existente: puedes corregir su descripción o tipo." : "Si no existe, se creará como nuevo SKU."}</small></label><label className="field field-wide"><span>Descripción SKU *</span><input name="description" required value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Descripción oficial del equipo" /></label><label className="field"><span>Tipo de control *</span><select name="category" value={category} onChange={(event) => setCategory(event.target.value)}><option value="EQUIPO">Equipo (serie única)</option><option value="LOTE">Lote (cantidad)</option></select></label></div><div className="mapping-note"><Database size={17} /><span>GR, fecha de ingreso, proviene, estado, condición, link y coordinadores se completan al registrar el ingreso o salida; no pertenecen al Maestro SKU.</span></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : matchedProduct ? "Actualizar SKU" : "Crear SKU"}</button></div></form></div></div>;
+  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">MAESTRO SKU</span><h2>Registrar o actualizar SKU</h2><p>El maestro define SKU, descripción oficial, tipo de control y costo unitario.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="product" /><div className="form-grid"><label className="field"><span>SKU *</span><input name="sku" list="master-sku-options" required value={sku} onChange={(event) => selectSku(event.target.value)} placeholder="ENT960051349" /><datalist id="master-sku-options">{products.map((product) => <option key={product.id} value={product.sku}>{product.description}</option>)}</datalist><small>{matchedProduct ? "SKU existente: puedes corregir su descripción, tipo o costo." : "Si no existe, se creará como nuevo SKU."}</small></label><label className="field field-wide"><span>Descripción SKU *</span><input name="description" required value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Descripción oficial del equipo" /></label><label className="field"><span>Tipo de control *</span><select name="category" value={category} onChange={(event) => setCategory(event.target.value)}><option value="EQUIPO">Equipo (serie única)</option><option value="LOTE">Lote (cantidad)</option></select></label><label className="field"><span>Costo unitario (S/)</span><input name="unitCost" type="number" min="0" step="0.01" value={unitCost} onChange={(event) => setUnitCost(event.target.value)} placeholder="0.00" /><small>Se aplicará a ingresos que no traigan costo propio.</small></label></div><div className="mapping-note"><Database size={17} /><span>El costo se multiplica por la cantidad al registrar ingresos. GR, fecha, proviene, estado, condición, link y coordinadores se completan en el movimiento.</span></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : matchedProduct ? "Actualizar SKU" : "Crear SKU"}</button></div></form></div></div>;
 }

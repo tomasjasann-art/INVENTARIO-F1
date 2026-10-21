@@ -315,7 +315,6 @@ export default function GrIngresoImport({ products, coordinators, suppliers, sav
         Cantidad: row.quantity,
         Costo: row.unitCost,
         "Tipo de Equipo": row.equipmentType,
-        "Cargar Gr": fileName ? "SI" : "NO",
         Propietario: owner,
       })),
     });
