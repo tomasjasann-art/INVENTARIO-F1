@@ -310,7 +310,7 @@ type EquipmentReturnBatchStatusInput = {
   receipts?: EquipmentReturnReceiptInput[];
 };
 
-type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA";
+type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA" | "CONDUCTOR";
 
 type AppUserInput = {
   action?: "appUser";
@@ -532,6 +532,7 @@ export async function GET(request: Request) {
     const db = getDb();
     const access = await currentAccess(db, user);
     if (!access?.active) return Response.json({ error: "Tu usuario no está registrado o se encuentra inactivo. Comunícate con un administrador." }, { status: 403 });
+    if (access.role === "CONDUCTOR") return Response.json({ error: "Tu acceso corresponde al módulo de vehículos." }, { status: 403 });
     const [assignedCoordinator] = access.role === "COORDINADOR" && "coordinatorId" in access && access.coordinatorId
       ? await db.select().from(coordinators).where(and(
         eq(coordinators.id, access.coordinatorId),
@@ -763,6 +764,7 @@ export async function POST(request: Request) {
     const db = getDb();
     const access = await currentAccess(db, user);
     if (!access) return Response.json({ error: "Tu usuario no está registrado. Pide a un administrador que cree o habilite tu cuenta." }, { status: 403 });
+    if (access.role === "CONDUCTOR") return Response.json({ error: "Tu acceso corresponde al módulo de vehículos." }, { status: 403 });
     const [assignedCoordinator] = access.role === "COORDINADOR" && "coordinatorId" in access && access.coordinatorId
       ? await db.select().from(coordinators).where(and(
         eq(coordinators.id, access.coordinatorId),
@@ -784,7 +786,7 @@ export async function POST(request: Request) {
       const username = normalizeUsername(userPayload.username);
       const displayName = clean(userPayload.displayName);
       const temporaryPassword = String(userPayload.temporaryPassword ?? "");
-      const roles: UserRole[] = ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA"];
+      const roles: UserRole[] = ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA", "CONDUCTOR"];
       const role = roles.includes(userPayload.role as UserRole) ? userPayload.role as UserRole : "SOLO_LECTURA";
       const coordinatorId = Number(userPayload.coordinatorId) || null;
       const [linkedCoordinator] = coordinatorId

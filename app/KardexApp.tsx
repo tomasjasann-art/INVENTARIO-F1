@@ -197,7 +197,7 @@ type EquipmentRequest = {
   updatedAt: string;
 };
 
-type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA";
+type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA" | "CONDUCTOR";
 
 type AppUser = {
   id: number;
@@ -693,6 +693,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
             {!isCoordinator && <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>}
           </nav>
         </div>
+        {!isCoordinator && <a className="module-pill" href="/vehiculos"><ClipboardList size={18} /><span><small>MÓDULO</small><strong>Control de vehículos</strong></span><ArrowUpRight size={17} /></a>}
         <div className="sidebar-bottom">
           {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
           <div className="user-card"><span>{userInitials(user.displayName)}</span><div><strong>{user.displayName}</strong><small>{role.replaceAll("_", " ")} · {user.email}</small></div><a href={signOutPath} target="_top" aria-label="Cerrar sesión" title="Cerrar sesión"><LogOut size={16} /></a></div>
@@ -1913,7 +1914,7 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
         <label className="field"><span>Nombre *</span><input name="displayName" required placeholder="Nombre del colaborador" /></label>
         <label className="field"><span>Usuario *</span><input name="username" required minLength={4} maxLength={40} pattern="[a-zA-Z0-9._-]+" autoComplete="off" placeholder="nombre.apellido" /></label>
         <label className="field"><span>Contraseña temporal *</span><input name="temporaryPassword" type="password" required minLength={10} autoComplete="new-password" placeholder="Mínimo 10 caracteres" /></label>
-        <label className="field"><span>Rol *</span><select name="role" value={newUserRole} onChange={(event) => setNewUserRole(event.target.value as UserRole)}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></label>
+        <label className="field"><span>Rol *</span><select name="role" value={newUserRole} onChange={(event) => setNewUserRole(event.target.value as UserRole)}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option><option value="CONDUCTOR">Conductor · Vehículos</option></select></label>
         <label className="field"><span>Coordinador F1 {newUserRole === "COORDINADOR" ? "*" : ""}</span><select name="coordinatorId" defaultValue="" required={newUserRole === "COORDINADOR"}><option value="">Sin vincular</option>{f1Coordinators.map((coordinator) => <option key={coordinator.id} value={coordinator.id}>{coordinator.name}</option>)}</select><small>Obligatorio para limitar solicitudes, alertas y despachos propios.</small></label>
         <button className="primary-button" type="submit" disabled={saving}><Plus size={15} />Crear usuario</button>
       </form>
@@ -1922,7 +1923,7 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
         {!data.appUsers.length ? <tr><td colSpan={7}><Empty text="Crea la primera cuenta interna para tu equipo." /></td></tr> : data.appUsers.map((appUser) => <tr key={appUser.id}>
           <td><strong>{appUser.displayName || "Sin nombre"}</strong><small>{appUser.username ? "Cuenta interna" : "Acceso anterior por correo"}</small></td>
           <td><b>{appUser.username || appUser.email}</b></td>
-          <td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: event.target.value, coordinatorId: appUser.coordinatorId, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option></select></td>
+          <td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: event.target.value, coordinatorId: appUser.coordinatorId, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option><option value="CONDUCTOR">Conductor · Vehículos</option></select></td>
           <td><select value={appUser.coordinatorId ?? ""} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: appUser.role, coordinatorId: Number(event.target.value) || null, active: appUser.active }, "Coordinador F1 vinculado.")}><option value="">Sin vincular</option>{f1Coordinators.map((coordinator) => <option key={coordinator.id} value={coordinator.id}>{coordinator.name}</option>)}</select></td>
           <td><select value={appUser.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: appUser.role, coordinatorId: appUser.coordinatorId, active: event.target.value === "ACTIVO" }, "Estado del usuario actualizado.")}><option>ACTIVO</option><option>INACTIVO</option></select></td>
           <td>{appUser.authUserId ? <div className="password-state"><span className={appUser.mustChangePassword ? "warning" : "ok"}>{appUser.mustChangePassword ? "Cambio pendiente" : "Contraseña definida"}</span><button type="button" className="text-action" disabled={saving} onClick={() => { setResetUserId(appUser.id); setTemporaryPassword(""); }}><RefreshCw size={12} />Restablecer</button></div> : <small>Cuenta heredada</small>}</td>

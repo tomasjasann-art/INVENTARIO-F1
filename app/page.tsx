@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import KardexApp from "./KardexApp";
 import LoginScreen, { AccessDeniedScreen, DeploymentSetupScreen } from "./LoginScreen";
 import PasswordChangeScreen from "./PasswordChangeScreen";
@@ -31,6 +32,8 @@ export default async function Home() {
   if (user.authProvider === "supabase" && access.mustChangePassword) {
     return <PasswordChangeScreen displayName={access.displayName || user.displayName} />;
   }
+
+  if (access.role === "CONDUCTOR") redirect("/vehiculos");
 
   return (
     <KardexApp

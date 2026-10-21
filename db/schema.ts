@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, pgSequence, pgTable, serial, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, doublePrecision, jsonb, index, integer, pgSequence, pgTable, serial, text, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const equipmentRequestCodeSequence = pgSequence("equipment_request_code_seq", {
   startWith: 1,
@@ -272,7 +272,7 @@ export const appUsers = pgTable(
     username: text("username").notNull().default(""),
     authUserId: text("auth_user_id").notNull().default(""),
     displayName: text("display_name").notNull().default(""),
-    role: text("role", { enum: ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA"] }).notNull().default("SOLO_LECTURA"),
+    role: text("role", { enum: ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA", "CONDUCTOR"] }).notNull().default("SOLO_LECTURA"),
     coordinatorId: integer("coordinator_id").references(() => coordinators.id, { onDelete: "set null" }),
     active: boolean("active").notNull().default(true),
     mustChangePassword: boolean("must_change_password").notNull().default(false),
@@ -388,3 +388,41 @@ export const equipmentReturns = pgTable(
     index("equipment_returns_stock_movement_id_idx").on(table.stockMovementId),
   ],
 );
+
+// Vehículos: datos separados del inventario ENTEL y protegidos por la API.
+export const fleetVehicles = pgTable("fleet_vehicles", {
+  id: serial("id").primaryKey(), plate: text("plate").notNull().unique(),
+  ceco: text("ceco").notNull().default(""), usage: text("usage").notNull().default("OPERACIONES"), tenure: text("tenure").notNull().default("PROPIO"),
+  category: text("category").notNull().default(""), type: text("type").notNull().default(""), brand: text("brand").notNull().default(""), model: text("model").notNull().default(""),
+  engine: text("engine").notNull().default(""), chassis: text("chassis").notNull().default(""), color: text("color").notNull().default(""), titleDate: text("title_date").notNull().default(""), year: integer("year"),
+  status: text("status").notNull().default("OPERATIVO"), target: doublePrecision("target").notNull().default(30), initialKm: doublePrecision("initial_km").notNull().default(0), notes: text("notes").notNull().default(""),
+}).enableRLS();
+export const fleetAssignments = pgTable("fleet_assignments", {
+  id: serial("id").primaryKey(), vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id), driverId: integer("driver_id").notNull().references(() => appUsers.id),
+  serviceDate: text("service_date").notNull(), endDate: text("end_date").notNull(), expectedStart: text("expected_start").notNull(), expectedEnd: text("expected_end").notNull(),
+  coordinator: text("coordinator").notNull().default(""), ceco: text("ceco").notNull().default(""), site: text("site").notNull().default(""), finalZone: text("final_zone").notNull().default(""), notes: text("notes").notNull().default(""),
+  planStatus: text("plan_status").notNull().default("CONFIRMADA"), reason: text("reason").notNull().default(""),
+  initialKm: doublePrecision("initial_km"), finalKm: doublePrecision("final_km"), startedAt: text("started_at").notNull().default(""), endedAt: text("ended_at").notNull().default(""),
+  startPhotos: jsonb("start_photos").$type<import("../lib/fleet").FleetPhoto[]>().notNull().default([]), endPhotos: jsonb("end_photos").$type<import("../lib/fleet").FleetPhoto[]>().notNull().default([]),
+  startRegisteredBy: text("start_registered_by").notNull().default(""), endRegisteredBy: text("end_registered_by").notNull().default(""), startNotes: text("start_notes").notNull().default(""), endNotes: text("end_notes").notNull().default(""), createdBy: text("created_by").notNull(), updatedAt: text("updated_at").notNull(),
+}, t => [uniqueIndex("fleet_vehicle_daily_assignment").on(t.vehicleId, t.serviceDate), index("fleet_assignment_driver_date").on(t.driverId, t.serviceDate)]).enableRLS();
+export const fleetInvoices = pgTable("fleet_invoices", {
+  id: serial("id").primaryKey(), provider: text("provider").notNull(), number: text("number").notNull(), issueDate: text("issue_date").notNull(), dueDate: text("due_date").notNull(), totalCents: integer("total_cents").notNull(), attachment: text("attachment").notNull().default(""), notes: text("notes").notNull().default(""),
+}, t => [uniqueIndex("fleet_invoice_provider_number").on(t.provider, t.number)]).enableRLS();
+export const fleetExpenses = pgTable("fleet_expenses", {
+  id: serial("id").primaryKey(), vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id), assignmentId: integer("assignment_id").references(() => fleetAssignments.id), date: text("date").notNull(), kind: text("kind").notNull(), amountCents: integer("amount_cents").notNull(),
+  quantity: doublePrecision("quantity").notNull().default(0), unit: text("unit").notNull().default("GAL"), fuel: text("fuel").notNull().default(""), unitPrice: doublePrecision("unit_price").notNull().default(0), odometer: doublePrecision("odometer"), provider: text("provider").notNull().default(""), reference: text("reference").notNull(), collector: text("collector").notNull().default(""),
+  invoiceId: integer("invoice_id").references(() => fleetInvoices.id), maintenanceType: text("maintenance_type").notNull().default(""), nextKm: doublePrecision("next_km"), attachment: text("attachment").notNull().default(""), notes: text("notes").notNull().default(""), fingerprint: text("fingerprint").notNull().unique(), createdBy: text("created_by").notNull(),
+}, t => [index("fleet_expense_vehicle_date").on(t.vehicleId, t.date), index("fleet_expense_invoice").on(t.invoiceId), index("fleet_expense_assignment").on(t.assignmentId)]).enableRLS();
+export const fleetDocuments = pgTable("fleet_documents", {
+  id: serial("id").primaryKey(), vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id), kind: text("kind").notNull(), provider: text("provider").notNull().default(""), reference: text("reference").notNull(), startDate: text("start_date").notNull(), expiryDate: text("expiry_date").notNull(), attachment: text("attachment").notNull().default(""), notes: text("notes").notNull().default(""),
+}, t => [uniqueIndex("fleet_document_renewal").on(t.vehicleId, t.kind, t.reference, t.expiryDate), index("fleet_document_vehicle_expiry").on(t.vehicleId, t.expiryDate)]).enableRLS();
+export const fleetPayments = pgTable("fleet_payments", {
+  id: serial("id").primaryKey(), invoiceId: integer("invoice_id").notNull().references(() => fleetInvoices.id), date: text("date").notNull(), amountCents: integer("amount_cents").notNull(), reference: text("reference").notNull(), attachment: text("attachment").notNull().default(""), createdBy: text("created_by").notNull(),
+}, t => [uniqueIndex("fleet_payment_reference").on(t.invoiceId, t.reference)]).enableRLS();
+export const fleetIdle = pgTable("fleet_idle", {
+  id: serial("id").primaryKey(), vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id), date: text("date").notNull(), minutes: integer("minutes").notNull(), notes: text("notes").notNull().default(""),
+}, t => [uniqueIndex("fleet_idle_vehicle_date").on(t.vehicleId, t.date)]).enableRLS();
+export const fleetStations = pgTable("fleet_stations", {
+  id: serial("id").primaryKey(), name: text("name").notNull(), provider: text("provider").notNull().default(""), address: text("address").notNull(), district: text("district").notNull().default(""), city: text("city").notNull().default(""), region: text("region").notNull().default(""), fuels: text("fuels").notNull().default(""), hours: text("hours").notNull().default(""), restrictions: text("restrictions").notNull().default(""), latitude: doublePrecision("latitude"), longitude: doublePrecision("longitude"), verified: boolean("verified").notNull().default(false), active: boolean("active").notNull().default(true),
+}).enableRLS();
