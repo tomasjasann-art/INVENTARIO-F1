@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getDb } from "../../../db";
 import { appUsers, coordinators, fleetVehicles as vehicles, fleetAssignments as assignments, fleetDocuments as documents, fleetExpenses as expenses, fleetInvoices as invoices, fleetPayments as payments, fleetIdle as idle, fleetStations as stations } from "../../../db/schema";
 import { fleetAccess, fleetFailure, FleetError, sameOrigin, verifyAttachment, verifyPhotos } from "../../../lib/fleet-server";
-import { limaDate, minutesFromTime, normalizedPlate } from "../../../lib/fleet";
+import { isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate } from "../../../lib/fleet";
 import { resolveEvidenceImage } from "../../../lib/supabase-storage";
 
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ const amount = z.coerce.number().positive().max(10_000_000).transform(v => Math.
 const km = z.coerce.number().min(0).max(10_000_000);
 const optionalKm = z.preprocess(v => v === "" || v === undefined || v === null ? null : Number(v), km.nullable());
 const vehicleSchema = z.object({ id: optionalId, plate: z.string().transform(normalizedPlate).refine(v => /^[A-Z0-9]{5,10}$/.test(v), "Placa inválida"), ceco: text, usage: z.enum(["ADMINISTRACION", "OPERACIONES"]), tenure: z.enum(["PROPIO", "ALQUILADO"]), category: text, type: text, brand: text, model: text, engine: text, chassis: text, color: text, titleDate: z.union([date, z.literal("")]).default(""), year: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().int().min(1950).max(2100).nullable()), status: z.enum(["OPERATIVO", "MANTENIMIENTO", "FUERA_SERVICIO"]), target: positive, initialKm: km, notes: text });
-const assignmentSchema = z.object({ id: optionalId, vehicleId: id, driverId: id, serviceDate: date, endDate: date, expectedStart: clock, expectedEnd: clock, coordinator: text, ceco: text, site: text, finalZone: text, notes: text, planStatus: z.enum(["CONFIRMADA", "POR_CONFIRMAR", "NO_SALIO", "CANCELADA"]), reason: text });
+const assignmentSchema = z.object({ id: optionalId, vehicleId: id, driverId: optionalId, responsibleName: text, serviceDate: date, endDate: date.optional(), expectedStart: z.union([clock, z.literal("")]).default(""), expectedEnd: z.union([clock, z.literal("")]).default(""), coordinator: text, ceco: text, site: text, finalZone: text, notes: text, planStatus: z.enum(["CONFIRMADA", "POR_CONFIRMAR", "NO_SALIO", "CANCELADA"]).default("CONFIRMADA"), reason: text });
 const expenseSchema = z.object({ vehicleId: id, assignmentId: optionalId, date, kind: z.enum(["COMBUSTIBLE", "PEAJE", "MANTENIMIENTO"]), amount: amount, quantity: z.coerce.number().min(0).max(1_000_000).default(0), unit: z.enum(["GAL", "L", "M3"]).default("GAL"), fuel: text, unitPrice: z.coerce.number().min(0).max(1_000_000).default(0), odometer: optionalKm, provider: text, collector: text, reference: z.string().trim().min(1, "Ingresa el número de servicio o comprobante").max(200), invoiceId: optionalId, maintenanceType: text, nextKm: optionalKm, attachment: text, notes: text });
 const stationSchema = z.object({ id: optionalId, name: z.string().trim().min(1).max(200), provider: text, address: z.string().trim().min(1).max(500), district: text, city: text, region: text, fuels: text, hours: text, restrictions: text, latitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-90).max(90).nullable()), longitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-180).max(180).nullable()), verified: z.boolean(), active: z.boolean().default(true) });
 
@@ -54,7 +54,7 @@ async function readFleet(request: Request) {
       return Response.json({ url: await resolveEvidenceImage(rows[0].attachment) }, { headers: { "Cache-Control": "private, no-store" } });
     }
     const driver = user.role === "CONDUCTOR";
-    const assignmentRows = await db.select().from(assignments).where(driver ? eq(assignments.driverId, user.id) : undefined).orderBy(desc(assignments.serviceDate), desc(assignments.id));
+    const assignmentRows = await db.select().from(assignments).where(driver ? and(eq(assignments.driverId, user.id), eq(assignments.trackingMode, "OPERATIVO")) : undefined).orderBy(desc(assignments.serviceDate), desc(assignments.id));
     const vehicleIds = [...new Set(assignmentRows.map(a => a.vehicleId))];
     const vehicleRows = driver && !vehicleIds.length ? [] : await db.select().from(vehicles).where(driver ? inArray(vehicles.id, vehicleIds) : undefined).orderBy(vehicles.plate);
     const stationRows = await db.select().from(stations).where(driver ? eq(stations.active, true) : undefined).orderBy(stations.name);
@@ -64,7 +64,7 @@ async function readFleet(request: Request) {
     const invoiceRows = driver ? [] : await db.select().from(invoices).orderBy(desc(invoices.issueDate));
     const paymentRows = driver ? [] : await db.select().from(payments).orderBy(desc(payments.date));
     const idleRows = driver ? [] : await db.select().from(idle).orderBy(desc(idle.date));
-    const coordinatorRows = driver ? [] : await db.select({ name: coordinators.name }).from(coordinators).where(and(eq(coordinators.active, true), eq(coordinators.organization, "F1")));
+    const coordinatorRows = await db.select({ name: coordinators.name }).from(coordinators).where(and(eq(coordinators.active, true), eq(coordinators.organization, "F1")));
     return Response.json({ user: { id: user.id, displayName: user.displayName, role: user.role, username: user.username }, vehicles: vehicleRows, assignments: assignmentRows, expenses: expenseRows, documents: documentRows, invoices: invoiceRows, payments: paymentRows, idle: idleRows, stations: stationRows, drivers: driverRows, coordinators: coordinatorRows.map(c => c.name) }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (e) { return fleetFailure(e); }
 }
@@ -89,17 +89,24 @@ export async function POST(request: Request) {
         await db.update(vehicles).set(v).where(eq(vehicles.id, vehicleId));
       } else await db.insert(vehicles).values(v);
     } else if (action === "assignment") {
-      const { id: assignmentId, ...a } = assignmentSchema.parse(body);
-      if (`${a.endDate}T${a.expectedEnd}` <= `${a.serviceDate}T${a.expectedStart}`) throw new FleetError("La hora de Final debe ser posterior al Inicio. Para viajes, indica la fecha de retorno.");
-      if (["NO_SALIO", "CANCELADA"].includes(a.planStatus) && !a.reason) throw new FleetError("Indica el motivo y confirma el estado del vehículo.");
-      const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, a.vehicleId)).limit(1);
-      const [driver] = await db.select().from(appUsers).where(and(eq(appUsers.id, a.driverId), eq(appUsers.active, true), inArray(appUsers.role, ["CONDUCTOR", "LOGISTICA", "ADMINISTRADOR"]))).limit(1);
-      if (!vehicle || !driver) throw new FleetError("Selecciona un vehículo y conductor activo.");
-      if (vehicle.status !== "OPERATIVO" && ["CONFIRMADA", "POR_CONFIRMAR"].includes(a.planStatus)) throw new FleetError("El vehículo está en mantenimiento o fuera de servicio.");
+      const { id: assignmentId, ...input } = assignmentSchema.parse(body);
       await db.transaction(async tx => {
-        await tx.execute(sql`select pg_advisory_xact_lock(7610, ${a.vehicleId})`);
+        await tx.execute(sql`select pg_advisory_xact_lock(7610, ${input.vehicleId})`);
+        // The vehicle master determines the mode; a posted mode cannot bypass driver evidence.
+        const [vehicle] = await tx.select().from(vehicles).where(eq(vehicles.id, input.vehicleId)).for("share").limit(1);
+        if (!vehicle) throw new FleetError("Selecciona un vehículo registrado.");
+        const administrative = vehicle.usage === "ADMINISTRACION";
+        const a = { ...input, endDate: administrative ? input.serviceDate : input.endDate || input.serviceDate, driverId: administrative ? null : input.driverId, trackingMode: administrative ? "ADMINISTRATIVO" : "OPERATIVO", responsibleName: administrative ? input.responsibleName : "", expectedStart: administrative ? "" : input.expectedStart, expectedEnd: administrative ? "" : input.expectedEnd, planStatus: administrative ? "CONFIRMADA" : input.planStatus, reason: administrative ? "" : input.reason };
+        if (!administrative) {
+          if (!a.driverId) throw new FleetError("Selecciona una cuenta activa de conductor.");
+          const [driver] = await tx.select().from(appUsers).where(and(eq(appUsers.id, a.driverId), eq(appUsers.active, true), eq(appUsers.role, "CONDUCTOR"))).limit(1);
+          if (!driver) throw new FleetError("La cuenta debe estar activa y tener el rol CONDUCTOR.");
+          if (!a.expectedStart || !a.expectedEnd || `${a.endDate}T${a.expectedEnd}` <= `${a.serviceDate}T${a.expectedStart}`) throw new FleetError("La hora de Final debe ser posterior al Inicio. Para viajes, indica la fecha de retorno.");
+          if (["NO_SALIO", "CANCELADA"].includes(a.planStatus) && !a.reason) throw new FleetError("Indica el motivo y confirma el estado del vehículo.");
+          if (vehicle.status !== "OPERATIVO" && ["CONFIRMADA", "POR_CONFIRMAR"].includes(a.planStatus)) throw new FleetError("El vehículo está en mantenimiento o fuera de servicio.");
+        }
         if (assignmentId) {
-          const [existing] = await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).limit(1);
+          const [existing] = await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).for("update").limit(1);
           if (!existing) throw new FleetError("Asignación no encontrada.", 404);
           if (existing.startedAt) throw new FleetError("La jornada ya comenzó. Sus datos de asignación quedan conservados para trazabilidad.");
           await tx.update(assignments).set({ ...a, updatedAt: new Date().toISOString(), createdBy: user.actor }).where(eq(assignments.id, assignmentId));
@@ -110,29 +117,34 @@ export async function POST(request: Request) {
       const aId = id.parse(body.assignmentId), phase = z.enum(["INICIO", "FINAL"]).parse(body.phase), odometer = km.parse(body.odometer);
       const [a] = await db.select().from(assignments).where(eq(assignments.id, aId)).limit(1);
       if (!a || (!user.manager && a.driverId !== user.id)) throw new FleetError("Esta asignación no te corresponde.", 403);
+      if (isAdministrative(a) || !a.driverId) throw new FleetError("El registro administrativo no requiere Inicio, Final ni fotografías.");
       const photos = await verifyPhotos(body.photos, `fleet/${user.id}/assignment-${aId}/${phase}/`);
       await db.transaction(async tx => {
         await tx.execute(sql`select pg_advisory_xact_lock(7612, ${a.driverId})`);
         await tx.execute(sql`select pg_advisory_xact_lock(7610, ${a.vehicleId})`);
-        const [current] = await tx.select().from(assignments).where(eq(assignments.id, aId)).limit(1);
+        const [current] = await tx.select().from(assignments).where(eq(assignments.id, aId)).for("update").limit(1);
         if (!current || current.planStatus !== "CONFIRMADA") throw new FleetError("La asignación debe estar confirmada para registrar la jornada.");
+        if (isAdministrative(current) || !current.driverId || current.driverId !== a.driverId || current.vehicleId !== a.vehicleId) throw new FleetError("La asignación cambió. Actualiza antes de registrar.", 409);
+        let work: { coordinator: string; ceco: string };
+        try { work = journeyWork(current, phase, { coordinator: text.parse(body.coordinator), ceco: text.parse(body.ceco) }); }
+        catch (err) { if (err instanceof z.ZodError) throw err; throw new FleetError((err as Error).message); }
         const [vehicle] = await tx.select().from(vehicles).where(eq(vehicles.id, current.vehicleId)).limit(1);
         if (phase === "INICIO") {
           if (current.startedAt) throw new FleetError("El Inicio ya fue registrado.", 409);
           if (current.serviceDate !== limaDate()) throw new FleetError("El Inicio solo se registra en la fecha programada.");
           if (!vehicle || vehicle.status !== "OPERATIVO") throw new FleetError("El vehículo no está disponible para iniciar.");
-          const [otherJourney] = await tx.select({ id: assignments.id }).from(assignments).where(and(eq(assignments.driverId, current.driverId), sql`${assignments.startedAt} <> ''`, eq(assignments.endedAt, ""))).limit(1);
+          const [otherJourney] = await tx.select({ id: assignments.id }).from(assignments).where(and(eq(assignments.trackingMode, "OPERATIVO"), eq(assignments.driverId, current.driverId), sql`${assignments.startedAt} <> ''`, eq(assignments.endedAt, ""))).limit(1);
           if (otherJourney) throw new FleetError("El conductor tiene otra jornada pendiente de cierre.");
           const previous = await tx.select().from(assignments).where(eq(assignments.vehicleId, current.vehicleId)).orderBy(desc(assignments.id));
-          if (previous.some(p => p.id !== aId && p.startedAt && !p.endedAt)) throw new FleetError("Existe una jornada anterior pendiente de cierre para esta placa.");
+          if (previous.some(p => !isAdministrative(p) && p.id !== aId && p.startedAt && !p.endedAt)) throw new FleetError("Existe una jornada anterior pendiente de cierre para esta placa.");
           const lastKm = Math.max(vehicle.initialKm, ...previous.filter(p => p.endedAt).map(p => p.finalKm || 0));
           if (odometer < lastKm) throw new FleetError(`El kilometraje debe ser igual o mayor al último cierre (${lastKm} km).`);
-          await tx.update(assignments).set({ initialKm: odometer, startedAt: new Date().toISOString(), startPhotos: photos, startRegisteredBy: user.actor, startNotes: text.parse(body.notes), updatedAt: new Date().toISOString() }).where(eq(assignments.id, aId));
+          await tx.update(assignments).set({ ...work, initialKm: odometer, startedAt: new Date().toISOString(), startPhotos: photos, startRegisteredBy: user.actor, startNotes: text.parse(body.notes), updatedAt: new Date().toISOString() }).where(eq(assignments.id, aId));
         } else {
           if (!current.startedAt || current.initialKm === null) throw new FleetError("Primero registra el Inicio.");
           if (current.endedAt) throw new FleetError("El Final ya fue registrado.", 409);
           if (odometer < current.initialKm) throw new FleetError("El kilometraje final no puede ser menor al inicial.");
-          await tx.update(assignments).set({ finalKm: odometer, endedAt: new Date().toISOString(), endPhotos: photos, endRegisteredBy: user.actor, endNotes: text.parse(body.notes), updatedAt: new Date().toISOString() }).where(eq(assignments.id, aId));
+          await tx.update(assignments).set({ ...work, finalKm: odometer, endedAt: new Date().toISOString(), endPhotos: photos, endRegisteredBy: user.actor, endNotes: text.parse(body.notes), updatedAt: new Date().toISOString() }).where(eq(assignments.id, aId));
         }
       });
     } else if (action === "idle") {

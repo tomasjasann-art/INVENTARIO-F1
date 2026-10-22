@@ -91,5 +91,5 @@ test('El GET de conductor no consulta documentación, gastos ni pagos administra
   globalThis.fleetLoadingIdentity = { ...empty.user, role: 'CONDUCTOR', manager: false };
   const response = await GET(new Request('https://f1.example/api/fleet'));
   assert.equal(response.status, 200);
-  assert.deepEqual(queried, ['fleet_assignments','fleet_stations','app_users']);
+  assert.deepEqual(queried, ['fleet_assignments','fleet_stations','app_users','coordinators']);
 });

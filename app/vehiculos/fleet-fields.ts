@@ -1,16 +1,33 @@
-import { limaDate, type FleetData } from "../../lib/fleet";
+import { activeDrivers, limaDate, type FleetData } from "../../lib/fleet";
 import type { FieldSpec, FormSpec } from "./FleetForms";
 const field = (name: string, label: string, type = "text", required = false): FieldSpec => ({ name, label, type, required });
 const choice = (name: string, label: string, values: string[], required = true): FieldSpec => ({ name, label, required, options: values.map(value => ({ value, label: value.replaceAll("_", " ") })) });
 export function fleetForms(d: FleetData) {
   const vehicle: FieldSpec = { name: "vehicleId", label: "Placa", required: true, options: d.vehicles.map(v => ({ value: String(v.id), label: `${v.plate} · ${v.brand} ${v.model}` })) };
-  const assignment: FieldSpec = { name: "assignmentId", label: "Asignación vinculada", options: d.assignments.map(a => ({ value: String(a.id), label: `${a.serviceDate} · ${d.vehicles.find(v => v.id === a.vehicleId)?.plate} · ${d.drivers.find(u => u.id === a.driverId)?.displayName || "Conductor"}` })) };
+  const assignment: FieldSpec = { name: "assignmentId", label: "Asignación vinculada", options: d.assignments.map(a => ({ value: String(a.id), label: `${a.serviceDate} · ${d.vehicles.find(v => v.id === a.vehicleId)?.plate} · ${d.drivers.find(u => u.id === a.driverId)?.displayName || a.responsibleName || "Administración / Gerencia"}` })) };
   const invoice: FieldSpec = { name: "invoiceId", label: "Factura de combustible", options: d.invoices.map(i => ({ value: String(i.id), label: `${i.provider} · ${i.number}` })) };
   const date = field("date", "Fecha", "date", true), notes = field("notes", "Observaciones", "textarea"), provider = field("provider", "Proveedor", "text", true);
   const reference = field("reference", "N.º servicio / comprobante", "text", true);
   const forms: Record<string, FormSpec> = {
     vehicle: { title: "Datos del vehículo", action: "vehicle", values: { usage: "OPERACIONES", tenure: "PROPIO", status: "OPERATIVO", initialKm: 0, target: 30 }, fields: [field("plate", "Placa", "text", true), field("ceco", "CECO"), choice("usage", "Uso", ["OPERACIONES", "ADMINISTRACION"]), choice("tenure", "Tenencia", ["PROPIO", "ALQUILADO"]), field("category", "Categoría"), field("type", "Tipo"), field("brand", "Marca"), field("model", "Modelo"), field("engine", "N.º serie de motor"), field("chassis", "Chasis"), field("color", "Color"), field("titleDate", "Fecha de título", "date"), field("year", "Año", "number"), field("initialKm", "Kilometraje inicial de referencia", "number", true), choice("status", "Disponibilidad", ["OPERATIVO", "MANTENIMIENTO", "FUERA_SERVICIO"]), { ...field("target", "Meta km/gal", "number", true), hint: "Aplicable al rendimiento estimado de combustible líquido. GNV se muestra por separado." }, notes] },
-    assignment: { vehicleCecos: Object.fromEntries(d.vehicles.map(v => [String(v.id), v.ceco])), title: "Asignación diaria", action: "assignment", values: { serviceDate: limaDate(), endDate: limaDate(), expectedStart: "08:00", expectedEnd: "18:00", planStatus: "CONFIRMADA" }, fields: [field("serviceDate", "Fecha de Inicio", "date", true), field("endDate", "Fecha de Final / retorno", "date", true), vehicle, { name: "driverId", label: "Conductor / cuenta de acceso", required: true, options: d.drivers.filter(u => u.active !== false).map(u => ({ value: String(u.id), label: `${u.displayName} · ${u.username || u.role}` })), hint: "Crea las cuentas desde Conductores y app móvil → Crear o habilitar conductores." }, field("expectedStart", "Hora prevista de Inicio", "time", true), field("expectedEnd", "Hora prevista de Final", "time", true), { name: "coordinator", label: "Coordinador F1", options: d.coordinators.map(c => ({ value: c, label: c })) }, field("ceco", "CECO"), field("site", "Site inicial de trabajo"), field("finalZone", "Zona final"), choice("planStatus", "Estado de asignación", ["CONFIRMADA", "POR_CONFIRMAR", "NO_SALIO", "CANCELADA"]), { ...field("reason", "Motivo de no salida / cancelación"), hint: "Obligatorio cuando confirmas que no salió o cancelas." }, notes] },
+    assignment: {
+      vehicleCecos: Object.fromEntries(d.vehicles.map(v => [String(v.id), v.ceco])),
+      vehicleUsages: Object.fromEntries(d.vehicles.map(v => [String(v.id), v.usage])),
+      title: "Asignación diaria", action: "assignment",
+      values: { serviceDate: limaDate(), endDate: limaDate(), expectedStart: "08:00", expectedEnd: "18:00", planStatus: "CONFIRMADA" },
+      fields: [vehicle, field("serviceDate", "Fecha", "date", true),
+        { ...field("endDate", "Fecha de Final / retorno", "date", true), operationsOnly: true },
+        { name: "driverId", label: "Conductor / cuenta de acceso", required: true, operationsOnly: true,
+          options: activeDrivers(d.drivers).map(u => ({ value: String(u.id), label: `${u.displayName} · ${u.username || u.role}` })),
+          hint: "Crea las cuentas desde Conductores y app móvil → Crear o habilitar conductores." },
+        { ...field("responsibleName", "Responsable administrativo / gerencia (opcional)"), administrationOnly: true },
+        { ...field("expectedStart", "Hora prevista de Inicio", "time", true), operationsOnly: true },
+        { ...field("expectedEnd", "Hora prevista de Final", "time", true), operationsOnly: true },
+        { name: "coordinator", label: "Coordinador F1", options: [...new Set([...d.coordinators, ...d.assignments.map(a => a.coordinator).filter(Boolean)])].map(c => ({ value: c, label: c })) },
+        field("ceco", "CECO"), field("site", "Site inicial de trabajo"), field("finalZone", "Zona final"),
+        { ...choice("planStatus", "Estado de asignación", ["CONFIRMADA", "POR_CONFIRMAR", "NO_SALIO", "CANCELADA"]), operationsOnly: true },
+        { ...field("reason", "Motivo de no salida / cancelación"), operationsOnly: true, hint: "Obligatorio cuando confirmas que no salió o cancelas." }, notes],
+    },
     document: { title: "Documentación del vehículo", action: "document", uploadPurpose: "document", values: { kind: "SOAT", startDate: limaDate() }, fields: [vehicle, choice("kind", "Documento", ["SOAT", "REVISION_TECNICA", "SEGURO"]), provider, reference, field("startDate", "Inicio de vigencia", "date", true), field("expiryDate", "Vencimiento", "date", true), notes] },
     invoice: { title: "Factura de combustible", action: "invoice", uploadPurpose: "invoice", values: { issueDate: limaDate(), dueDate: limaDate() }, fields: [provider, field("number", "N.º factura", "text", true), field("issueDate", "Fecha de emisión", "date", true), field("dueDate", "Fecha de vencimiento", "date", true), field("amount", "Total factura (S/)", "number", true), notes] },
     payment: { title: "Registrar pago", action: "payment", uploadPurpose: "payment", values: { date: limaDate() }, fields: [{ ...invoice, required: true }, date, field("amount", "Importe pagado (S/)", "number", true), field("reference", "N.º operación", "text", true)] },

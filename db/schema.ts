@@ -398,7 +398,8 @@ export const fleetVehicles = pgTable("fleet_vehicles", {
   status: text("status").notNull().default("OPERATIVO"), target: doublePrecision("target").notNull().default(30), initialKm: doublePrecision("initial_km").notNull().default(0), notes: text("notes").notNull().default(""),
 }).enableRLS();
 export const fleetAssignments = pgTable("fleet_assignments", {
-  id: serial("id").primaryKey(), vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id), driverId: integer("driver_id").notNull().references(() => appUsers.id),
+  id: serial("id").primaryKey(), vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id), driverId: integer("driver_id").references(() => appUsers.id),
+  trackingMode: text("tracking_mode").notNull().default("OPERATIVO"), responsibleName: text("responsible_name").notNull().default(""),
   serviceDate: text("service_date").notNull(), endDate: text("end_date").notNull(), expectedStart: text("expected_start").notNull(), expectedEnd: text("expected_end").notNull(),
   coordinator: text("coordinator").notNull().default(""), ceco: text("ceco").notNull().default(""), site: text("site").notNull().default(""), finalZone: text("final_zone").notNull().default(""), notes: text("notes").notNull().default(""),
   planStatus: text("plan_status").notNull().default("CONFIRMADA"), reason: text("reason").notNull().default(""),

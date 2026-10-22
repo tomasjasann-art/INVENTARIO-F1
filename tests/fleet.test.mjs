@@ -84,3 +84,23 @@ test('Las modificaciones rechazan un origen externo',()=>{
   assert.throws(()=>server.sameOrigin(new Request('https://f1.example/api/fleet',{headers:{origin:'https://otro.example'}})),e=>e.status===403);
   assert.doesNotThrow(()=>server.sameOrigin(new Request('https://f1.example/api/fleet',{headers:{origin:'https://f1.example'}})));
 });
+
+
+test('Administración no genera pendientes de Inicio ni Final',()=>{
+  for (const a of [
+    {trackingMode:'ADMINISTRATIVO',startedAt:'',endedAt:''},
+    {trackingMode:'ADMINISTRATIVO',planStatus:'CONFIRMADA',serviceDate:'2020-01-01',expectedStart:''},
+  ]) assert.equal(f.assignmentStatus(a,new Date('2026-10-22T20:00:00Z')),'Registro administrativo');
+});
+test('Las cuentas elegibles para conducir son únicamente CONDUCTOR activo',()=>{
+  const users=[{id:1,role:'CONDUCTOR',active:true},{id:2,role:'CONDUCTOR',active:false},{id:3,role:'ADMINISTRADOR',active:true},{id:4,role:'LOGISTICA',active:true}];
+  assert.deepEqual(f.activeDrivers(users).map(u=>u.id),[1]);
+});
+test('Inicio exige el coordinador y CECO reales del trabajo',()=>{
+  assert.deepEqual(f.journeyWork({coordinator:'Plan',ceco:'Antiguo'},'INICIO',{coordinator:' Coordinador real ',ceco:' 7001 '}),{coordinator:'Coordinador real',ceco:'7001'});
+  for(const input of [{coordinator:'',ceco:'7001'},{coordinator:'Persona',ceco:'  '}]) assert.throws(()=>f.journeyWork({coordinator:'Plan',ceco:'Plan'},'INICIO',input),/coordinador y el CECO/);
+});
+test('Final conserva la atribución confirmada al Inicio y permite completar jornadas antiguas',()=>{
+  assert.deepEqual(f.journeyWork({coordinator:'Confirmado',ceco:'7001'},'FINAL',{coordinator:'Otro',ceco:'9999'}),{coordinator:'Confirmado',ceco:'7001'});
+  assert.deepEqual(f.journeyWork({coordinator:'',ceco:'7001'},'FINAL',{coordinator:'Completar',ceco:'9999'}),{coordinator:'Completar',ceco:'7001'});
+});

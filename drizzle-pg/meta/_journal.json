@@ -99,6 +99,13 @@
       "when": 1792599077353,
       "tag": "0013_control_vehiculos",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792701471459,
+      "tag": "0014_administrative_tracking",
+      "breakpoints": true
     }
   ]
 }
