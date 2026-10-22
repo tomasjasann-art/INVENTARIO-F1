@@ -2,7 +2,8 @@ export const PHOTO_SLOTS = ["Frente", "Posterior", "Lateral izquierdo", "Lateral
 export type FleetPhoto = { slot: string; path: string; url?: string };
 export type Vehicle = { id: number; plate: string; ceco: string; usage: string; tenure: string; category: string; type: string; brand: string; model: string; engine: string; chassis: string; color: string; titleDate: string; year: number | null; status: string; target: number; initialKm: number; notes: string };
 export type Assignment = { id: number; vehicleId: number; driverId: number | null; trackingMode: string; responsibleName: string; serviceDate: string; endDate: string; expectedStart: string; expectedEnd: string; coordinator: string; ceco: string; site: string; finalZone: string; notes: string; planStatus: string; reason: string; initialKm: number | null; finalKm: number | null; startedAt: string; endedAt: string; startPhotos: FleetPhoto[]; endPhotos: FleetPhoto[]; startNotes: string; endNotes: string; startRegisteredBy?: string; endRegisteredBy?: string; createdBy: string; updatedAt: string };
-export type Expense = { id: number; vehicleId: number; assignmentId: number | null; date: string; kind: string; amountCents: number; quantity: number; unit: string; fuel: string; unitPrice: number; odometer: number | null; provider: string; reference: string; collector: string; invoiceId: number | null; maintenanceType: string; nextKm: number | null; attachment: string; notes: string; fingerprint: string; createdBy: string };
+export type ExpenseSource = { format: "FUEL_ATIO" | "TOLL_REPORT"; transactionId: string; time: string; station: string; lane: string; voucher: string; voucherDate: string; file: string; sheet: string; row: number };
+export type Expense = { id: number; vehicleId: number; assignmentId: number | null; date: string; kind: string; amountCents: number; quantity: number; unit: string; fuel: string; unitPrice: number; odometer: number | null; provider: string; reference: string; collector: string; invoiceId: number | null; maintenanceType: string; nextKm: number | null; attachment: string; notes: string; fingerprint: string; source: ExpenseSource | null; createdBy: string };
 export type FleetDocument = { id: number; vehicleId: number; kind: string; provider: string; reference: string; startDate: string; expiryDate: string; attachment: string; notes: string };
 export type Invoice = { id: number; provider: string; number: string; issueDate: string; dueDate: string; totalCents: number; attachment: string; notes: string };
 export type Payment = { id: number; invoiceId: number; date: string; amountCents: number; reference: string; attachment: string; createdBy: string };
@@ -33,6 +34,31 @@ export function distance(a: Assignment) { return a.endedAt && a.initialKm !== nu
 export function canManageFleet(role: string) { return role === "ADMINISTRADOR" || role === "LOGISTICA"; }
 export function isAdministrative(a: Pick<Assignment, "trackingMode">) { return a.trackingMode === "ADMINISTRATIVO"; }
 export function activeDrivers(users: FleetUser[]) { return users.filter(u => u.role === "CONDUCTOR" && u.active !== false); }
+export function expenseIdentity(e: Pick<Expense, "vehicleId" | "date" | "kind" | "provider" | "reference" | "source">) {
+  const clean = (v: string) => v.trim().replace(/\s+/g, " ").toUpperCase();
+  if (e.source?.format === "FUEL_ATIO") return ["FUEL_ATIO", clean(e.source.transactionId)];
+  if (e.source?.format === "TOLL_REPORT") return ["TOLL_REPORT", e.vehicleId, e.date, e.source.time, clean(e.provider), clean(e.source.station), clean(e.source.lane)];
+  return [e.vehicleId, e.date, e.kind, e.provider.toUpperCase(), e.reference.toUpperCase()];
+}
+export function matchingAssignments(e: Pick<Expense, "vehicleId" | "date" | "source">, assignments: Assignment[]) {
+  const at = e.source?.time ? `${e.date}T${e.source.time}` : "";
+  const local = (value: string) => new Date(Date.parse(value) - 5 * 3600000).toISOString().slice(0, 19);
+  return assignments.filter(a => {
+    if (a.vehicleId !== e.vehicleId || a.planStatus !== "CONFIRMADA" || e.date < a.serviceDate || e.date > a.endDate) return false;
+    if (isAdministrative(a) || !at) return true;
+    const start = a.startedAt ? local(a.startedAt) : `${a.serviceDate}T${a.expectedStart}:00`;
+    const end = a.endedAt ? local(a.endedAt) : `${a.endDate}T${a.expectedEnd}:00`;
+    return at >= start && at <= end;
+  });
+}
+export function odometerReview(e: Pick<Expense, "kind" | "odometer">, a?: Assignment) {
+  if (e.kind !== "COMBUSTIBLE" || e.odometer === null) return "";
+  if (!a) return "Sin jornada vinculada";
+  if (isAdministrative(a)) return "Administración: sin marcación";
+  if (a.initialKm === null) return "Inicio pendiente de registrar";
+  if (e.odometer < a.initialKm || (a.finalKm !== null && e.odometer > a.finalKm)) return `Revisar: fuera del rango ${a.initialKm}–${a.finalKm ?? "Final pendiente"} km`;
+  return a.finalKm === null ? "Final pendiente de registrar" : "Dentro del rango de la jornada";
+}
 export function journeyWork(a: Pick<Assignment, "coordinator" | "ceco">, phase: "INICIO" | "FINAL", input: { coordinator: string; ceco: string }) {
   const coordinator = (phase === "FINAL" && a.coordinator ? a.coordinator : input.coordinator).trim();
   const ceco = (phase === "FINAL" && a.ceco ? a.ceco : input.ceco).trim();

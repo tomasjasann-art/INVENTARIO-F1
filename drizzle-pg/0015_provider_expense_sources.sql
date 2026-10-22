@@ -1,0 +1,1 @@
+ALTER TABLE "fleet_expenses" ADD COLUMN "source" jsonb;

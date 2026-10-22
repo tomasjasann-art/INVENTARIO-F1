@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getDb } from "../../../db";
 import { appUsers, coordinators, fleetVehicles as vehicles, fleetAssignments as assignments, fleetDocuments as documents, fleetExpenses as expenses, fleetInvoices as invoices, fleetPayments as payments, fleetIdle as idle, fleetStations as stations } from "../../../db/schema";
 import { fleetAccess, fleetFailure, FleetError, sameOrigin, verifyAttachment, verifyPhotos } from "../../../lib/fleet-server";
-import { isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate } from "../../../lib/fleet";
+import { expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate } from "../../../lib/fleet";
 import { resolveEvidenceImage } from "../../../lib/supabase-storage";
 
 export const runtime = "nodejs";
@@ -20,7 +20,8 @@ const km = z.coerce.number().min(0).max(10_000_000);
 const optionalKm = z.preprocess(v => v === "" || v === undefined || v === null ? null : Number(v), km.nullable());
 const vehicleSchema = z.object({ id: optionalId, plate: z.string().transform(normalizedPlate).refine(v => /^[A-Z0-9]{5,10}$/.test(v), "Placa inválida"), ceco: text, usage: z.enum(["ADMINISTRACION", "OPERACIONES"]), tenure: z.enum(["PROPIO", "ALQUILADO"]), category: text, type: text, brand: text, model: text, engine: text, chassis: text, color: text, titleDate: z.union([date, z.literal("")]).default(""), year: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().int().min(1950).max(2100).nullable()), status: z.enum(["OPERATIVO", "MANTENIMIENTO", "FUERA_SERVICIO"]), target: positive, initialKm: km, notes: text });
 const assignmentSchema = z.object({ id: optionalId, vehicleId: id, driverId: optionalId, responsibleName: text, serviceDate: date, endDate: date.optional(), expectedStart: z.union([clock, z.literal("")]).default(""), expectedEnd: z.union([clock, z.literal("")]).default(""), coordinator: text, ceco: text, site: text, finalZone: text, notes: text, planStatus: z.enum(["CONFIRMADA", "POR_CONFIRMAR", "NO_SALIO", "CANCELADA"]).default("CONFIRMADA"), reason: text });
-const expenseSchema = z.object({ vehicleId: id, assignmentId: optionalId, date, kind: z.enum(["COMBUSTIBLE", "PEAJE", "MANTENIMIENTO"]), amount: amount, quantity: z.coerce.number().min(0).max(1_000_000).default(0), unit: z.enum(["GAL", "L", "M3"]).default("GAL"), fuel: text, unitPrice: z.coerce.number().min(0).max(1_000_000).default(0), odometer: optionalKm, provider: text, collector: text, reference: z.string().trim().min(1, "Ingresa el número de servicio o comprobante").max(200), invoiceId: optionalId, maintenanceType: text, nextKm: optionalKm, attachment: text, notes: text });
+const sourceSchema = z.object({ format: z.enum(["FUEL_ATIO", "TOLL_REPORT"]), transactionId: z.string().trim().max(200).default(""), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/), station: z.string().trim().min(1).max(300), lane: z.string().trim().max(100).default(""), voucher: z.string().trim().max(200).default(""), voucherDate: z.union([date, z.literal("")]).default(""), file: z.string().max(200), sheet: z.string().max(100), row: z.number().int().positive() });
+const expenseSchema = z.object({ vehicleId: id, assignmentId: optionalId, date, kind: z.enum(["COMBUSTIBLE", "PEAJE", "MANTENIMIENTO"]), amount: amount, quantity: z.coerce.number().min(0).max(1_000_000).default(0), unit: z.enum(["GAL", "L", "M3"]).default("GAL"), fuel: text, unitPrice: z.coerce.number().min(0).max(1_000_000).default(0), odometer: optionalKm, provider: text, collector: text, reference: z.string().trim().min(1, "Ingresa el número de servicio o comprobante").max(200), invoiceId: optionalId, maintenanceType: text, nextKm: optionalKm, attachment: text, notes: text, source: sourceSchema.nullable().default(null) });
 const stationSchema = z.object({ id: optionalId, name: z.string().trim().min(1).max(200), provider: text, address: z.string().trim().min(1).max(500), district: text, city: text, region: text, fuels: text, hours: text, restrictions: text, latitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-90).max(90).nullable()), longitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-180).max(180).nullable()), verified: z.boolean(), active: z.boolean().default(true) });
 
 // Always return a JSON error before the platform or browser times out.
@@ -157,33 +158,49 @@ export async function POST(request: Request) {
       d.attachment = await verifyAttachment(d.attachment, `fleet/${user.id}/document/`);
       await db.insert(documents).values(d);
     } else if (action === "expense" || action === "bulkExpense" || action === "bulkPreview") {
-      const inputRows = action === "expense" ? [body] : z.array(z.record(z.unknown())).min(1).max(500).parse(body.rows);
+      const inputRows = action === "expense" ? [body] : z.array(z.record(z.unknown())).min(1).max(5000).parse(body.rows);
       const rows: Array<typeof expenses.$inferInsert> = [];
-      const preview: Array<{ row: number; input: Record<string, unknown>; plate: string; amount: unknown; reference: string; error?: string }> = [];
+      const preview: Array<{ row: number; input: Record<string, unknown>; plate: string; amount: unknown; reference: string; error?: string; warning?: string; assignmentId?: number | null }> = [];
       const knownVehicles = await db.select({ id: vehicles.id, plate: vehicles.plate }).from(vehicles);
+      const assignmentRows = inputRows.some(r => r.assignmentId || r.autoAssign) ? await db.select().from(assignments) : [];
+      const invoiceRows = inputRows.some(r => r.invoiceId) ? await db.select().from(invoices) : [];
       const fingerprints = new Set<string>();
       for (const [rowIndex, input] of inputRows.entries()) {
-        const item = { row: rowIndex + 2, input, plate: knownVehicles.find(v => v.id === Number(input.vehicleId))?.plate || String(input._plate || "Desconocida"), amount: input.amount, reference: String(input.reference || "") };
+        const item: (typeof preview)[number] = { row: Number(input._row) || rowIndex + 2, input, plate: knownVehicles.find(v => v.id === Number(input.vehicleId))?.plate || String(input._plate || "Desconocida"), amount: input.amount, reference: String(input.reference || "") };
         try {
+        if (input._error) throw new FleetError(String(input._error));
+        if (!knownVehicles.some(v => v.id === Number(input.vehicleId))) throw new FleetError("La placa no está registrada en el maestro de vehículos.");
         const { amount: amountCents, ...e } = expenseSchema.parse(input);
+        if (e.source?.format === "FUEL_ATIO" && (e.kind !== "COMBUSTIBLE" || !e.source.transactionId)) throw new FleetError("El reporte de combustible requiere un Id Transaccion válido.");
+        if (e.source?.format === "TOLL_REPORT" && e.kind !== "PEAJE") throw new FleetError("El reporte de peajes debe cargarse como PEAJE.");
+        if (e.source && !e.provider) throw new FleetError("Indica el proveedor del reporte.");
         if (!knownVehicles.some(v => v.id === e.vehicleId)) throw new FleetError("La placa no está registrada en el maestro de vehículos.");
         if (e.kind === "COMBUSTIBLE" && (!e.quantity || !e.fuel || !e.provider || e.odometer === null)) throw new FleetError("Combustible requiere volumen, combustible, proveedor y odómetro.");
         if (e.kind === "COMBUSTIBLE" && ((e.fuel.toUpperCase().includes("GNV") && e.unit !== "M3") || (e.unit === "M3" && !e.fuel.toUpperCase().includes("GNV")))) throw new FleetError("El GNV se registra en M3; gasolina, diésel y GLP en GAL o L.");
         if (e.kind === "COMBUSTIBLE" && e.unitPrice && Math.abs(e.quantity * e.unitPrice - amountCents / 100) > Math.max(0.1, amountCents / 10000)) throw new FleetError("El importe no coincide con volumen × precio unitario.");
         if (e.kind === "MANTENIMIENTO" && (!e.maintenanceType || e.odometer === null)) throw new FleetError("Indica tipo y kilometraje del mantenimiento.");
         if (e.kind !== "COMBUSTIBLE" && e.invoiceId) throw new FleetError("Las facturas de combustible solo se vinculan a abastecimientos.");
+        if (input.autoAssign === true && e.source && !e.assignmentId) {
+          const candidates = matchingAssignments(e, assignmentRows);
+          if (candidates.length === 1) e.assignmentId = candidates[0].id;
+          else item.warning = candidates.length ? "Varias jornadas coinciden; vincula manualmente." : "Sin jornada coincidente; pendiente de atribución.";
+        }
         if (e.assignmentId) {
-          const [a] = await db.select().from(assignments).where(eq(assignments.id, e.assignmentId)).limit(1);
+          const a = assignmentRows.find(a => a.id === e.assignmentId);
           if (!a || a.vehicleId !== e.vehicleId || e.date < a.serviceDate || e.date > a.endDate) throw new FleetError("La jornada vinculada no corresponde a la placa o fecha del gasto.");
         }
         if (e.invoiceId) {
-          const [i] = await db.select().from(invoices).where(eq(invoices.id, e.invoiceId)).limit(1);
+          const i = invoiceRows.find(i => i.id === e.invoiceId);
           if (!i || i.provider.toUpperCase() !== e.provider.toUpperCase()) throw new FleetError("La factura debe corresponder al mismo proveedor del abastecimiento.");
         }
         e.attachment = await verifyAttachment(e.attachment, `fleet/${user.id}/expense/`);
-        const fingerprint = createHash("sha256").update(JSON.stringify([e.vehicleId, e.date, e.kind, e.provider.toUpperCase(), e.reference.toUpperCase()])).digest("hex");
+        const fingerprint = createHash("sha256").update(JSON.stringify(expenseIdentity(e))).digest("hex");
         if (fingerprints.has(fingerprint)) throw new FleetError("Referencia duplicada dentro del archivo.");
         fingerprints.add(fingerprint);
+        const review = odometerReview(e, assignmentRows.find(a => a.id === e.assignmentId));
+        if (review.startsWith("Revisar:")) item.warning = review;
+        item.assignmentId = e.assignmentId;
+        item.input = { ...input, ...e, amount: amountCents / 100, autoAssign: false };
         preview.push(item);
         rows.push({ ...e, amountCents, unitPrice: e.kind === "COMBUSTIBLE" ? e.unitPrice || amountCents / 100 / e.quantity : 0, fingerprint, createdBy: user.actor });
         } catch (err) {
@@ -199,7 +216,7 @@ export async function POST(request: Request) {
         return Response.json({ rows: preview });
       }
       // Atomic import: a conflicting row leaves the entire batch unchanged.
-      await db.transaction(async tx => { for (const e of rows) await tx.insert(expenses).values(e); });
+      await db.transaction(async tx => { for (let offset = 0; offset < rows.length; offset += 200) await tx.insert(expenses).values(rows.slice(offset, offset + 200)); });
     } else if (action === "invoice") {
       const { amount: totalCents, ...i } = z.object({ provider: z.string().trim().min(1).max(200).transform(s => s.toUpperCase()), number: z.string().trim().min(1).max(100).transform(s => s.toUpperCase()), issueDate: date, dueDate: date, amount, attachment: text, notes: text }).parse(body);
       if (i.dueDate < i.issueDate) throw new FleetError("El vencimiento no puede ser anterior a la emisión.");
