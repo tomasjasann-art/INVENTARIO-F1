@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getDb } from "../../../db";
 import { appUsers, coordinators, fleetVehicles as vehicles, fleetAssignments as assignments, fleetDocuments as documents, fleetExpenses as expenses, fleetInvoices as invoices, fleetPayments as payments, fleetIdle as idle, fleetStations as stations } from "../../../db/schema";
 import { fleetAccess, fleetFailure, FleetError, sameOrigin, verifyAttachment, verifyPhotos } from "../../../lib/fleet-server";
-import { expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate, type Expense, type ImportChange } from "../../../lib/fleet";
+import { DOCUMENT_KINDS, expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate, type Expense, type ImportChange } from "../../../lib/fleet";
 import { fuelImportChanges, fuelImportPatch, fuelImportValues } from "../../../lib/fleet-sync";
 import { resolveEvidenceImage } from "../../../lib/supabase-storage";
 
@@ -155,8 +155,9 @@ export async function POST(request: Request) {
       if (minutes > 1440) throw new FleetError("El ralentí de un día no puede superar 24 horas.");
       await db.insert(idle).values({ vehicleId, date: day, minutes, notes: text.parse(body.notes) }).onConflictDoUpdate({ target: [idle.vehicleId, idle.date], set: { minutes, notes: text.parse(body.notes) } });
     } else if (action === "document") {
-      const d = z.object({ vehicleId: id, kind: z.enum(["SOAT", "REVISION_TECNICA", "SEGURO"]), provider: text, reference: z.string().trim().min(1).max(200), startDate: date, expiryDate: date, attachment: text, notes: text }).parse(body);
-      if (d.expiryDate < d.startDate) throw new FleetError("El vencimiento debe ser posterior o igual al inicio de vigencia.");
+      const d = z.object({ vehicleId: id, kind: z.enum(DOCUMENT_KINDS), provider: text, reference: z.string().trim().min(1).max(200), startDate: date, expiryDate: z.union([date, z.literal("")]).default(""), attachment: text, notes: text }).parse(body);
+      if (d.kind === "TARJETA_PROPIEDAD") d.expiryDate = "";
+      else if (!d.expiryDate || d.expiryDate < d.startDate) throw new FleetError("Indica un vencimiento posterior o igual al inicio de vigencia.");
       d.attachment = await verifyAttachment(d.attachment, `fleet/${user.id}/document/`);
       await db.insert(documents).values(d);
     } else if (action === "expense" || action === "bulkExpense" || action === "bulkPreview") {

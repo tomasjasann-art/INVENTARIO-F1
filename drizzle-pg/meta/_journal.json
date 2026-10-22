@@ -120,6 +120,13 @@
       "when": 1792704207925,
       "tag": "0016_station_directory_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792709817679,
+      "tag": "0017_vehicle_property_card",
+      "breakpoints": true
     }
   ]
 }

@@ -27,7 +27,10 @@ export function assignmentStatus(a: Assignment, now = new Date()) {
   if (a.startedAt) return now > new Date(`${a.endDate || a.serviceDate}T${a.expectedEnd}:00-05:00`) ? "Cierre pendiente" : "En jornada";
   return now > new Date(`${a.serviceDate}T${a.expectedStart}:00-05:00`) ? "Sin Inicio" : "Programada";
 }
+export const DOCUMENT_KINDS = ["SOAT", "REVISION_TECNICA", "SEGURO", "TARJETA_PROPIEDAD"] as const;
+export const DOCUMENT_LABELS: Record<string, string> = { SOAT: "SOAT", REVISION_TECNICA: "Revisión técnica", SEGURO: "Seguro", TARJETA_PROPIEDAD: "Tarjeta de propiedad" };
 export function documentStatus(d: FleetDocument, today = limaDate()) {
+  if (d.kind === "TARJETA_PROPIEDAD") return "Sin vencimiento";
   if (d.expiryDate < today) return "Vencido";
   const days = Math.round((Date.parse(`${d.expiryDate}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86400000);
   return days <= 30 ? `Vence en ${days} días` : "Vigente";

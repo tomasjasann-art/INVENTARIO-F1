@@ -44,6 +44,22 @@ const assignment = overrides => ({action:'assignment',vehicleId:10,serviceDate:d
 function journey(state,overrides={}) {const a={id:20,vehicleId:10,driverId:2,trackingMode:'OPERATIVO',planStatus:'CONFIRMADA',serviceDate:domain.limaDate(),endDate:domain.limaDate(),expectedStart:'08:00',expectedEnd:'18:00',startedAt:'',endedAt:'',coordinator:'Planificado',ceco:'7001',initialKm:null,finalKm:null,...overrides};state.rows.fleetAssignments=[a];return a;}
 const record = overrides => ({action:'record',assignmentId:20,phase:'INICIO',odometer:150,coordinator:'Coordinador real',ceco:'7002',photos:domain.PHOTO_SLOTS.map((slot,i)=>({slot,path:`supabase://kardex-evidencias/fleet/1/assignment-20/INICIO/${i}.jpg`})),...overrides});
 
+test('La tarjeta de propiedad guarda fecha de emisión y no exige vencimiento ni proveedor',async()=>{
+  const state=reset();
+  const response=await post({action:'document',vehicleId:10,kind:'TARJETA_PROPIEDAD',reference:'TARJETA-QA',startDate:'2026-10-22'});
+  assert.equal(response.status,200);assert.equal(state.writes.length,1);
+  assert.equal(state.writes[0].value.kind,'TARJETA_PROPIEDAD');assert.equal(state.writes[0].value.expiryDate,'');assert.equal(state.writes[0].value.startDate,'2026-10-22');
+  assert.equal(domain.documentStatus(state.writes[0].value,'2030-01-01'),'Sin vencimiento');
+});
+test('SOAT, revisión técnica y seguro mantienen el vencimiento obligatorio y sus renovaciones',async()=>{
+  for(const kind of ['SOAT','REVISION_TECNICA','SEGURO']) {
+    const state=reset();const input={action:'document',vehicleId:10,kind,reference:'CERTIFICADO-QA',startDate:'2026-10-22'};
+    for(const expiryDate of ['',undefined,'2026-10-21']){assert.equal((await post({...input,expiryDate})).status,400);assert.equal(state.writes.length,0);}
+    assert.equal((await post({...input,expiryDate:'2027-10-22'})).status,200);
+    assert.equal(state.writes[0].value.expiryDate,'2027-10-22');
+  }
+});
+
 test('Administración guarda sin cuenta, horarios ni fotos e ignora una cuenta oculta del formulario',async()=>{
   const state=reset('ADMINISTRACION');const response=await post({action:'assignment',vehicleId:10,serviceDate:domain.limaDate(),responsibleName:'Gerencia',driverId:2});
   assert.equal(response.status,200);assert.equal(state.writes.length,1);

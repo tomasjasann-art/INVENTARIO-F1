@@ -1,4 +1,4 @@
-import { activeDrivers, limaDate, type FleetData } from "../../lib/fleet";
+import { DOCUMENT_KINDS, DOCUMENT_LABELS, activeDrivers, limaDate, type FleetData } from "../../lib/fleet";
 import type { FieldSpec, FormSpec } from "./FleetForms";
 const field = (name: string, label: string, type = "text", required = false): FieldSpec => ({ name, label, type, required });
 const choice = (name: string, label: string, values: string[], required = true): FieldSpec => ({ name, label, required, options: values.map(value => ({ value, label: value.replaceAll("_", " ") })) });
@@ -28,7 +28,7 @@ export function fleetForms(d: FleetData) {
         { ...choice("planStatus", "Estado de asignación", ["CONFIRMADA", "POR_CONFIRMAR", "NO_SALIO", "CANCELADA"]), operationsOnly: true },
         { ...field("reason", "Motivo de no salida / cancelación"), operationsOnly: true, hint: "Obligatorio cuando confirmas que no salió o cancelas." }, notes],
     },
-    document: { title: "Documentación del vehículo", action: "document", uploadPurpose: "document", values: { kind: "SOAT", startDate: limaDate() }, fields: [vehicle, choice("kind", "Documento", ["SOAT", "REVISION_TECNICA", "SEGURO"]), provider, reference, field("startDate", "Inicio de vigencia", "date", true), field("expiryDate", "Vencimiento", "date", true), notes] },
+    document: { title: "Documentación del vehículo", action: "document", uploadPurpose: "document", values: { kind: "SOAT", startDate: limaDate() }, fields: [vehicle, { name: "kind", label: "Documento", required: true, options: DOCUMENT_KINDS.map(value => ({ value, label: DOCUMENT_LABELS[value] })) }, provider, reference, field("startDate", "Inicio de vigencia", "date", true), field("expiryDate", "Vencimiento", "date", true), notes] },
     invoice: { title: "Factura de combustible", action: "invoice", uploadPurpose: "invoice", values: { issueDate: limaDate(), dueDate: limaDate() }, fields: [provider, field("number", "N.º factura", "text", true), field("issueDate", "Fecha de emisión", "date", true), field("dueDate", "Fecha de vencimiento", "date", true), field("amount", "Total factura (S/)", "number", true), notes] },
     payment: { title: "Registrar pago", action: "payment", uploadPurpose: "payment", values: { date: limaDate() }, fields: [{ ...invoice, required: true }, date, field("amount", "Importe pagado (S/)", "number", true), field("reference", "N.º operación", "text", true)] },
     idle: { title: "Ralentí diario · GPS", action: "idle", values: { date: limaDate(), time: "00:00" }, fields: [vehicle, date, { ...field("time", "Horas:minutos", "text", true), hint: "Ejemplo 01:35. Una nueva carga actualiza el dato de esa placa y fecha." }, notes] },
