@@ -38,7 +38,7 @@ jobs:
         run: pnpm lint
 
       - name: Probar control de vehículos
-        run: node --test tests/fleet.test.mjs tests/fleet-loading.test.mjs
+        run: node --test tests/fleet.test.mjs tests/fleet-loading.test.mjs tests/driver-access.test.mjs
 
       - name: Compilar
         run: pnpm build

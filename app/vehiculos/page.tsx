@@ -9,5 +9,6 @@ export default async function FleetPage() {
   const access = await getKardexAccess(user.email, user.userId, user.authProvider);
   if (!access?.active || (user.authProvider === "supabase" && access.mustChangePassword)) redirect("/");
   if (!["ADMINISTRADOR", "LOGISTICA", "SOLO_LECTURA", "CONDUCTOR"].includes(access.role)) redirect("/");
+  if (access.role === "CONDUCTOR") redirect("/conductores");
   return <FleetApp />;
 }

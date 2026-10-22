@@ -39,3 +39,11 @@ Comprobaciones: `node --test tests/fleet.test.mjs`, `pnpm exec tsc --noEmit`, `p
 El lector de flota consulta los catálogos en secuencia para no lanzar una ráfaga superior al pool de conexiones de la función. El API devuelve un error JSON a los 20 segundos si la lectura no responde. El navegador cancela la petición a los 25 segundos y muestra **Reintentar**, conservando el menú del Kardex. Una respuesta inválida no se interpreta como una flota vacía. Al cambiar de módulo se cancela la petición pendiente.
 
 Validación de regresión: `node --test tests/fleet.test.mjs tests/fleet-loading.test.mjs`. Los dobles de identidad y base de datos de estas pruebas son locales; no demuestran una sesión autenticada de producción.
+
+## App móvil de conductores
+
+Enlace compartible: `/conductores`. Incluye ingreso por usuario y contraseña, cambio obligatorio de contraseña temporal y la vista de jornadas con Inicio/Final y siete fotos por evento. El manifiesto propio permite añadir **F1 Conductores** a la pantalla de inicio desde Chrome o Safari. El guardado de fotos y registros requiere conexión. Los accesos anteriores `/vehiculos` e Inicio redirigen al conductor a este portal.
+
+En el desplegable del Kardex, **Conductores y app móvil** muestra las cuentas registradas, permite copiar el enlace y abre **Usuarios y permisos** con el rol Conductor preseleccionado para administradores. Primero se crea la cuenta y luego la asignación real por placa y fecha. Las cuentas se crean con el mecanismo existente de Supabase Auth; no se insertan usuarios directamente en `auth.users`.
+
+`/sign-in` admite cuentas internas aunque Clerk no esté configurado. El acceso anterior del administrador usa `/sign-in/legacy`, con una ruta estable para sus pasos de verificación. Los retornos tras ingresar se limitan al sitio y conservan el portal solicitado.

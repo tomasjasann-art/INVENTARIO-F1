@@ -437,13 +437,13 @@ function userInitials(value: string) {
   return (parts.length > 1 ? `${parts[0][0]}${parts.at(-1)?.[0] ?? ""}` : parts[0]?.slice(0, 2) ?? "F1").toUpperCase();
 }
 
-export default function KardexApp({ user, signOutPath }: { user: KardexUser; signOutPath: string }) {
+export default function KardexApp({ user, signOutPath, driverSetup = false }: { user: KardexUser; signOutPath: string; driverSetup?: boolean }) {
   const [data, setData] = useState<KardexData>({ products: [], movements: [], stockMovements: [], stockReservations: [], sourceRecords: [], coordinators: [], suppliers: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], equipmentReturns: [], productIdentifiers: [], appUsers: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [view, setView] = useState<View>("resumen");
+  const [view, setView] = useState<View>(driverSetup ? "configuracion" : "resumen");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<"movement" | "product" | "grIngreso" | null>(null);
   const [movementType, setMovementType] = useState<Movement["type"]>("entrada");
@@ -451,6 +451,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
   const [equipmentModuleOpen, setEquipmentModuleOpen] = useState(true);
   const [fleetModuleOpen, setFleetModuleOpen] = useState(false);
   const [fleetTab, setFleetTab] = useState<FleetTab>("vehiculos");
+  const [settingsInitialRole, setSettingsInitialRole] = useState<UserRole>(driverSetup ? "CONDUCTOR" : "SOLO_LECTURA");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [focusedRequestCode, setFocusedRequestCode] = useState("");
   const warehouse = "MO Company";
@@ -721,7 +722,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           </div>
         </>}
         <div className="sidebar-bottom">
-          {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
+          {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setSettingsInitialRole("SOLO_LECTURA"); setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
           <div className="user-card"><span>{userInitials(user.displayName)}</span><div><strong>{user.displayName}</strong><small>{role.replaceAll("_", " ")} · {user.email}</small></div><a href={signOutPath} target="_top" aria-label="Cerrar sesión" title="Cerrar sesión"><LogOut size={16} /></a></div>
         </div>
       </aside>
@@ -748,7 +749,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
         </header>
 
         <div className={`content ${view === "flota" ? "fleet-shell-content" : ""}`}>
-          {view === "flota" && !isCoordinator && <FleetApp embedded activeTab={fleetTab} onTabChange={setFleetTab} />}
+          {view === "flota" && !isCoordinator && <FleetApp embedded activeTab={fleetTab} onTabChange={setFleetTab} onManageDrivers={() => { setSettingsInitialRole("CONDUCTOR"); setView("configuracion"); }} />}
           {view !== "flota" && <section className="page-heading">
             <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? (isCoordinator ? "Mi panel de coordinador" : "Resumen de equipos") : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? (isCoordinator ? "Stock disponible para solicitar" : "Stock y trazabilidad") : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "devoluciones" ? "Devoluciones y recepción física" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? (isCoordinator ? "Consulta tus costos despachados, solicitudes y pendientes de cierre." : "Control centralizado por SKU, Serie/Lote, pedido y proyecto.") : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? (isCoordinator ? "Disponibilidad global sin costos ni movimientos de otros coordinadores." : "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU.") : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "devoluciones" ? "Registra primero la carga lógica y suma el equipo al stock solo cuando llegue físicamente a MO Company." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
@@ -803,7 +804,7 @@ export default function KardexApp({ user, signOutPath }: { user: KardexUser; sig
           {view === "proveedores" && <SupplierView suppliers={data.suppliers} loading={loading} saving={saving} onSave={(payload) => save(payload, "Proveedor actualizado correctamente.")} />}
           {view === "reportes" && <ReportsView products={data.products} movements={filteredMovements} requests={data.equipmentRequests} />}
           {view === "carga" && <BulkUpload products={data.products} movements={data.movements} suppliers={data.suppliers} saving={saving} onSave={(payload) => save(payload, "Carga procesada correctamente.")} />}
-          {view === "configuracion" && role === "ADMINISTRADOR" && <SettingsView data={data} saving={saving} onSave={save} />}
+          {view === "configuracion" && role === "ADMINISTRADOR" && <SettingsView data={data} saving={saving} onSave={save} initialRole={settingsInitialRole} />}
         </div>
       </main>
 
@@ -1878,13 +1879,13 @@ function RequestTrackingModal({ request, saving, onClose, onSave }: { request: E
   return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">SEGUIMIENTO LOGÍSTICO</span><h2>{request.requestCode}</h2><p>El tiempo de atención se detiene cuando el estado cambia a CERRADA.</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}><input type="hidden" name="action" value="requestLogistics" /><input type="hidden" name="requestCode" value={request.requestCode} /><div className="form-grid"><label className="field"><span>Estado *</span><select name="status" defaultValue={request.status}><option>PENDIENTE</option><option>VALIDADA</option><option>DESPACHADA</option><option>EN_TRANSITO</option><option>LISTA_RECOJO</option><option>RECOGIDA</option><option>CERRADA</option><option>RECHAZADA</option></select></label><label className="field"><span>Nro. GR de salida</span><input name="outboundGuide" defaultValue={request.outboundGuide} /></label><label className="field field-wide"><span>Link GR de salida</span><input name="outboundGuideLink" defaultValue={request.outboundGuideLink} placeholder="Vínculo SharePoint o nombre del archivo" /></label><label className="field"><span>Foto de la GR de despacho</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setOutboundGuidePhoto)} /><small>{outboundGuidePhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{outboundGuidePhotoPreview && <span className="photo-actions"><a href={outboundGuidePhotoPreview} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setOutboundGuidePhoto("")}>Quitar</button></span>}</label><label className="field"><span>Ticket de envío</span><input name="shippingTicket" defaultValue={request.shippingTicket} /></label><label className="field"><span>Foto del ticket de envío</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void loadPhoto(event.target.files?.[0], setShippingTicketPhoto)} /><small>{shippingTicketPhoto ? "Foto lista y comprimida." : "JPG, PNG o WEBP."}</small>{shippingTicketPhotoPreview && <span className="photo-actions"><a href={shippingTicketPhotoPreview} target="_blank" rel="noreferrer">Ver foto</a><button type="button" onClick={() => setShippingTicketPhoto("")}>Quitar</button></span>}</label><label className="field"><span>Clave</span><input name="shippingKey" defaultValue={request.shippingKey} /></label><label className="field"><span>Fecha de envío</span><input name="sentDate" type="date" defaultValue={request.sentDate} /></label><label className="field"><span>Fecha de llegada</span><input name="arrivalDate" type="date" defaultValue={request.arrivalDate} /></label><label className="field"><span>Fecha de recojo</span><input name="pickupDate" type="date" defaultValue={request.pickupDate} /></label><label className="field"><span>Transporte</span><input name="transport" defaultValue={request.transport} /></label><label className="field field-wide"><span>Dirección de entrega</span><input name="deliveryAddress" defaultValue={request.deliveryAddress} /></label><label className="field field-wide"><span>Notas de seguimiento</span><textarea name="logisticsNotes" rows={3} defaultValue={request.logisticsNotes} placeholder="Incidencias, contacto, recordatorio..." /></label></div>{photoError && <div className="inline-error">{photoError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || compressing}>{compressing ? "Procesando fotos..." : saving ? "Guardando..." : "Guardar seguimiento"}</button></div></form></div></div>;
 }
 
-function SettingsView({ data, saving, onSave }: { data: KardexData; saving: boolean; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
+function SettingsView({ data, saving, onSave, initialRole = "SOLO_LECTURA" }: { data: KardexData; saving: boolean; initialRole?: UserRole; onSave: (payload: Record<string, unknown>, success: string) => Promise<boolean> }) {
   const [scope, setScope] = useState<"operations" | "all">("operations");
   const [confirmation, setConfirmation] = useState("");
   const [backupDownloaded, setBackupDownloaded] = useState(false);
   const [resetUserId, setResetUserId] = useState<number | null>(null);
   const [temporaryPassword, setTemporaryPassword] = useState("");
-  const [newUserRole, setNewUserRole] = useState<UserRole>("SOLO_LECTURA");
+  const [newUserRole, setNewUserRole] = useState<UserRole>(initialRole);
   const phrase = scope === "all" ? "BORRAR TODO" : "LIMPIAR PRUEBAS";
   const f1Coordinators = data.coordinators.filter((coordinator) => coordinator.organization === "F1" && coordinator.active).sort((a, b) => a.name.localeCompare(b.name));
 
@@ -1910,7 +1911,7 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
     const form = event.currentTarget;
     const values = Object.fromEntries(new FormData(form).entries());
     const ok = await onSave({ ...values, action: "appUser", active: true }, "Usuario y permisos guardados.");
-    if (ok) { form.reset(); setNewUserRole("SOLO_LECTURA"); }
+    if (ok) { form.reset(); setNewUserRole(initialRole); }
   }
 
   async function resetPassword() {
@@ -1925,6 +1926,8 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
     }
   }
 
+  useEffect(() => { if (initialRole === "CONDUCTOR") document.getElementById("users-and-permissions")?.scrollIntoView({ block: "start" }); }, [initialRole]);
+
   return <section className="settings-grid">
     <article className="panel backup-card"><span><Download size={23} /></span><div><small>RESPALDO · OPCIONAL Y RECOMENDADO</small><h2>Descargar respaldo completo</h2><p>Genera un Excel con maestro, movimientos, conciliaciones, auditorías, solicitudes, devoluciones y relaciones Part Number–SKU antes de limpiar.</p><button className="secondary-button" onClick={() => void downloadBackup()}><Download size={16} />{backupDownloaded ? "Respaldo descargado" : "Descargar respaldo Excel"}</button></div></article>
     <article className="panel cleanup-card"><div className="cleanup-head"><span><ShieldCheck size={23} /></span><div><small>PASO 2 · LIMPIEZA PROTEGIDA</small><h2>Preparar la carga real</h2><p>Selecciona exactamente qué deseas borrar.</p></div></div>
@@ -1932,7 +1935,7 @@ function SettingsView({ data, saving, onSave }: { data: KardexData; saving: bool
       <div className="cleanup-confirm"><label className="field"><span>Escribe <b>{phrase}</b> para confirmar</span><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={phrase} /></label><button className="danger-button cleanup-action" disabled={saving || confirmation.trim().toUpperCase() !== phrase} onClick={() => void cleanup()}>{saving ? "Limpiando..." : "Ejecutar limpieza"}</button></div>
       <p className="cleanup-note">Estado actual: {number.format(data.movements.length)} movimientos · {number.format(data.installationValidations.length)} conciliaciones · {number.format(data.auditImports.length)} cortes · {number.format(data.equipmentRequests.length)} solicitudes · {number.format(data.equipmentReturns.length)} devoluciones.</p>
     </article>
-    <article className="panel access-card">
+    <article className="panel access-card" id="users-and-permissions">
       <div className="panel-title">
         <div><h2>Usuarios y permisos</h2><p>Crea cuentas internas con usuario y contraseña. No necesitan un correo real ni una cuenta de ChatGPT.</p></div>
         <ShieldCheck size={21} />

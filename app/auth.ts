@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { getDb } from "../db";
 import { appUsers } from "../db/schema";
 import { F1_ACCESS_COOKIE, userFromAccessToken } from "../lib/supabase-auth";
+import { safeReturnPath } from "../lib/return-path";
 import { isClerkConfigured } from "./deployment-config";
 
 export type AuthenticatedUser = {
@@ -104,23 +105,10 @@ export async function getKardexAccess(
 }
 
 export function signInPath(returnTo = "/"): string {
-  const safeReturnTo = safeRelativeReturnPath(returnTo);
+  const safeReturnTo = safeReturnPath(returnTo);
   return `/sign-in?redirect_url=${encodeURIComponent(safeReturnTo)}`;
 }
 
 export function signOutPath(): string {
   return "/sign-out";
-}
-
-function safeRelativeReturnPath(value: string): string {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/";
-
-  try {
-    const url = new URL(value, "https://app.local");
-    if (url.origin !== "https://app.local") return "/";
-    if (url.pathname.startsWith("/sign-in") || url.pathname.startsWith("/sign-out")) return "/";
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return "/";
-  }
 }

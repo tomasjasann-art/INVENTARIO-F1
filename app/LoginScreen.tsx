@@ -1,10 +1,13 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { ArrowRight, Boxes, KeyRound, LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
+import { ArrowRight, Boxes, Car, KeyRound, LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
 import Image from "next/image";
+import { safeReturnPath } from "../lib/return-path";
+import DriverInstallHelp from "./conductores/DriverInstallHelp";
+import "./conductores/drivers.css";
 
-export default function LoginScreen({ signInPath, legacyAccessAvailable }: { signInPath: string; legacyAccessAvailable: boolean }) {
+export default function LoginScreen({ legacyAccessAvailable, returnTo = "/", driverPortal = false }: { legacyAccessAvailable: boolean; returnTo?: string; driverPortal?: boolean }) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -18,9 +21,9 @@ export default function LoginScreen({ signInPath, legacyAccessAvailable }: { sig
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget).entries())),
       });
-      const body = await response.json() as { error?: string };
+      const body = await response.json() as { error?: string; mustChangePassword?: boolean };
       if (!response.ok) throw new Error(body.error || "No se pudo iniciar sesión.");
-      window.location.replace("/");
+      window.location.replace(body.mustChangePassword ? "/" : safeReturnPath(returnTo));
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : "No se pudo iniciar sesión.");
       setSubmitting(false);
@@ -35,9 +38,9 @@ export default function LoginScreen({ signInPath, legacyAccessAvailable }: { sig
         </div>
 
         <div className="login-message">
-          <p>OPERATIONS HUB</p>
-          <h1>Datos alineados.<br />Operación en marcha.</h1>
-          <span>Inventario, trazabilidad, conciliación y auditoría logística en un solo lugar.</span>
+          <p>{driverPortal ? "F1 CONDUCTORES" : "OPERATIONS HUB"}</p>
+          <h1>{driverPortal ? <>Tu vehículo.<br />Tu jornada al día.</> : <>Datos alineados.<br />Operación en marcha.</>}</h1>
+          <span>{driverPortal ? "Registra Inicio y Final, kilometraje y siete fotografías en cada momento desde tu celular." : "Inventario, trazabilidad, conciliación y auditoría logística en un solo lugar."}</span>
         </div>
 
         <div className="login-brand-footer">
@@ -50,26 +53,28 @@ export default function LoginScreen({ signInPath, legacyAccessAvailable }: { sig
         <div className="login-card">
           <Image className="login-client-logo" src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
           <div className="login-secure-label"><ShieldCheck size={15} /> ACCESO PRIVADO</div>
-          <h2>Bienvenido</h2>
+          <h2>{driverPortal ? "Ingreso de conductores" : "Bienvenido"}</h2>
           <p>Ingresa con el <strong>usuario y contraseña que el Administrador creó</strong> en Logística F1.</p>
 
           <form className="internal-login-form" onSubmit={login}>
             <label><span>Usuario</span><input name="username" autoComplete="username" required placeholder="nombre.apellido" /></label>
             <label><span>Contraseña</span><input name="password" type="password" autoComplete="current-password" required placeholder="••••••••••" /></label>
             {error && <div className="login-form-error">{error}</div>}
-            <button className="login-submit login-submit-button" type="submit" disabled={submitting}><KeyRound size={18} />{submitting ? "Ingresando..." : "Ingresar a Logística F1"}</button>
+            <button className="login-submit login-submit-button" type="submit" disabled={submitting}><KeyRound size={18} />{submitting ? "Ingresando..." : driverPortal ? "Ingresar a mi jornada" : "Ingresar a Logística F1"}</button>
           </form>
 
-          {legacyAccessAvailable ? <a className="legacy-login-link" href={signInPath} target="_top">Acceso anterior del administrador <ArrowRight size={14} /></a> : null}
+          {legacyAccessAvailable ? <a className="legacy-login-link" href={`/sign-in/legacy?redirect_url=${encodeURIComponent(safeReturnPath(returnTo))}`} target="_top">Acceso anterior del administrador <ArrowRight size={14} /></a> : null}
 
           <div className="login-security-note">
             <ShieldCheck size={18} />
             <span>Solo ingresan cuentas activas creadas en <b>Configuración → Usuarios y permisos</b>.</span>
           </div>
 
+          {driverPortal && <DriverInstallHelp />}
+
           <div className="login-module-list">
-            <Boxes size={18} />
-            <span><strong>Control de Equipos Entel</strong><small>Primer módulo de Logística F1 · Stock · Solicitudes · Conciliación</small></span>
+            <span>{driverPortal ? <Car size={18} /> : <Boxes size={18} />}</span>
+            <span><strong>{driverPortal ? "Mi jornada y mi vehículo" : "Control de Equipos Entel"}</strong><small>{driverPortal ? "Inicio · Final · Kilometraje · 7 fotos por registro" : "Stock · Solicitudes · Conciliación"}</small></span>
           </div>
         </div>
       </section>

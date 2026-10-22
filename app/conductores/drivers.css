@@ -1,0 +1,17 @@
+.driver-install-help{border:1px solid #d9e1ec;border-radius:10px;background:#fff;color:#344d6d;font-size:12px;text-align:left}
+.driver-install-help summary{display:flex;align-items:center;gap:10px;padding:15px;cursor:pointer;font-weight:700;list-style:none}
+.driver-install-help summary::after{content:"+";margin-left:auto;color:#f36c21;font-size:20px}
+.driver-install-help[open] summary::after{content:"−"}
+.driver-install-help>div{padding:0 16px 14px;line-height:1.6}
+.driver-install-help p{margin:10px 0}
+.login-card .driver-install-help{margin-top:18px}
+.driver-portal-install{position:relative;margin-left:254px;padding:12px 32px;background:#f4f7fb}
+.driver-portal-install .driver-install-help{max-width:1250px;margin:auto}
+.driver-portal .fleet-app{min-height:calc(100dvh - 76px)}
+.fl-driver-access{padding:22px;display:grid;gap:18px}
+.fl-driver-access p{font-size:12px;color:#60738a;line-height:1.7}
+.fl-driver-link{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.fl-driver-link a{color:#1c4d83;font-size:14px;overflow-wrap:anywhere}
+.fl-driver-steps{margin:0;padding-left:22px;font-size:13px;line-height:2;color:#3d5776}
+.fl-driver-warning{padding:12px 15px;border-radius:8px;background:#fff4e5;color:#7d4e14!important}
+@media(max-width:960px){.driver-portal-install{margin-left:0;padding:10px 13px}}
