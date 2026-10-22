@@ -1,6 +1,7 @@
-import { BarChart3, Camera, Car, ClipboardList, Clock3, CreditCard, FileCheck2, Fuel, LayoutDashboard, MapPin, Smartphone, Upload, Wrench } from "lucide-react";
+import { BarChart3, Camera, Car, ClipboardList, Clock3, CreditCard, FileCheck2, FileChartColumn, Fuel, LayoutDashboard, MapPin, Smartphone, Upload, Wrench } from "lucide-react";
 
-export type FleetTab = "conductores" | "resumen" | "vehiculos" | "documentos" | "asignaciones" | "jornadas" | "combustible" | "peajes" | "mantenimiento" | "facturas" | "ralenti" | "estaciones" | "consolidado" | "carga";
+export type FleetTab = "conductores" | "resumen" | "informe" | "vehiculos" | "documentos" | "asignaciones" | "jornadas" | "combustible" | "peajes" | "mantenimiento" | "facturas" | "ralenti" | "estaciones" | "consolidado" | "carga";
 export const fleetMenu: { id: FleetTab; label: string; icon: typeof Car }[] = [
+  { id: "informe", label: "Informe mensual", icon: FileChartColumn },
   { id: "conductores", label: "Conductores y app móvil", icon: Smartphone }, { id: "resumen", label: "Resumen y alertas", icon: LayoutDashboard }, { id: "vehiculos", label: "Datos del vehículo", icon: Car }, { id: "documentos", label: "Documentación", icon: FileCheck2 }, { id: "asignaciones", label: "Asignación diaria", icon: ClipboardList }, { id: "jornadas", label: "Seguimiento diario", icon: Camera }, { id: "combustible", label: "Combustible", icon: Fuel }, { id: "peajes", label: "Peajes", icon: CreditCard }, { id: "mantenimiento", label: "Mantenimiento", icon: Wrench }, { id: "facturas", label: "Facturas y pagos", icon: FileCheck2 }, { id: "ralenti", label: "Ralentí GPS", icon: Clock3 }, { id: "estaciones", label: "Puntos de abastecimiento", icon: MapPin }, { id: "consolidado", label: "Consolidado y reportes", icon: BarChart3 }, { id: "carga", label: "Carga masiva", icon: Upload },
 ];

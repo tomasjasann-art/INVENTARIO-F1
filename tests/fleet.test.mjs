@@ -9,8 +9,81 @@ const domainUrl = moduleUrl(compile(await readFile(new URL('../lib/fleet.ts', im
 const f = await import(domainUrl);
 const reportSource = compile(await readFile(new URL('../lib/fleet-report.ts', import.meta.url), 'utf8')).replace('"./fleet"', JSON.stringify(domainUrl));
 const report = await import(moduleUrl(reportSource));
+const monthlySource = compile(await readFile(new URL('../lib/fleet-monthly.ts', import.meta.url), 'utf8')).replace('"./fleet"', JSON.stringify(domainUrl)).replace('"./fleet-report"', JSON.stringify(moduleUrl(reportSource)));
+const monthly = await import(moduleUrl(monthlySource));
 
 const fuelReading = (id, date, odometer, extra = {}) => ({ id, vehicleId: 1, date, kind: 'COMBUSTIBLE', odometer, amountCents: 10000, quantity: 10, unit: 'GAL', source: { time: '12:00:00' }, ...extra });
+const monthlyData = (expenses, assignments = []) => ({vehicles:[{id:1,plate:'TEST01',target:30,usage:'OPERACIONES'}],expenses,assignments,idle:[]});
+
+test('El informe mensual genera cuatro meses de calendario, incluyendo el cambio de año', () => {
+  assert.equal(monthly.monthOffset('2026-01',-1),'2025-12');
+  assert.equal(monthly.monthOffset('2026-12',1),'2027-01');
+  assert.throws(()=>monthly.monthOffset('2026-13'));
+  const data=monthlyData([]);
+  const result=monthly.monthlyReport(data,data.vehicles,'2026-02','COMBUSTIBLE',30,new Date('2026-03-10T18:00:00Z'));
+  assert.deepEqual(result.months.map(m=>m.month),['2025-11','2025-12','2026-01','2026-02']);
+  assert.equal(result.end,'2026-02-28');
+  assert.equal(result.compliance,null);
+  assert.equal(result.totals.costPerKm,null);
+  assert.match(result.risks.join(' '),/No hay actividad/);
+});
+test('Cumplimiento es rendimiento ponderado dividido entre la meta, sin copiar los porcentajes del ejemplo', () => {
+  const expenses=[fuelReading(1,'2026-08-01',1000,{quantity:5}),fuelReading(2,'2026-08-30',1300,{quantity:5}),fuelReading(3,'2026-08-01',5000,{vehicleId:2,quantity:25}),fuelReading(4,'2026-08-30',5900,{vehicleId:2,quantity:25})];
+  const data=monthlyData(expenses);data.vehicles.push({id:2,plate:'TEST02',target:30});
+  const r=monthly.monthlyReport(data,data.vehicles,'2026-08','COMBUSTIBLE',30,new Date('2026-10-22T22:00:00Z'));
+  assert.equal(r.totals.km,1200);
+  assert.equal(r.totals.efficiency,20);
+  assert.ok(Math.abs(r.compliance-66.6666666667)<1e-7);
+  assert.equal(r.above[0].v.id,1);
+  assert.equal(r.focus.v.id,2);
+  assert.throws(()=>monthly.monthlyReport(data,data.vehicles,'2026-08','COMBUSTIBLE',0));
+});
+test('El avance del mes no incluye abastecimientos futuros ni afirma una mejora contra un mes completo', () => {
+  const data=monthlyData([fuelReading(1,'2026-09-01',1000),fuelReading(2,'2026-09-30',1200),fuelReading(3,'2026-10-01',1200),fuelReading(4,'2026-10-20',1600),fuelReading(5,'2026-10-30',9000)]);
+  const r=monthly.monthlyReport(data,data.vehicles,'2026-10','COMBUSTIBLE',30,new Date('2026-10-22T22:00:00Z'));
+  assert.equal(r.partial,true);
+  assert.equal(r.end,'2026-10-22');
+  assert.equal(r.fuelCount,2);
+  assert.equal(r.totals.km,400);
+  assert.equal(r.changes.efficiency,null);
+  assert.equal(r.changes.km,null);
+});
+test('La tendencia requiere meses cerrados y las mismas unidades comparables', () => {
+  const expenses=[fuelReading(1,'2026-09-01',1000),fuelReading(2,'2026-09-30',1200),fuelReading(3,'2026-10-01',1200),fuelReading(4,'2026-10-20',1600)];
+  const data=monthlyData(expenses);
+  const closed=monthly.monthlyReport(data,data.vehicles,'2026-10','COMBUSTIBLE',30,new Date('2026-11-02T18:00:00Z'));
+  assert.equal(closed.changes.efficiency,100);
+  assert.equal(closed.changes.km,100);
+  assert.equal(closed.changes.costPerKm,-50);
+  data.vehicles.push({id:2,plate:'TEST02',target:30});
+  data.expenses.push(fuelReading(5,'2026-10-01',5000,{vehicleId:2}),fuelReading(6,'2026-10-20',5500,{vehicleId:2}));
+  const changed=monthly.monthlyReport(data,data.vehicles,'2026-10','COMBUSTIBLE',30,new Date('2026-11-02T18:00:00Z'));
+  assert.equal(changed.changes.efficiency,null);
+  assert.equal(changed.changes.costPerKm,null);
+  assert.equal(monthly.percentChange(12,0),null);
+});
+test('Los filtros del informe se aplican a costos, historial, alertas y ralentí', () => {
+  const data=monthlyData([fuelReading(1,'2026-08-01',1000),fuelReading(2,'2026-08-20',1400),fuelReading(3,'2026-08-01',5000,{vehicleId:2}),fuelReading(4,'2026-08-20',4900,{vehicleId:2})]);
+  data.vehicles.push({id:2,plate:'TEST02',target:30});
+  data.idle=[{vehicleId:1,date:'2026-08-05',minutes:95},{vehicleId:2,date:'2026-08-05',minutes:900}];
+  const r=monthly.monthlyReport(data,[data.vehicles[0]],'2026-08','COMBUSTIBLE',30,new Date('2026-10-22T22:00:00Z'));
+  assert.equal(r.rows.length,1);
+  assert.equal(r.totals.cost,20000);
+  assert.equal(r.invalid.length,0);
+  assert.equal(r.idleMinutes,95);
+  assert.equal(r.fuelCount,2);
+  assert.equal(r.costs.find(c=>c.kind==='PEAJE').count,0);
+});
+test('El análisis conserva los odómetros por revisar y no mezcla km de combustible con jornadas', () => {
+  const data=monthlyData([fuelReading(1,'2026-08-01',1000),fuelReading(2,'2026-08-20',900)],[{id:1,vehicleId:1,trackingMode:'OPERATIVO',planStatus:'CONFIRMADA',serviceDate:'2026-08-01',initialKm:1000,finalKm:1300,endedAt:'closed'}]);
+  const fuel=monthly.monthlyReport(data,data.vehicles,'2026-08','COMBUSTIBLE',30,new Date('2026-10-22T22:00:00Z'));
+  const journeys=monthly.monthlyReport(data,data.vehicles,'2026-08','JORNADAS',30,new Date('2026-10-22T22:00:00Z'));
+  assert.equal(fuel.totals.km,null);
+  assert.equal(fuel.invalid.length,1);
+  assert.match(fuel.recommendations.join(' '),/Validar/);
+  assert.equal(journeys.totals.km,300);
+  assert.equal(journeys.invalid.length,1);
+});
 
 test('El recorrido de combustible ordena fecha y hora y resta odómetros acumulados sin sumar despachos repetidos', () => {
   const readings = [fuelReading(1, '2026-10-20', 1400), fuelReading(4, '2026-10-05', 1100, {source:{time:'18:00:00'}}), fuelReading(3, '2026-10-05', 1000), fuelReading(2, '2026-10-20', 1400)];
