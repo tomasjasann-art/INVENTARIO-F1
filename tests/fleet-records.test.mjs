@@ -8,6 +8,7 @@ const url = source => `data:text/javascript;base64,${Buffer.from(source).toStrin
 const compile = source => ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
 const domainUrl = url(compile(await readFile(new URL('../lib/fleet.ts', import.meta.url), 'utf8')));
 const domain = await import(domainUrl);
+const syncUrl = url(compile(await readFile(new URL('../lib/fleet-sync.ts', import.meta.url), 'utf8')));
 const tables = ['appUsers','coordinators','fleetVehicles','fleetAssignments','fleetDocuments','fleetExpenses','fleetInvoices','fleetPayments','fleetIdle','fleetStations'];
 const schemaUrl = url(tables.map(t => `export const ${t}=new Proxy({table:${JSON.stringify(t)}},{get:(o,k)=>k in o?o[k]:({table:o.table,key:k})});`).join('\n'));
 const drizzleUrl = url('export const eq=(col,value)=>({col,value});export const and=(...args)=>({args});export const inArray=(col,values)=>({col,values});export const desc=x=>x;export const sql=(parts,...values)=>({parts,values});');
@@ -18,7 +19,7 @@ let server = compile(await readFile(new URL('../lib/fleet-server.ts', import.met
 for (const [name,value] of Object.entries({'../app/auth':authUrl,'./supabase-auth':storageUrl,'./fleet':domainUrl})) server=server.replaceAll(`"${name}"`,JSON.stringify(value));
 const serverUrl=url(server);
 let route = compile(await readFile(new URL('../app/api/fleet/route.ts', import.meta.url), 'utf8'));
-for(const [name,value] of Object.entries({'drizzle-orm':drizzleUrl,'zod':import.meta.resolve('zod'),'../../../db':dbUrl,'../../../db/schema':schemaUrl,'../../../lib/fleet-server':serverUrl,'../../../lib/fleet':domainUrl,'../../../lib/supabase-storage':url('export async function resolveEvidenceImage(){return "";}')})) route=route.replaceAll(`"${name}"`,JSON.stringify(value));
+for(const [name,value] of Object.entries({'drizzle-orm':drizzleUrl,'zod':import.meta.resolve('zod'),'../../../db':dbUrl,'../../../db/schema':schemaUrl,'../../../lib/fleet-server':serverUrl,'../../../lib/fleet':domainUrl,'../../../lib/fleet-sync':syncUrl,'../../../lib/supabase-storage':url('export async function resolveEvidenceImage(){return "";}')})) route=route.replaceAll(`"${name}"`,JSON.stringify(value));
 const {POST,GET}=await import(url(route));
 
 function matches(row,predicate) {
@@ -29,12 +30,12 @@ function matches(row,predicate) {
   return true;
 }
 function reset(usage='OPERACIONES') {
-  const state={user:{id:1,displayName:'Prueba',active:true,role:'LOGISTICA'},storageChecks:0,writes:[],rows:{fleetVehicles:[{id:10,usage,status:'OPERATIVO',initialKm:100}],appUsers:[{id:2,role:'CONDUCTOR',active:true}],fleetAssignments:[],coordinators:[{name:'Coordinador F1',active:true,organization:'F1'}]}};
+  const state={user:{id:1,displayName:'Prueba',active:true,role:'LOGISTICA'},storageChecks:0,writes:[],nextExpenseId:100,rows:{fleetVehicles:[{id:10,usage,status:'OPERATIVO',initialKm:100}],appUsers:[{id:2,role:'CONDUCTOR',active:true}],fleetAssignments:[],coordinators:[{name:'Coordinador F1',active:true,organization:'F1'}]}};
   const db={
     select(){let table,predicate;const query={from(t){table=t.table;return query;},where(p){predicate=p;return query;},orderBy(){return query;},for(){return query;},limit(){return query;},then(resolve,reject){return Promise.resolve((state.rows[table]||[]).filter(row=>matches(row,predicate))).then(resolve,reject);}};return query;},
-    async execute(){},async transaction(run){return run(db);},
-    insert(table){return {async values(value){state.writes.push({table:table.table,value});}};},
-    update(table){return {set(value){return {async where(predicate){state.writes.push({table:table.table,value,predicate});}};}};},
+    async execute(){},async transaction(run){const previous=structuredClone({rows:state.rows,writes:state.writes});try{return await run(db);}catch(e){state.rows=previous.rows;state.writes=previous.writes;throw e;}},
+    insert(table){return {values(value){let conflict;const query={onConflictDoUpdate(options){conflict=options;return query;},then(resolve,reject){return Promise.resolve().then(()=>{state.writes.push({table:table.table,value,conflict});if(table.table==='fleetExpenses'){const saved=state.rows.fleetExpenses ||= [];for(const next of Array.isArray(value)?value:[value]){const old=saved.find(r=>r.fingerprint===next.fingerprint);if(old&&!conflict)throw Object.assign(new Error('duplicate'),{code:'23505'});if(old){for(const key of Object.keys(conflict.set))old[key]=next[key];}else saved.push({...next,id:state.nextExpenseId++});}}}).then(resolve,reject);}};return query;}};},
+    update(table){return {set(value){return {async where(predicate){state.writes.push({table:table.table,value,predicate});for(const row of state.rows[table.table]||[])if(matches(row,predicate))Object.assign(row,value);}};}};},
   };
   state.db=db;globalThis.fleetRecordTest=state;return state;
 }
@@ -85,15 +86,16 @@ test('El directorio del conductor muestra solo estaciones activas',async()=>{
 
 const sourceRecord = overrides => ({format:'TOLL_REPORT',transactionId:'',time:'10:00:00',station:'Plaza de prueba',lane:'1',voucher:'FACTURA-1',voucherDate:'2026-10-22',file:'reporte.xlsx',sheet:'Consumo',row:3,...overrides});
 const expense = overrides => ({vehicleId:10,date:domain.limaDate(),kind:'PEAJE',provider:'Red de prueba',reference:'FACTURA-1',amount:6.3,source:sourceRecord(),autoAssign:true,...overrides});
+const storedFuel = (input, extra={}) => ({id:50,vehicleId:input.vehicleId,assignmentId:null,date:input.date,kind:input.kind,amountCents:Math.round(input.amount*100),quantity:input.quantity,unit:input.unit,fuel:input.fuel,unitPrice:input.unitPrice,odometer:input.odometer,provider:input.provider,reference:input.reference,collector:'',invoiceId:null,maintenanceType:'',nextKm:null,attachment:'',notes:'',source:input.source,fingerprint:createHash('sha256').update(JSON.stringify(domain.expenseIdentity(input))).digest('hex'),createdBy:'original',...extra});
 const preview = rows => post({action:'bulkPreview',rows});
 test('El mismo comprobante permite varios pases, pero el mismo pase queda duplicado aunque cambie la factura',async()=>{
   reset();const body=await (await preview([expense(),expense({source:sourceRecord({time:'11:00:00'})}),expense({reference:'FACTURA-2',source:sourceRecord({voucher:'FACTURA-2'})})])).json();
   assert.equal(body.rows.length,3);assert.equal(body.rows.filter(r=>!r.error).length,2);assert.match(body.rows[2].error,/duplicada/);
 });
-test('Repetir un reporte de combustible detecta la transacción aun cuando cambie el ERP',async()=>{
+test('Corregir el ERP identifica la misma transacción y propone actualizar esa fila',async()=>{
   const state=reset();const item=expense({kind:'COMBUSTIBLE',fuel:'GLP',quantity:1,unit:'GAL',unitPrice:10,odometer:150,amount:10,source:sourceRecord({format:'FUEL_ATIO',transactionId:'transaction-1'})});
-  state.rows.fleetExpenses=[{fingerprint:createHash('sha256').update(JSON.stringify(domain.expenseIdentity(item))).digest('hex')}];
-  const body=await (await preview([{...item,reference:'ERP-NUEVO'}])).json();assert.match(body.rows[0].error,/ya fue cargado/);assert.equal(state.writes.length,0);
+  state.rows.fleetExpenses=[storedFuel(item)];
+  const body=await (await preview([{...item,reference:'ERP-NUEVO'}])).json();assert.equal(body.rows[0].error,undefined);assert.equal(body.rows[0].operation,'ACTUALIZAR');assert.equal(body.rows[0].changes[0].field,'reference');assert.equal(state.writes.length,0);
 });
 test('La vista previa vincula una única jornada, conserva trazabilidad y alerta odómetro fuera del rango',async()=>{
   const state=reset();journey(state,{initialKm:100,finalKm:200});
@@ -109,4 +111,88 @@ test('Un archivo de 2,401 movimientos se guarda con inserciones por lotes dentro
 });
 test('El guardado vuelve a validar y no escribe ningún gasto si encuentra una fila inválida',async()=>{
   const state=reset();const response=await post({action:'bulkExpense',rows:[expense(),expense({vehicleId:999})]});assert.equal(response.status,400);assert.equal(state.writes.length,0);
+});
+
+const fuelExpense = (extra={}) => expense({kind:'COMBUSTIBLE',fuel:'GLP',quantity:1,unit:'GAL',unitPrice:10,odometer:150,amount:10,source:sourceRecord({format:'FUEL_ATIO',transactionId:'transaction-1'}),...extra});
+const validatedInputs = async inputs => {
+  const response=await preview(inputs);assert.equal(response.status,200);
+  return (await response.json()).rows;
+};
+test('Repetir el mismo reporte o renombrarlo deja el combustible sin cambios y sin escrituras',async()=>{
+  const state=reset(),original=fuelExpense();state.rows.fleetExpenses=[storedFuel(original)];
+  const rows=await validatedInputs([{...original,source:{...original.source,file:'renombrado.xlsx',sheet:'Otra hoja',row:500}}]);
+  assert.equal(rows[0].operation,'SIN_CAMBIOS');assert.deepEqual(rows[0].changes,[]);
+  const response=await post({action:'bulkExpense',rows:rows.map(r=>r.input)});
+  assert.deepEqual((await response.json()).import,{inserted:0,updated:0,unchanged:1});assert.equal(state.writes.length,0);assert.equal(state.rows.fleetExpenses[0].source.file,'reporte.xlsx');
+});
+test('Una carga mixta agrega solo el nuevo, corrige solo el modificado y se puede repetir sin duplicados',async()=>{
+  const state=reset(),first=fuelExpense(),second=fuelExpense({source:sourceRecord({format:'FUEL_ATIO',transactionId:'transaction-2'})});
+  state.rows.fleetExpenses=[storedFuel(first),storedFuel(second,{id:51})];
+  const third=fuelExpense({source:sourceRecord({format:'FUEL_ATIO',transactionId:'transaction-3'})});
+  const rows=await validatedInputs([first,{...second,odometer:175},third]);
+  assert.deepEqual(rows.map(r=>r.operation),['SIN_CAMBIOS','ACTUALIZAR','NUEVO']);
+  assert.deepEqual(rows[1].changes,[{field:'odometer',label:'Odómetro',before:150,after:175}]);
+  const inputs=rows.map(r=>r.input),response=await post({action:'bulkExpense',rows:inputs});
+  assert.equal(response.status,200);assert.deepEqual((await response.json()).import,{inserted:1,updated:1,unchanged:1});
+  assert.equal(state.rows.fleetExpenses.length,3);assert.equal(state.rows.fleetExpenses.find(e=>e.id===51).odometer,175);assert.equal(state.rows.fleetExpenses.find(e=>e.id===50).odometer,150);
+  const writes=state.writes.length;
+  const again=await post({action:'bulkExpense',rows:inputs});assert.equal(again.status,200);assert.deepEqual((await again.json()).import,{inserted:0,updated:0,unchanged:3});assert.equal(state.writes.length,writes);
+});
+test('La corrección conserva el ID, el creador, las vinculaciones, notas y sustento, y registra antes/después',async()=>{
+  const state=reset(),input=fuelExpense();journey(state,{initialKm:100,finalKm:200});
+  state.rows.fleetInvoices=[{id:9,provider:input.provider}];
+  state.rows.fleetExpenses=[storedFuel(input,{assignmentId:20,invoiceId:9,notes:'Nota interna',attachment:'sustento existente',createdBy:'original'})];
+  const rows=await validatedInputs([{...input,odometer:180,notes:'Texto del archivo'}]);
+  assert.equal(rows[0].input.assignmentId,20);assert.equal(rows[0].input.invoiceId,9);
+  assert.equal((await post({action:'bulkExpense',rows:rows.map(r=>r.input)})).status,200);
+  const saved=state.rows.fleetExpenses[0];
+  assert.equal(saved.id,50);assert.equal(saved.createdBy,'original');assert.equal(saved.assignmentId,20);assert.equal(saved.invoiceId,9);assert.equal(saved.notes,'Nota interna');assert.equal(saved.attachment,'sustento existente');
+  assert.equal(saved.source.corrections.length,1);assert.equal(saved.source.corrections[0].by,'1:Prueba');assert.deepEqual(saved.source.corrections[0].changes,[{field:'odometer',label:'Odómetro',before:150,after:180}]);
+});
+test('No crea una nueva vinculación automática al corregir un movimiento que estaba pendiente',async()=>{
+  const state=reset(),input=fuelExpense();state.rows.fleetExpenses=[storedFuel(input)];journey(state);
+  const rows=await validatedInputs([{...input,odometer:180}]);
+  assert.equal(rows[0].assignmentId,null);
+  assert.equal((await post({action:'bulkExpense',rows:rows.map(r=>r.input)})).status,200);assert.equal(state.rows.fleetExpenses[0].assignmentId,null);
+});
+test('Corregir volumen, precio, importe y comprobante mantiene una sola transacción',async()=>{
+  const state=reset(),input=fuelExpense();state.rows.fleetExpenses=[storedFuel(input)];
+  const changed={...input,quantity:2,unitPrice:12,amount:24,reference:'ERP-2',source:{...input.source,station:'Otra estación',voucher:'ERP-2',time:'11:00:00'}};
+  const rows=await validatedInputs([changed]);assert.equal(rows[0].operation,'ACTUALIZAR');assert.ok(rows[0].changes.some(c=>c.field==='amountCents'&&c.before===1000&&c.after===2400));
+  assert.equal((await post({action:'bulkExpense',rows:rows.map(r=>r.input)})).status,200);
+  assert.equal(state.rows.fleetExpenses.length,1);assert.equal(state.rows.fleetExpenses[0].amountCents,2400);assert.equal(state.rows.fleetExpenses[0].quantity,2);assert.equal(state.rows.fleetExpenses[0].source.station,'Otra estación');
+});
+test('Un cambio posterior a la vista previa bloquea el lote completo antes de insertar o corregir',async()=>{
+  const state=reset(),input=fuelExpense();state.rows.fleetExpenses=[storedFuel(input)];
+  const rows=await validatedInputs([{...input,odometer:180},fuelExpense({source:sourceRecord({format:'FUEL_ATIO',transactionId:'new-id'})})]);
+  state.rows.fleetExpenses[0].odometer=190;
+  const response=await post({action:'bulkExpense',rows:rows.map(r=>r.input)});assert.equal(response.status,409);assert.match((await response.json()).error,/Vuelve a validar/);
+  assert.equal(state.rows.fleetExpenses.length,1);assert.equal(state.rows.fleetExpenses[0].odometer,190);assert.equal(state.writes.length,0);
+});
+test('Una transacción nueva que aparece después de validar no se sobrescribe a ciegas',async()=>{
+  const state=reset(),input=fuelExpense(),rows=await validatedInputs([input]);state.rows.fleetExpenses=[storedFuel({...input,odometer:200})];
+  assert.equal((await post({action:'bulkExpense',rows:rows.map(r=>r.input)})).status,409);assert.equal(state.rows.fleetExpenses[0].odometer,200);assert.equal(state.writes.length,0);
+});
+test('Cambiar placa o fecha no rompe una jornada ya vinculada',async()=>{
+  const state=reset(),input=fuelExpense();journey(state);state.rows.fleetExpenses=[storedFuel(input,{assignmentId:20})];
+  const rows=await validatedInputs([{...input,date:'2026-01-01',autoAssign:false}]);assert.match(rows[0].error,/jornada vinculada/);
+  assert.equal((await post({action:'bulkExpense',rows:[{...input,date:'2026-01-01',autoAssign:false}]})).status,409);assert.equal(state.writes.length,0);
+});
+test('Cambiar el proveedor no rompe una factura vinculada',async()=>{
+  const state=reset(),input=fuelExpense();state.rows.fleetInvoices=[{id:9,provider:input.provider}];state.rows.fleetExpenses=[storedFuel(input,{invoiceId:9})];
+  const rows=await validatedInputs([{...input,provider:'Otro proveedor'}]);assert.match(rows[0].error,/factura vinculada/);assert.equal(state.writes.length,0);
+});
+test('Una fila inválida no altera el odómetro existente ni inserta otras filas',async()=>{
+  const state=reset(),input=fuelExpense();state.rows.fleetExpenses=[storedFuel(input)];
+  const rows=await validatedInputs([{...input,odometer:180}]);
+  const response=await post({action:'bulkExpense',rows:[rows[0].input,fuelExpense({odometer:-1,source:sourceRecord({format:'FUEL_ATIO',transactionId:'new-id'})})]});
+  assert.equal(response.status,400);assert.equal(state.writes.length,0);assert.equal(state.rows.fleetExpenses[0].odometer,150);
+});
+test('Una transacción repetida dentro del mismo archivo queda observada aunque sus datos sean diferentes',async()=>{
+  const state=reset(),input=fuelExpense(),rows=await validatedInputs([input,{...input,odometer:180}]);
+  assert.equal(rows[0].operation,'NUEVO');assert.match(rows[1].error,/duplicada/);assert.equal(state.writes.length,0);
+});
+test('Los peajes repetidos conservan su control de duplicados',async()=>{
+  const state=reset(),input=expense();state.rows.fleetExpenses=[storedFuel(input)];
+  const rows=await validatedInputs([input]);assert.match(rows[0].error,/ya fue cargado/);assert.equal(state.writes.length,0);
 });

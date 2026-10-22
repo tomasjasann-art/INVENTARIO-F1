@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
+import * as XLSX from 'xlsx';
 const url = text => `data:text/javascript;base64,${Buffer.from(text).toString('base64')}`;
 const compile = source => ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const domainUrl = url(compile(await readFile(new URL('../lib/fleet.ts',import.meta.url),'utf8')));
@@ -12,6 +13,20 @@ const fuelRow=['2026/10/22','07:18:45','Estación de prueba','GLP-G',6.337,6.99,
 const vehicles=[{id:10,plate:'QA1001'}];
 const options={kind:'COMBUSTIBLE',provider:'Convenio de prueba',unit:'GAL',file:'reporte.xlsx'};
 const parseFuel=(rows=[fuelRow],settings=options)=>parser.parseFleetImport([{name:'Transacciones',rows:[fuelHeaders,...rows]}],vehicles,settings);
+
+test('La lectura real de CSV conserva fecha, hora e identificadores sin inferencia de zona horaria',()=>{
+  const row=[...fuelRow];row[0]='2026-10-22';row[1]='00:15:00';row[11]='00000123456789012345';
+  const csv=XLSX.utils.sheet_to_csv(XLSX.utils.aoa_to_sheet([fuelHeaders,row]));
+  const taskOriginalTimezone=process.env.TZ;
+  try {
+    for(const timezone of ['America/Lima','America/Los_Angeles','UTC']) {
+      process.env.TZ=timezone;
+      const wb=XLSX.read(new TextEncoder().encode(csv),parser.FLEET_WORKBOOK_OPTIONS);
+      const inputs=parser.parseFleetImport(wb.SheetNames.map(name=>({name,rows:XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,defval:'',raw:true})})),vehicles,{...options,file:'combustible.csv'}).inputs;
+      assert.equal(inputs[0].date,'2026-10-22');assert.equal(inputs[0].source.time,'00:15:00');assert.equal(inputs[0].source.transactionId,'00000123456789012345');
+    }
+  } finally {if(taskOriginalTimezone===undefined)delete process.env.TZ;else process.env.TZ=taskOriginalTimezone;}
+});
 
 test('El formato original de combustible conserva hora, estación, odómetro y referencia alternativa',()=>{
   const r=parseFuel().inputs[0];assert.equal(r.vehicleId,10);assert.equal(r.date,'2026-10-22');assert.equal(r.odometer,17811);assert.equal(r.amount,44.3);assert.equal(r.quantity,6.337);assert.equal(r.reference,'TICKET-1');assert.equal(r.source.time,'07:18:45');assert.equal(r.source.station,'Estación de prueba');assert.equal(r.source.row,2);assert.equal(r.source.voucher,'');assert.equal(r.provider,'Convenio de prueba');

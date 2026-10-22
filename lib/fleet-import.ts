@@ -1,6 +1,8 @@
 import { normalizedPlate, type Vehicle } from "./fleet";
 
 export const IMPORT_LIMIT = 5000;
+// Preserve CSV dates, times and identifiers as text; native Excel cell types remain available.
+export const FLEET_WORKBOOK_OPTIONS = { type: "array", cellDates: false, raw: true } as const;
 export type ImportSheet = { name: string; rows: unknown[][] };
 export type ImportOptions = { kind: string; provider: string; unit: string; file: string; date1904?: boolean };
 const norm = (v: unknown) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");

@@ -61,7 +61,7 @@ for (const [source,target] of Object.entries({
   'drizzle-orm': import.meta.resolve('drizzle-orm'), 'zod': import.meta.resolve('zod'),
   '../../../db': moduleUrl('export function getDb(){return globalThis.fleetLoadingDb;}'),
   '../../../db/schema': schemaUrl, '../../../lib/fleet-server': accessUrl,
-  '../../../lib/fleet': domainUrl, '../../../lib/supabase-storage': moduleUrl('export async function resolveEvidenceImage(){throw new Error("No evidence requested");}'),
+  '../../../lib/fleet': domainUrl, '../../../lib/fleet-sync': moduleUrl(compile(await readFile(new URL('../lib/fleet-sync.ts', import.meta.url), 'utf8'))), '../../../lib/supabase-storage': moduleUrl('export async function resolveEvidenceImage(){throw new Error("No evidence requested");}'),
 })) routeSource = routeSource.replaceAll(`"${source}"`, JSON.stringify(target));
 const { GET } = await import(moduleUrl(routeSource));
 function setDatabase(stalled = false) {

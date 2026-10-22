@@ -4,7 +4,8 @@ import { z } from "zod";
 import { getDb } from "../../../db";
 import { appUsers, coordinators, fleetVehicles as vehicles, fleetAssignments as assignments, fleetDocuments as documents, fleetExpenses as expenses, fleetInvoices as invoices, fleetPayments as payments, fleetIdle as idle, fleetStations as stations } from "../../../db/schema";
 import { fleetAccess, fleetFailure, FleetError, sameOrigin, verifyAttachment, verifyPhotos } from "../../../lib/fleet-server";
-import { expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate } from "../../../lib/fleet";
+import { expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate, type Expense, type ImportChange } from "../../../lib/fleet";
+import { fuelImportChanges, fuelImportPatch, fuelImportValues } from "../../../lib/fleet-sync";
 import { resolveEvidenceImage } from "../../../lib/supabase-storage";
 
 export const runtime = "nodejs";
@@ -23,6 +24,7 @@ const assignmentSchema = z.object({ id: optionalId, vehicleId: id, driverId: opt
 const sourceSchema = z.object({ format: z.enum(["FUEL_ATIO", "TOLL_REPORT"]), transactionId: z.string().trim().max(200).default(""), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/), station: z.string().trim().min(1).max(300), lane: z.string().trim().max(100).default(""), voucher: z.string().trim().max(200).default(""), voucherDate: z.union([date, z.literal("")]).default(""), file: z.string().max(200), sheet: z.string().max(100), row: z.number().int().positive() });
 const expenseSchema = z.object({ vehicleId: id, assignmentId: optionalId, date, kind: z.enum(["COMBUSTIBLE", "PEAJE", "MANTENIMIENTO"]), amount: amount, quantity: z.coerce.number().min(0).max(1_000_000).default(0), unit: z.enum(["GAL", "L", "M3"]).default("GAL"), fuel: text, unitPrice: z.coerce.number().min(0).max(1_000_000).default(0), odometer: optionalKm, provider: text, collector: text, reference: z.string().trim().min(1, "Ingresa el número de servicio o comprobante").max(200), invoiceId: optionalId, maintenanceType: text, nextKm: optionalKm, attachment: text, notes: text, source: sourceSchema.nullable().default(null) });
 const stationSchema = z.object({ id: optionalId, name: z.string().trim().min(1).max(200), provider: text, address: z.string().trim().min(1).max(500), district: text, city: text, region: text, fuels: text, hours: text, restrictions: text, latitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-90).max(90).nullable()), longitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-180).max(180).nullable()), verified: z.boolean(), active: z.boolean().default(true) });
+const importVersion = (e: Expense) => createHash("sha256").update(JSON.stringify([e.id, fuelImportValues(e), e.assignmentId, e.invoiceId, e.attachment, e.notes, e.source?.corrections?.length || 0])).digest("hex");
 
 // Always return a JSON error before the platform or browser times out.
 export async function GET(request: Request) {
@@ -159,11 +161,12 @@ export async function POST(request: Request) {
       await db.insert(documents).values(d);
     } else if (action === "expense" || action === "bulkExpense" || action === "bulkPreview") {
       const inputRows = action === "expense" ? [body] : z.array(z.record(z.unknown())).min(1).max(5000).parse(body.rows);
-      const rows: Array<typeof expenses.$inferInsert> = [];
-      const preview: Array<{ row: number; input: Record<string, unknown>; plate: string; amount: unknown; reference: string; error?: string; warning?: string; assignmentId?: number | null }> = [];
+      const rows: Array<Omit<Expense, "id">> = [];
+      const preview: Array<{ row: number; input: Record<string, unknown>; plate: string; amount: unknown; reference: string; error?: string; warning?: string; assignmentId?: number | null; operation?: "NUEVO" | "ACTUALIZAR" | "SIN_CAMBIOS"; changes?: ImportChange[] }> = [];
+      const nativeFuel = inputRows.some(r => (r.source as { format?: string } | null)?.format === "FUEL_ATIO");
       const knownVehicles = await db.select({ id: vehicles.id, plate: vehicles.plate }).from(vehicles);
-      const assignmentRows = inputRows.some(r => r.assignmentId || r.autoAssign) ? await db.select().from(assignments) : [];
-      const invoiceRows = inputRows.some(r => r.invoiceId) ? await db.select().from(invoices) : [];
+      const assignmentRows = nativeFuel || inputRows.some(r => r.assignmentId || r.autoAssign) ? await db.select().from(assignments) : [];
+      const invoiceRows = nativeFuel || inputRows.some(r => r.invoiceId) ? await db.select().from(invoices) : [];
       const fingerprints = new Set<string>();
       for (const [rowIndex, input] of inputRows.entries()) {
         const item: (typeof preview)[number] = { row: Number(input._row) || rowIndex + 2, input, plate: knownVehicles.find(v => v.id === Number(input.vehicleId))?.plate || String(input._plate || "Desconocida"), amount: input.amount, reference: String(input.reference || "") };
@@ -208,15 +211,59 @@ export async function POST(request: Request) {
           preview.push({ ...item, error: err instanceof z.ZodError ? err.issues.map(i => `${i.path.join(".")}: ${i.message}`).join(" · ") : (err as Error).message });
         }
       }
-      if (action === "bulkPreview") {
-        const existing = rows.length ? await db.select({ fingerprint: expenses.fingerprint }).from(expenses).where(inArray(expenses.fingerprint, rows.map(r => r.fingerprint))) : [];
-        const duplicates = new Set(existing.map(e => e.fingerprint));
+      const synchronize = async (connection: Pick<typeof db, "select" | "insert" | "execute">, persist: boolean) => {
+        if (persist) await connection.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
+        const query = connection.select().from(expenses).where(inArray(expenses.fingerprint, rows.map(r => r.fingerprint))).orderBy(expenses.id);
+        const existing = rows.length ? await (persist ? query.for("update") : query) : [];
+        const byFingerprint = new Map(existing.map(e => [e.fingerprint, e]));
         const acceptedPreview = preview.filter(p => !p.error);
-        for (const [i, row] of rows.entries()) { if (duplicates.has(row.fingerprint)) { const item = acceptedPreview[i]; if (item) item.error = "Este proveedor / comprobante ya fue cargado para la placa, fecha y tipo."; } }
-        return Response.json({ rows: preview });
-      }
-      // Atomic import: a conflicting row leaves the entire batch unchanged.
-      await db.transaction(async tx => { for (let offset = 0; offset < rows.length; offset += 200) await tx.insert(expenses).values(rows.slice(offset, offset + 200)); });
+        const added: typeof rows = [], updated: Array<typeof expenses.$inferInsert> = [];
+        let unchanged = 0;
+        for (const [i, row] of rows.entries()) {
+          const item = acceptedPreview[i], old = byFingerprint.get(row.fingerprint);
+          try {
+            const supportsUpdate = action !== "expense" && row.kind === "COMBUSTIBLE" && row.source?.format === "FUEL_ATIO";
+            if (old && (!supportsUpdate || old.kind !== "COMBUSTIBLE" || old.source?.format !== "FUEL_ATIO")) throw new FleetError("Este movimiento ya fue cargado. La actualización por Id Transaccion corresponde al reporte original de combustible.", 409);
+            if (!old) {
+              if (persist && item.input._expectedVersion) throw new FleetError("El movimiento cambió después de la vista previa. Vuelve a validar el archivo.", 409);
+              item.operation = "NUEVO";
+              item.input = { ...item.input, _expectedVersion: null };
+              added.push(row);
+              continue;
+            }
+            const changes = fuelImportChanges(old, row);
+            if (persist && changes.length && item.input._expectedVersion !== importVersion(old)) throw new FleetError("Un movimiento cambió después de la vista previa. Vuelve a validar el archivo antes de guardar.", 409);
+            if (changes.length && old.assignmentId) {
+              const a = assignmentRows.find(a => a.id === old.assignmentId);
+              if (!a || a.vehicleId !== row.vehicleId || row.date < a.serviceDate || row.date > a.endDate) throw new FleetError("La corrección de placa o fecha no corresponde a la jornada vinculada. Revisa esa vinculación antes de actualizar.");
+            }
+            if (changes.length && old.invoiceId) {
+              const invoice = invoiceRows.find(invoice => invoice.id === old.invoiceId);
+              if (!invoice || invoice.provider.trim().toUpperCase() !== row.provider.trim().toUpperCase()) throw new FleetError("El proveedor corregido no corresponde a la factura vinculada. Revisa la factura antes de actualizar.");
+            }
+            item.operation = changes.length ? "ACTUALIZAR" : "SIN_CAMBIOS";
+            item.changes = changes;
+            item.assignmentId = old.assignmentId;
+            item.input = { ...item.input, assignmentId: old.assignmentId, invoiceId: old.invoiceId, _expectedVersion: importVersion(old) };
+            const review = odometerReview(row, assignmentRows.find(a => a.id === old.assignmentId));
+            item.warning = review.startsWith("Revisar:") ? review : undefined;
+            if (changes.length) updated.push({ ...old, ...fuelImportPatch(old, row, user.actor, new Date().toISOString()), id: undefined });
+            else unchanged++;
+          } catch (err) {
+            if (persist) throw err;
+            item.error = (err as Error).message;
+          }
+        }
+        if (persist) {
+          // Lock, revalidate and write in one transaction. Internal links and evidence are never overwritten by a report.
+          for (let offset = 0; offset < added.length; offset += 200) await connection.insert(expenses).values(added.slice(offset, offset + 200));
+          for (let offset = 0; offset < updated.length; offset += 200) await connection.insert(expenses).values(updated.slice(offset, offset + 200)).onConflictDoUpdate({ target: expenses.fingerprint, set: { vehicleId: sql`excluded.vehicle_id`, date: sql`excluded.date`, amountCents: sql`excluded.amount_cents`, quantity: sql`excluded.quantity`, unit: sql`excluded.unit`, fuel: sql`excluded.fuel`, unitPrice: sql`excluded.unit_price`, odometer: sql`excluded.odometer`, provider: sql`excluded.provider`, reference: sql`excluded.reference`, source: sql`excluded.source` } });
+        }
+        return { inserted: added.length, updated: updated.length, unchanged };
+      };
+      if (action === "bulkPreview") { await synchronize(db, false); return Response.json({ rows: preview }); }
+      const result = await db.transaction(tx => synchronize(tx, true));
+      return Response.json({ ok: true, import: result });
     } else if (action === "invoice") {
       const { amount: totalCents, ...i } = z.object({ provider: z.string().trim().min(1).max(200).transform(s => s.toUpperCase()), number: z.string().trim().min(1).max(100).transform(s => s.toUpperCase()), issueDate: date, dueDate: date, amount, attachment: text, notes: text }).parse(body);
       if (i.dueDate < i.issueDate) throw new FleetError("El vencimiento no puede ser anterior a la emisión.");
@@ -235,18 +282,22 @@ export async function POST(request: Request) {
       });
     } else if (action === "linkAssignment") {
       const expenseId = id.parse(body.expenseId), assignmentId = id.parse(body.assignmentId);
-      const [expense] = await db.select().from(expenses).where(eq(expenses.id, expenseId)).limit(1);
-      const [assignment] = await db.select().from(assignments).where(eq(assignments.id, assignmentId)).limit(1);
-      if (!expense || !assignment || assignment.vehicleId !== expense.vehicleId || expense.date < assignment.serviceDate || expense.date > assignment.endDate) throw new FleetError("Selecciona una jornada correspondiente a la placa y fecha del gasto.");
-      if (expense.assignmentId) throw new FleetError("El gasto ya está vinculado a una jornada.");
-      await db.update(expenses).set({ assignmentId }).where(eq(expenses.id, expenseId));
+      await db.transaction(async tx => {
+        const [expense] = await tx.select().from(expenses).where(eq(expenses.id, expenseId)).for("update").limit(1);
+        const [assignment] = await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).limit(1);
+        if (!expense || !assignment || assignment.vehicleId !== expense.vehicleId || expense.date < assignment.serviceDate || expense.date > assignment.endDate) throw new FleetError("Selecciona una jornada correspondiente a la placa y fecha del gasto.");
+        if (expense.assignmentId) throw new FleetError("El gasto ya está vinculado a una jornada.");
+        await tx.update(expenses).set({ assignmentId }).where(eq(expenses.id, expenseId));
+      });
     } else if (action === "linkInvoice") {
       const expenseId = id.parse(body.expenseId), invoiceId = id.parse(body.invoiceId);
-      const [expense] = await db.select().from(expenses).where(eq(expenses.id, expenseId)).limit(1);
-      const [invoice] = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
-      if (!expense || expense.kind !== "COMBUSTIBLE" || !invoice || invoice.provider.toUpperCase() !== expense.provider.toUpperCase()) throw new FleetError("Selecciona una factura del mismo proveedor del combustible.");
-      if (expense.invoiceId) throw new FleetError("Este despacho ya está vinculado a una factura.");
-      await db.update(expenses).set({ invoiceId }).where(eq(expenses.id, expenseId));
+      await db.transaction(async tx => {
+        const [expense] = await tx.select().from(expenses).where(eq(expenses.id, expenseId)).for("update").limit(1);
+        const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
+        if (!expense || expense.kind !== "COMBUSTIBLE" || !invoice || invoice.provider.toUpperCase() !== expense.provider.toUpperCase()) throw new FleetError("Selecciona una factura del mismo proveedor del combustible.");
+        if (expense.invoiceId) throw new FleetError("Este despacho ya está vinculado a una factura.");
+        await tx.update(expenses).set({ invoiceId }).where(eq(expenses.id, expenseId));
+      });
     } else if (action === "station") {
       const { id: stationId, ...s } = stationSchema.parse(body);
       if (s.verified && (s.latitude === null || s.longitude === null)) throw new FleetError("Para confirmar el punto, registra latitud y longitud verificadas.");
