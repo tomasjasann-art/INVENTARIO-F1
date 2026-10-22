@@ -20,3 +20,6 @@
 
 .fl-station-filter{display:flex;flex-direction:column;gap:5px;font-size:10px;color:var(--fl-muted);min-width:145px}.fl-station-filter select{border:1px solid var(--fl-border);border-radius:6px;padding:10px;background:#fff;color:#354761;max-width:220px;min-height:40px;font-size:11px}.fl-station-tools{align-items:end}.fl-station-card .fl-row-actions a{display:inline-flex}.fl-map-caption a{white-space:normal}
 @media(max-width:600px){.fl-station-filter{flex:1;min-width:130px}.fl-station-filter select{width:100%;max-width:none}.fl-station-tools .fl-search{flex-basis:100%}}
+
+.fl-mileage-controls{display:flex;align-items:end;gap:20px;margin-bottom:18px}.fl-mileage-controls p,.fl-mileage-note{font-size:11px;color:var(--fl-muted)}.fl-mileage-note{padding:16px 20px;line-height:1.65}.fl-mileage-controls .fl-station-filter{min-width:220px}
+@media(max-width:600px){.fl-mileage-controls{align-items:stretch;flex-direction:column;gap:10px}.fl-mileage-note{padding:13px 14px}}
