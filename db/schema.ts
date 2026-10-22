@@ -426,4 +426,5 @@ export const fleetIdle = pgTable("fleet_idle", {
 }, t => [uniqueIndex("fleet_idle_vehicle_date").on(t.vehicleId, t.date)]).enableRLS();
 export const fleetStations = pgTable("fleet_stations", {
   id: serial("id").primaryKey(), name: text("name").notNull(), provider: text("provider").notNull().default(""), address: text("address").notNull(), district: text("district").notNull().default(""), city: text("city").notNull().default(""), region: text("region").notNull().default(""), fuels: text("fuels").notNull().default(""), hours: text("hours").notNull().default(""), restrictions: text("restrictions").notNull().default(""), latitude: doublePrecision("latitude"), longitude: doublePrecision("longitude"), verified: boolean("verified").notNull().default(false), active: boolean("active").notNull().default(true),
+  importKey: text("import_key").unique(), source: jsonb("source").$type<import("../lib/fleet").StationSource | null>(),
 }).enableRLS();

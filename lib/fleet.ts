@@ -8,7 +8,8 @@ export type FleetDocument = { id: number; vehicleId: number; kind: string; provi
 export type Invoice = { id: number; provider: string; number: string; issueDate: string; dueDate: string; totalCents: number; attachment: string; notes: string };
 export type Payment = { id: number; invoiceId: number; date: string; amountCents: number; reference: string; attachment: string; createdBy: string };
 export type Idle = { id: number; vehicleId: number; date: string; minutes: number; notes: string };
-export type Station = { id: number; name: string; provider: string; address: string; district: string; city: string; region: string; fuels: string; hours: string; restrictions: string; latitude: number | null; longitude: number | null; verified: boolean; active: boolean };
+export type StationSource = { file: string; page: number; network: string };
+export type Station = { id: number; name: string; provider: string; address: string; district: string; city: string; region: string; fuels: string; hours: string; restrictions: string; latitude: number | null; longitude: number | null; verified: boolean; active: boolean; importKey: string | null; source: StationSource | null };
 export type FleetUser = { id: number; displayName: string; role: string; username: string; active?: boolean };
 export type FleetData = { user: FleetUser; vehicles: Vehicle[]; assignments: Assignment[]; expenses: Expense[]; documents: FleetDocument[]; invoices: Invoice[]; payments: Payment[]; idle: Idle[]; stations: Station[]; drivers: FleetUser[]; coordinators: string[] };
 

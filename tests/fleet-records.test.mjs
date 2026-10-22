@@ -77,6 +77,12 @@ test('El conductor recibe los coordinadores F1 y únicamente sus jornadas operat
   const response=await GET(new Request('https://f1.example/api/fleet'));const body=await response.json();assert.equal(response.status,200);assert.deepEqual(body.coordinators,['Coordinador F1']);assert.deepEqual(body.assignments.map(a=>a.id),[20]);
 });
 
+test('El directorio del conductor muestra solo estaciones activas',async()=>{
+  const state=reset();state.user={id:2,displayName:'Prueba',active:true,role:'CONDUCTOR'};
+  state.rows.fleetStations=[{id:1,active:true,name:'Activa'},{id:2,active:false,name:'Inactiva'}];
+  const response=await GET(new Request('https://f1.example/api/fleet'));const body=await response.json();assert.deepEqual(body.stations.map(s=>s.id),[1]);
+});
+
 const sourceRecord = overrides => ({format:'TOLL_REPORT',transactionId:'',time:'10:00:00',station:'Plaza de prueba',lane:'1',voucher:'FACTURA-1',voucherDate:'2026-10-22',file:'reporte.xlsx',sheet:'Consumo',row:3,...overrides});
 const expense = overrides => ({vehicleId:10,date:domain.limaDate(),kind:'PEAJE',provider:'Red de prueba',reference:'FACTURA-1',amount:6.3,source:sourceRecord(),autoAssign:true,...overrides});
 const preview = rows => post({action:'bulkPreview',rows});
