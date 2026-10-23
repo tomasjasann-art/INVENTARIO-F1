@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
+import * as assetsSchema from "./assets-schema";
 
 let database: ReturnType<typeof createDatabase> | undefined;
 
@@ -21,7 +22,7 @@ function createDatabase() {
     connect_timeout: 15,
   });
 
-  return drizzle(client, { schema });
+  return drizzle(client, { schema: { ...schema, ...assetsSchema } });
 }
 
 export function getDb() {

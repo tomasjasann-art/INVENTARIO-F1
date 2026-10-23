@@ -32,6 +32,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
     return <PasswordChangeScreen displayName={access.displayName || user.displayName} />;
   }
 
+  if (access.role === "TECNICO") redirect("/activos/tecnicos");
+
   if (access.role === "CONDUCTOR") redirect("/conductores");
 
   const params = await searchParams;
@@ -39,6 +41,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
   return (
     <KardexApp
       user={{ displayName: user.displayName, email: user.email }}
+      technicianSetup={params.administrar === "tecnicos" && access.role === "ADMINISTRADOR"}
       driverSetup={params.administrar === "conductores" && access.role === "ADMINISTRADOR"}
       signOutPath={signOutPath()}
     />

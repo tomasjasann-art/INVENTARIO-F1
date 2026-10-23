@@ -134,6 +134,34 @@
       "when": 1792729861449,
       "tag": "0018_historical_fleet_journeys",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792788679468,
+      "tag": "0019_activos_f1",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792788756239,
+      "tag": "0020_activos_f1_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792788793008,
+      "tag": "0021_activos_f1_drafts",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792789281009,
+      "tag": "0022_legacy_asset_uploader",
+      "breakpoints": true
     }
   ]
 }

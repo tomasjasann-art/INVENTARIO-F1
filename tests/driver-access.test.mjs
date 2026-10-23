@@ -82,3 +82,11 @@ test('El acceso anterior mantiene una ruta estable para sus pasos de verificaci�
   assert.equal(page.props.children.props.path,'/sign-in/legacy');
   assert.equal(page.props.children.props.fallbackRedirectUrl,'/conductores');
 });
+const TechniciansPage = await loadPage('../app/activos/tecnicos/page.tsx', { '../../LoginScreen':loginUrl, '../../PasswordChangeScreen':passwordUrl, '../../auth':authUrl, '../../deployment-config':configUrl, '../AssetsApp':moduleUrl('export default function AssetsApp(){}') });
+test('Técnicos: ingreso y contraseña permanecen en el portal de Activos F1', async () => {
+ reset();let page=await TechniciansPage();assert.equal(page.props.assetsPortal,true);assert.equal(page.props.returnTo,'/activos/tecnicos');
+ signedIn('TECNICO');globalThis.driverAccessState.access.mustChangePassword=true;page=await TechniciansPage();assert.equal(page.props.returnTo,'/activos/tecnicos');
+ globalThis.driverAccessState.access.mustChangePassword=false;page=await TechniciansPage();assert.equal(page.props.mobilePortal,true);
+ await assert.rejects(Home({searchParams:Promise.resolve({})}),e=>e.destination==='/activos/tecnicos');
+});
+test('Técnicos: cuentas inactivas no acceden al módulo',async()=>{signedIn('TECNICO');globalThis.driverAccessState.access.active=false;const page=await TechniciansPage();assert.equal(page.props.signOutPath,'/sign-out');});

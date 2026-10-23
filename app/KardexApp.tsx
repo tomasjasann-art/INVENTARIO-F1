@@ -36,6 +36,7 @@ import {
   X,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import { assetTabs, type AssetTab } from "../lib/assets";
 import { fleetMenu, type FleetTab } from "./vehiculos/fleet-navigation";
 import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import AuditView, { type AuditImportRow, type AuditRecord } from "./AuditView";
@@ -43,6 +44,7 @@ import EquipmentReturnsView, { type EquipmentReturnRecord, type ProductIdentifie
 import GrIngresoImport from "./GrIngresoImport";
 import { kardexDate, normalizeKardexDate } from "../lib/kardex-date";
 
+const AssetsApp = dynamic(() => import("./activos/AssetsApp"), { loading: () => <p role="status">Abriendo Activos F1.</p> });
 const FleetApp = dynamic(() => import("./vehiculos/FleetApp"), { loading: () => <p role="status">Abriendo control de vehículos…</p> });
 
 type Product = {
@@ -201,7 +203,7 @@ type EquipmentRequest = {
   updatedAt: string;
 };
 
-type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA" | "CONDUCTOR";
+type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA" | "CONDUCTOR" | "TECNICO";
 
 type AppUser = {
   id: number;
@@ -255,7 +257,7 @@ type KardexData = {
   coordinatorSummary?: CoordinatorSummary | null;
   currentUser?: { email: string; displayName: string; role: UserRole; active: boolean; authProvider?: "supabase" | "clerk"; mustChangePassword?: boolean; coordinatorId?: number | null; coordinatorName?: string };
 };
-type View = "flota" | "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "devoluciones" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
+type View = "activos" | "flota" | "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "devoluciones" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
 
 const money = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" });
 const number = new Intl.NumberFormat("es-PE");
@@ -437,13 +439,13 @@ function userInitials(value: string) {
   return (parts.length > 1 ? `${parts[0][0]}${parts.at(-1)?.[0] ?? ""}` : parts[0]?.slice(0, 2) ?? "F1").toUpperCase();
 }
 
-export default function KardexApp({ user, signOutPath, driverSetup = false }: { user: KardexUser; signOutPath: string; driverSetup?: boolean }) {
+export default function KardexApp({ user, signOutPath, technicianSetup = false, driverSetup = false }: { user: KardexUser; signOutPath: string; driverSetup?: boolean; technicianSetup?: boolean }) {
   const [data, setData] = useState<KardexData>({ products: [], movements: [], stockMovements: [], stockReservations: [], sourceRecords: [], coordinators: [], suppliers: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], equipmentReturns: [], productIdentifiers: [], appUsers: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [view, setView] = useState<View>(driverSetup ? "configuracion" : "resumen");
+  const [view, setView] = useState<View>((driverSetup || technicianSetup) ? "configuracion" : "resumen");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<"movement" | "product" | "grIngreso" | null>(null);
   const [movementType, setMovementType] = useState<Movement["type"]>("entrada");
@@ -451,7 +453,9 @@ export default function KardexApp({ user, signOutPath, driverSetup = false }: { 
   const [equipmentModuleOpen, setEquipmentModuleOpen] = useState(false);
   const [fleetModuleOpen, setFleetModuleOpen] = useState(false);
   const [fleetTab, setFleetTab] = useState<FleetTab>("vehiculos");
-  const [settingsInitialRole, setSettingsInitialRole] = useState<UserRole>(driverSetup ? "CONDUCTOR" : "SOLO_LECTURA");
+  const [assetTab, setAssetTab] = useState<AssetTab>("Resumen");
+  const [assetsModuleOpen, setAssetsModuleOpen] = useState(false);
+  const [settingsInitialRole, setSettingsInitialRole] = useState<UserRole>(technicianSetup ? "TECNICO" : driverSetup ? "CONDUCTOR" : "SOLO_LECTURA");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [focusedRequestCode, setFocusedRequestCode] = useState("");
   const warehouse = "MO Company";
@@ -676,7 +680,7 @@ export default function KardexApp({ user, signOutPath, driverSetup = false }: { 
           type="button"
           aria-expanded={equipmentModuleOpen}
           aria-controls="equipment-module-navigation"
-          onClick={() => { setEquipmentModuleOpen((open) => !open); if (!equipmentModuleOpen) setFleetModuleOpen(false); }}
+          onClick={() => { setEquipmentModuleOpen((open) => !open); if (!equipmentModuleOpen) { setFleetModuleOpen(false); setAssetsModuleOpen(false); } }}
         >
           <Boxes size={17} />
           <span><small>{view === "flota" ? "MÓDULO" : "MÓDULO ACTIVO"}</small><strong>Control de Equipos Entel</strong></span>
@@ -708,7 +712,7 @@ export default function KardexApp({ user, signOutPath, driverSetup = false }: { 
             aria-controls="fleet-module-navigation"
             onClick={() => {
               setFleetModuleOpen(open => !open);
-              if (!fleetModuleOpen) { setEquipmentModuleOpen(false); setView("flota"); }
+              if (!fleetModuleOpen) { setAssetsModuleOpen(false); setEquipmentModuleOpen(false); setView("flota"); }
             }}
           >
             <ClipboardList size={18} />
@@ -721,6 +725,8 @@ export default function KardexApp({ user, signOutPath, driverSetup = false }: { 
             </nav>
           </div>
         </>}
+        <button className={`module-pill ${assetsModuleOpen ? "module-expanded" : ""}`} onClick={() => { setAssetsModuleOpen(open => !open); if (!assetsModuleOpen) { setEquipmentModuleOpen(false); setFleetModuleOpen(false); setView("activos"); } }} aria-expanded={assetsModuleOpen}><Boxes size={18} /><span><small>MÓDULO</small><strong>Activos F1</strong></span><ChevronDown size={16} /></button>
+        <div className={`module-nav-shell ${assetsModuleOpen ? "module-nav-open" : ""}`} inert={!assetsModuleOpen}><nav className="nav-list" aria-label="Activos F1">{assetTabs.map(name => <button key={name} className={view === "activos" && assetTab === name ? "active" : ""} onClick={() => { setAssetTab(name); setView("activos"); setSidebarOpen(false); }}><Boxes size={18} />{name}</button>)}</nav></div>
         <div className="sidebar-bottom">
           {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setSettingsInitialRole("SOLO_LECTURA"); setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
           <div className="user-card"><span>{userInitials(user.displayName)}</span><div><strong>{user.displayName}</strong><small>{role.replaceAll("_", " ")} · {user.email}</small></div><a href={signOutPath} target="_top" aria-label="Cerrar sesión" title="Cerrar sesión"><LogOut size={16} /></a></div>
@@ -730,7 +736,7 @@ export default function KardexApp({ user, signOutPath, driverSetup = false }: { 
       <main className="main-area">
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Abrir menú"><Menu size={21} /></button>
-          {view === "flota" ? <strong className="fleet-shell-title">Control de vehículos</strong> : <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>}
+          {view === "activos" ? <strong className="fleet-shell-title">Activos F1</strong> : view === "flota" ? <strong className="fleet-shell-title">Control de vehículos</strong> : <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>}
           <div className="top-actions">
             <div className="notification-center">
               <button className={`notification-button ${notificationRequests.length ? "has-alerts" : ""}`} onClick={() => setNotificationsOpen((open) => !open)} aria-label={`${notificationRequests.length} solicitudes nuevas`} aria-expanded={notificationsOpen}><Bell size={19} />{notificationRequests.length > 0 && <span>{notificationRequests.length > 99 ? "99+" : notificationRequests.length}</span>}</button>
@@ -740,7 +746,7 @@ export default function KardexApp({ user, signOutPath, driverSetup = false }: { 
                 {notificationRequests.length > 0 && <button className="notification-footer" onClick={() => { setView("solicitudes"); setNotificationsOpen(false); }}>Ver todas las solicitudes</button>}
               </div>}
             </div>
-            {!isCoordinator && !(["flota", "solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
+            {!isCoordinator && !(["activos", "flota", "solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
             {canOperate && view === "ingresos" && <button className="secondary-button quick-movement gr-read-button" onClick={() => setModal("grIngreso")}><FileSpreadsheet size={17} />Leer GR de ingreso</button>}
             {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
             {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
@@ -749,8 +755,9 @@ export default function KardexApp({ user, signOutPath, driverSetup = false }: { 
         </header>
 
         <div className={`content ${view === "flota" ? "fleet-shell-content" : ""}`}>
+          {view === "activos" && <AssetsApp embedded activeTab={assetTab} onTabChange={setAssetTab} />}
           {view === "flota" && !isCoordinator && <FleetApp embedded activeTab={fleetTab} onTabChange={setFleetTab} onManageDrivers={() => { setSettingsInitialRole("CONDUCTOR"); setView("configuracion"); }} />}
-          {view !== "flota" && <section className="page-heading">
+          {view !== "flota" && view !== "activos" && <section className="page-heading">
             <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? (isCoordinator ? "Mi panel de coordinador" : "Resumen de equipos") : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? (isCoordinator ? "Stock disponible para solicitar" : "Stock y trazabilidad") : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "devoluciones" ? "Devoluciones y recepción física" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? (isCoordinator ? "Consulta tus costos despachados, solicitudes y pendientes de cierre." : "Control centralizado por SKU, Serie/Lote, pedido y proyecto.") : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? (isCoordinator ? "Disponibilidad global sin costos ni movimientos de otros coordinadores." : "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU.") : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "devoluciones" ? "Registra primero la carga lógica y suma el equipo al stock solo cuando llegue físicamente a MO Company." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
           </section>}
@@ -1926,7 +1933,7 @@ function SettingsView({ data, saving, onSave, initialRole = "SOLO_LECTURA" }: { 
     }
   }
 
-  useEffect(() => { if (initialRole === "CONDUCTOR") document.getElementById("users-and-permissions")?.scrollIntoView({ block: "start" }); }, [initialRole]);
+  useEffect(() => { if (initialRole === "CONDUCTOR" || initialRole === "TECNICO") document.getElementById("users-and-permissions")?.scrollIntoView({ block: "start" }); }, [initialRole]);
 
   return <section className="settings-grid">
     <article className="panel backup-card"><span><Download size={23} /></span><div><small>RESPALDO · OPCIONAL Y RECOMENDADO</small><h2>Descargar respaldo completo</h2><p>Genera un Excel con maestro, movimientos, conciliaciones, auditorías, solicitudes, devoluciones y relaciones Part Number–SKU antes de limpiar.</p><button className="secondary-button" onClick={() => void downloadBackup()}><Download size={16} />{backupDownloaded ? "Respaldo descargado" : "Descargar respaldo Excel"}</button></div></article>
@@ -1944,7 +1951,7 @@ function SettingsView({ data, saving, onSave, initialRole = "SOLO_LECTURA" }: { 
         <label className="field"><span>Nombre *</span><input name="displayName" required placeholder="Nombre del colaborador" /></label>
         <label className="field"><span>Usuario *</span><input name="username" required minLength={4} maxLength={40} pattern="[a-zA-Z0-9._-]+" autoComplete="off" placeholder="nombre.apellido" /></label>
         <label className="field"><span>Contraseña temporal *</span><input name="temporaryPassword" type="password" required minLength={10} autoComplete="new-password" placeholder="Mínimo 10 caracteres" /></label>
-        <label className="field"><span>Rol *</span><select name="role" value={newUserRole} onChange={(event) => setNewUserRole(event.target.value as UserRole)}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option><option value="CONDUCTOR">Conductor · Vehículos</option></select></label>
+        <label className="field"><span>Rol *</span><select name="role" value={newUserRole} onChange={(event) => setNewUserRole(event.target.value as UserRole)}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option><option value="TECNICO">Técnico · Activos F1</option><option value="CONDUCTOR">Conductor · Vehículos</option></select></label>
         <label className="field"><span>Coordinador F1 {newUserRole === "COORDINADOR" ? "*" : ""}</span><select name="coordinatorId" defaultValue="" required={newUserRole === "COORDINADOR"}><option value="">Sin vincular</option>{f1Coordinators.map((coordinator) => <option key={coordinator.id} value={coordinator.id}>{coordinator.name}</option>)}</select><small>Obligatorio para limitar solicitudes, alertas y despachos propios.</small></label>
         <button className="primary-button" type="submit" disabled={saving}><Plus size={15} />Crear usuario</button>
       </form>
@@ -1953,7 +1960,7 @@ function SettingsView({ data, saving, onSave, initialRole = "SOLO_LECTURA" }: { 
         {!data.appUsers.length ? <tr><td colSpan={7}><Empty text="Crea la primera cuenta interna para tu equipo." /></td></tr> : data.appUsers.map((appUser) => <tr key={appUser.id}>
           <td><strong>{appUser.displayName || "Sin nombre"}</strong><small>{appUser.username ? "Cuenta interna" : "Acceso anterior por correo"}</small></td>
           <td><b>{appUser.username || appUser.email}</b></td>
-          <td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: event.target.value, coordinatorId: appUser.coordinatorId, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option><option value="CONDUCTOR">Conductor · Vehículos</option></select></td>
+          <td><select value={appUser.role} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: event.target.value, coordinatorId: appUser.coordinatorId, active: appUser.active }, "Rol actualizado.")}><option value="ADMINISTRADOR">Administrador</option><option value="LOGISTICA">Logística</option><option value="COORDINADOR">Coordinador</option><option value="SOLO_LECTURA">Solo lectura</option><option value="TECNICO">Técnico · Activos F1</option><option value="CONDUCTOR">Conductor · Vehículos</option></select></td>
           <td><select value={appUser.coordinatorId ?? ""} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: appUser.role, coordinatorId: Number(event.target.value) || null, active: appUser.active }, "Coordinador F1 vinculado.")}><option value="">Sin vincular</option>{f1Coordinators.map((coordinator) => <option key={coordinator.id} value={coordinator.id}>{coordinator.name}</option>)}</select></td>
           <td><select value={appUser.active ? "ACTIVO" : "INACTIVO"} disabled={saving} onChange={(event) => void onSave({ action: "appUser", userId: appUser.id, username: appUser.username, displayName: appUser.displayName, role: appUser.role, coordinatorId: appUser.coordinatorId, active: event.target.value === "ACTIVO" }, "Estado del usuario actualizado.")}><option>ACTIVO</option><option>INACTIVO</option></select></td>
           <td>{appUser.authUserId ? <div className="password-state"><span className={appUser.mustChangePassword ? "warning" : "ok"}>{appUser.mustChangePassword ? "Cambio pendiente" : "Contraseña definida"}</span><button type="button" className="text-action" disabled={saving} onClick={() => { setResetUserId(appUser.id); setTemporaryPassword(""); }}><RefreshCw size={12} />Restablecer</button></div> : <small>Cuenta heredada</small>}</td>

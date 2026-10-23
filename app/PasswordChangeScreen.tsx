@@ -3,8 +3,9 @@
 import { FormEvent, useState } from "react";
 import { KeyRound, ShieldCheck } from "lucide-react";
 import Image from "next/image";
+import { safeReturnPath } from "../lib/return-path";
 
-export default function PasswordChangeScreen({ displayName }: { displayName: string }) {
+export default function PasswordChangeScreen({ displayName, returnTo = "/" }: { displayName: string; returnTo?: string }) {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -21,7 +22,7 @@ export default function PasswordChangeScreen({ displayName }: { displayName: str
       });
       const body = await response.json() as { error?: string };
       if (!response.ok) throw new Error(body.error || "No se pudo actualizar la contraseña.");
-      window.location.replace("/");
+      window.location.replace(safeReturnPath(returnTo));
     } catch (changeError) {
       setError(changeError instanceof Error ? changeError.message : "No se pudo actualizar la contraseña.");
       setSaving(false);

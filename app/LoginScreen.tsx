@@ -7,7 +7,7 @@ import { safeReturnPath } from "../lib/return-path";
 import DriverInstallHelp from "./conductores/DriverInstallHelp";
 import "./conductores/drivers.css";
 
-export default function LoginScreen({ legacyAccessAvailable, returnTo = "/", driverPortal = false }: { legacyAccessAvailable: boolean; returnTo?: string; driverPortal?: boolean }) {
+export default function LoginScreen({ legacyAccessAvailable, returnTo = "/", driverPortal = false, assetsPortal = false }: { legacyAccessAvailable: boolean; returnTo?: string; driverPortal?: boolean; assetsPortal?: boolean }) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -23,7 +23,7 @@ export default function LoginScreen({ legacyAccessAvailable, returnTo = "/", dri
       });
       const body = await response.json() as { error?: string; mustChangePassword?: boolean };
       if (!response.ok) throw new Error(body.error || "No se pudo iniciar sesión.");
-      window.location.replace(body.mustChangePassword ? "/" : safeReturnPath(returnTo));
+      window.location.replace(body.mustChangePassword && !assetsPortal ? "/" : safeReturnPath(returnTo));
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : "No se pudo iniciar sesión.");
       setSubmitting(false);
@@ -38,9 +38,9 @@ export default function LoginScreen({ legacyAccessAvailable, returnTo = "/", dri
         </div>
 
         <div className="login-message">
-          <p>{driverPortal ? "F1 CONDUCTORES" : "OPERATIONS HUB"}</p>
-          <h1>{driverPortal ? <>Tu vehículo.<br />Tu jornada al día.</> : <>Datos alineados.<br />Operación en marcha.</>}</h1>
-          <span>{driverPortal ? "Registra Inicio y Final, kilometraje y siete fotografías en cada momento desde tu celular." : "Inventario, trazabilidad, conciliación y auditoría logística en un solo lugar."}</span>
+          <p>{assetsPortal ? "ACTIVOS F1" : driverPortal ? "F1 CONDUCTORES" : "OPERATIONS HUB"}</p>
+          <h1>{assetsPortal ? <>Tus equipos.<br />Tu operación al día.</> : driverPortal ? <>Tu vehículo.<br />Tu jornada al día.</> : <>Datos alineados.<br />Operación en marcha.</>}</h1>
+          <span>{assetsPortal ? "Consulta tus equipos, confirma traspasos y reporta fallas con fotos o videos desde tu celular." : driverPortal ? "Registra Inicio y Final, kilometraje y siete fotografías en cada momento desde tu celular." : "Inventario, trazabilidad, conciliación y auditoría logística en un solo lugar."}</span>
         </div>
 
         <div className="login-brand-footer">
@@ -53,7 +53,7 @@ export default function LoginScreen({ legacyAccessAvailable, returnTo = "/", dri
         <div className="login-card">
           <Image className="login-client-logo" src="/f1-services-logo-horizontal.png" alt="F1 Projects, Engineering & Services" width={292} height={94} priority />
           <div className="login-secure-label"><ShieldCheck size={15} /> ACCESO PRIVADO</div>
-          <h2>{driverPortal ? "Ingreso de conductores" : "Bienvenido"}</h2>
+          <h2>{assetsPortal ? "Ingreso de técnicos" : driverPortal ? "Ingreso de conductores" : "Bienvenido"}</h2>
           <p>Ingresa con el <strong>usuario y contraseña que el Administrador creó</strong> en Logística F1.</p>
 
           <form className="internal-login-form" onSubmit={login}>

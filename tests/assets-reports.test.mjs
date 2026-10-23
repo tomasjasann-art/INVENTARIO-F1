@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import ts from 'typescript';
+import * as XLSX from 'xlsx';
+const url=s=>`data:text/javascript;base64,${Buffer.from(s).toString('base64')}`;
+const compile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+const assetUrl=url(compile(await readFile(new URL('../lib/assets.ts',import.meta.url),'utf8')));
+globalThis.assetReportExcel=XLSX;
+const excelUrl=url('export const utils=globalThis.assetReportExcel.utils;export const writeFile=(workbook,name)=>{globalThis.assetReportResult={workbook,name};};');
+let source=compile(await readFile(new URL('../app/activos/asset-reports.ts',import.meta.url),'utf8'));
+source=source.replaceAll('"../../lib/assets"',JSON.stringify(assetUrl)).replaceAll('"xlsx"',JSON.stringify(excelUrl));
+const {exportAssets}=await import(url(source));
+test('Excel incluye todas las filas filtradas, columnas del control y saldo de borradores',async()=>{
+ const assets=Array.from({length:25},(_,i)=>({id:i+1,code:`QA-${i+1}`,item:String(i+1),type:'Herramienta',category:'Fibra óptica',description:'Herramienta QA',serial:'',brand:'QA',model:'QA',total:10,available:9,quarantined:0,condition:'Bueno',purchaseDate:'2020-01-01',costCents:12345,currency:'PEN',active:true}));
+ const assignments=assets.map(a=>({id:a.id,assetId:a.id,code:`AF1-${a.id}`,userId:2,quantity:1,returned:0,draft:a.id===1,cancelled:false,assignedAt:'2026-01-01',expectedReturn:'',returnedAt:'',files:[]}));
+ const data={assets,assignments,people:[{id:2,displayName:'Técnico QA'}],events:[],services:[],incidents:[]};
+ await exportAssets(data,assets,assignments);
+ let wb=globalThis.assetReportResult.workbook;assert.equal(XLSX.utils.sheet_to_json(wb.Sheets.Activos).length,25);const a=XLSX.utils.sheet_to_json(wb.Sheets.Asignaciones);assert.equal(a.length,25);assert.equal(a[0].Pendiente,0);assert.equal(a[0].Status,'Borrador');assert.equal(a[0]['Personal asignado'],'Técnico QA');assert.equal(XLSX.utils.sheet_to_json(wb.Sheets.Activos)[0].CostoUnitario,123.45);
+ await exportAssets(data,assets.slice(0,2),assignments.slice(0,2));wb=globalThis.assetReportResult.workbook;assert.equal(XLSX.utils.sheet_to_json(wb.Sheets.Activos).length,2);assert.equal(XLSX.utils.sheet_to_json(wb.Sheets.Asignaciones).length,2);
+});

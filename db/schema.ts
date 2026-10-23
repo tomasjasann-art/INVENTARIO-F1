@@ -272,7 +272,7 @@ export const appUsers = pgTable(
     username: text("username").notNull().default(""),
     authUserId: text("auth_user_id").notNull().default(""),
     displayName: text("display_name").notNull().default(""),
-    role: text("role", { enum: ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA", "CONDUCTOR"] }).notNull().default("SOLO_LECTURA"),
+    role: text("role", { enum: ["ADMINISTRADOR", "LOGISTICA", "COORDINADOR", "SOLO_LECTURA", "CONDUCTOR", "TECNICO"] }).notNull().default("SOLO_LECTURA"),
     coordinatorId: integer("coordinator_id").references(() => coordinators.id, { onDelete: "set null" }),
     active: boolean("active").notNull().default(true),
     mustChangePassword: boolean("must_change_password").notNull().default(false),
@@ -429,3 +429,4 @@ export const fleetStations = pgTable("fleet_stations", {
   id: serial("id").primaryKey(), name: text("name").notNull(), provider: text("provider").notNull().default(""), address: text("address").notNull(), district: text("district").notNull().default(""), city: text("city").notNull().default(""), region: text("region").notNull().default(""), fuels: text("fuels").notNull().default(""), hours: text("hours").notNull().default(""), restrictions: text("restrictions").notNull().default(""), latitude: doublePrecision("latitude"), longitude: doublePrecision("longitude"), verified: boolean("verified").notNull().default(false), active: boolean("active").notNull().default(true),
   importKey: text("import_key").unique(), source: jsonb("source").$type<import("../lib/fleet").StationSource | null>(),
 }).enableRLS();
+

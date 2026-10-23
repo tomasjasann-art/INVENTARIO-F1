@@ -1,0 +1,1 @@
+ALTER TABLE "f1_asset_assignments" ADD COLUMN "draft" boolean DEFAULT false NOT NULL;
