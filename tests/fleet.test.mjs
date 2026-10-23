@@ -126,6 +126,55 @@ test('Las bases de combustible y jornadas se comparan por vehículo sin sumarse 
   assert.equal(report.vehicleReport(vehicle, [], expenses, 'COMBUSTIBLE').km, 400);
   assert.equal(report.vehicleReport(vehicle, [], expenses, 'JORNADAS').km, null);
 });
+test('El resumen combina jornadas operativas e históricas con odómetros administrativos sin duplicar kilómetros', () => {
+  const vehicles = [{id:1,usage:'OPERACIONES',tenure:'ALQUILADO'}, {id:2,usage:'ADMINISTRACION',tenure:'PROPIO'}];
+  const assignments = [
+    {vehicleId:1,trackingMode:'OPERATIVO',initialKm:1000,finalKm:1100,endedAt:'closed'},
+    {vehicleId:1,trackingMode:'HISTORICO',initialKm:1100,finalKm:1150,endedAt:''},
+    {vehicleId:1,trackingMode:'OPERATIVO',initialKm:1150,finalKm:2000,startedAt:'open',endedAt:''},
+    {vehicleId:2,trackingMode:'HISTORICO',initialKm:0,finalKm:777,endedAt:''},
+  ];
+  const expenses = [fuelReading(1,'2026-10-05',600),fuelReading(2,'2026-10-20',900),fuelReading(3,'2026-10-05',1000,{vehicleId:2}),fuelReading(4,'2026-10-20',1400,{vehicleId:2}),{id:5,vehicleId:1,kind:'PEAJE',amountCents:1000}];
+  const rows = vehicles.map(v => report.summaryVehicleReport(v,assignments,expenses));
+  assert.deepEqual(rows.map(r => [r.source,r.km,r.journeyKm,r.odometers.km]), [['JORNADAS',150,150,300],['COMBUSTIBLE',400,777,400]]);
+  assert.equal(rows[0].missing,true);
+  assert.equal(rows[0].costPerKm,21000/150);
+  assert.equal(rows[1].costPerKm,20000/400);
+  const totals = report.reportTotals(rows);
+  assert.equal(totals.km,550);
+  assert.equal(totals.cost,41000);
+  assert.equal(totals.costPerKm,41000/550);
+  assert.equal(totals.efficiency,550/40);
+});
+test('El resumen respeta la base por uso aunque falte información o haya odómetros operativos inválidos', () => {
+  const operational = {id:1,usage:'OPERACIONES'}, administrative = {id:1,usage:'ADMINISTRACION'};
+  const closed = [{vehicleId:1,trackingMode:'HISTORICO',initialKm:1000,finalKm:1100,endedAt:''}];
+  const fuel = [fuelReading(1,'2026-10-05',1000),fuelReading(2,'2026-10-20',1400)];
+  assert.equal(report.summaryVehicleReport(operational,[],fuel).km,null,'Sin jornadas no se reemplaza por combustible');
+  assert.equal(report.summaryVehicleReport(administrative,closed,[fuel[0]]).km,null,'Sin dos lecturas no se reemplaza por jornadas');
+  const invalid = [fuel[0],{...fuel[1],odometer:900}];
+  const rows = [report.summaryVehicleReport(operational,closed,invalid),report.summaryVehicleReport({...administrative,id:2},[],invalid.map(e => ({...e,vehicleId:2})))];
+  assert.equal(rows[0].km,100,'El error de combustible no bloquea las jornadas de Operaciones');
+  assert.equal(rows[1].km,null);
+  const totals = report.reportTotals(rows);
+  assert.equal(totals.km,100);
+  assert.equal(totals.excludedCost,20000);
+  assert.equal(totals.cost,40000);
+  assert.equal(totals.costPerKm,20000/100);
+  assert.equal(report.summaryVehicleReport(operational,[{...closed[0],finalKm:1000}],fuel).km,0,'Un cierre sin recorrido conserva cero');
+});
+test('Al filtrar responsables no atribuye intervalos de odómetro administrativos ni cambia su base a jornadas', () => {
+  const assignments = [{vehicleId:1,trackingMode:'HISTORICO',initialKm:1000,finalKm:1100,endedAt:''}];
+  const expenses = [fuelReading(1,'2026-10-05',1000),fuelReading(2,'2026-10-20',1400)];
+  const row = report.summaryVehicleReport({id:1,usage:'ADMINISTRACION'},assignments,expenses,true);
+  assert.equal(row.source,'COMBUSTIBLE');
+  assert.equal(row.km,null);
+  assert.equal(row.efficiency,null);
+  assert.equal(row.costPerKm,null);
+  assert.equal(row.cost,20000);
+  assert.equal(row.journeyKm,100);
+  assert.equal(report.summaryVehicleReport({id:1,usage:'OPERACIONES'},assignments,expenses,true).km,100);
+});
 test('El reporte respeta las fechas filtradas sin usar el máximo histórico ni el odómetro de mantenimiento', () => {
   const all = [fuelReading(1,'2026-09-30',900),fuelReading(2,'2026-10-05',1000),fuelReading(3,'2026-10-20',1400),fuelReading(4,'2026-11-01',2000),fuelReading(5,'2026-10-21',90000,{kind:'MANTENIMIENTO'})];
   const row = report.vehicleReport({id:1},[],all.filter(e=>e.date>='2026-10-01'&&e.date<='2026-10-22'),'COMBUSTIBLE');

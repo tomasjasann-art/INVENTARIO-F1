@@ -86,7 +86,8 @@ test('Con Inicio se corrige la atribución sin cambiar la identidad, fotos ni ki
 });
 test('La asignación rechaza una corrección incompatible con gastos vinculados',async()=>{
  const state=reset(),row=journey(state);state.rows.fleetExpenses=[{id:60,assignmentId:20,vehicleId:10,date:row.serviceDate}];
- assert.equal((await editAssignment(row,{serviceDate:'2026-10-23',endDate:'2026-10-23'})).status,400);assert.equal(state.writes.length,0);
+ const nextDay=domain.limaDate(new Date(new Date(`${row.serviceDate}T12:00:00-05:00`).getTime()+86400000));
+ assert.equal((await editAssignment(row,{serviceDate:nextDay,endDate:nextDay})).status,400);assert.equal(state.writes.length,0);
 });
 test('Eliminar un documento o una asignación vacía elimina solo la fila seleccionada',async()=>{
  for(const entity of ['document','assignment','invoice']){const state=reset(),row=entity==='document'?documentRow(state):entity==='assignment'?journey(state):invoiceRow(state);

@@ -44,6 +44,15 @@ export function vehicleReport(vehicle: Vehicle, assignments: Assignment[], expen
   return { v: vehicle, km, journeyKm, odometers, source, cost, gal, m3, mixed, fuelCost: fuel.reduce((sum, e) => sum + e.amountCents, 0), costPerKm: km !== null && km > 0 ? cost / km : null, efficiency: !mixed && km !== null && km > 0 && gal > 0 ? km / gal : null, missing: journeys.some(a => a.startedAt && !a.endedAt) };
 }
 
+/** The summary uses one distance source per vehicle, never a fallback or a sum of both. */
+export function summaryVehicleReport(vehicle: Vehicle, assignments: Assignment[], expenses: Expense[], responsibilityFilter = false) {
+  const source = vehicle.usage === "ADMINISTRACION" ? "COMBUSTIBLE" : "JORNADAS";
+  const row = vehicleReport(vehicle, assignments, expenses, source);
+  // An odometer interval can include travel by other people between the selected refuels.
+  if (source === "COMBUSTIBLE" && responsibilityFilter) return { ...row, km: null, costPerKm: null, efficiency: null };
+  return row;
+}
+
 export function reportTotals(rows: ReturnType<typeof vehicleReport>[]) {
   const comparable = rows.filter(r => r.km !== null);
   const km = comparable.length ? comparable.reduce((sum, r) => sum + r.km!, 0) : null;
