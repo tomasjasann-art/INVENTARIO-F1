@@ -29,6 +29,11 @@ export function assignmentStatus(a: Assignment, now = new Date()) {
 }
 export const DOCUMENT_KINDS = ["SOAT", "REVISION_TECNICA", "SEGURO", "TARJETA_PROPIEDAD"] as const;
 export const DOCUMENT_LABELS: Record<string, string> = { SOAT: "SOAT", REVISION_TECNICA: "Revisión técnica", SEGURO: "Seguro", TARJETA_PROPIEDAD: "Tarjeta de propiedad" };
+export type EditableFleetRecord = "assignment" | "document" | "invoice";
+export function fleetRecordVersion(kind: EditableFleetRecord, record: Record<string, unknown>) {
+  const fields = kind === "assignment" ? ["id", "vehicleId", "driverId", "trackingMode", "responsibleName", "serviceDate", "endDate", "expectedStart", "expectedEnd", "coordinator", "ceco", "site", "finalZone", "notes", "planStatus", "reason", "startedAt", "endedAt", "initialKm", "finalKm", "updatedAt"] : kind === "document" ? ["id", "vehicleId", "kind", "provider", "reference", "startDate", "expiryDate", "attachment", "notes"] : ["id", "provider", "number", "issueDate", "dueDate", "totalCents", "attachment", "notes"];
+  return JSON.stringify(fields.map(field => record[field] ?? null));
+}
 export function documentStatus(d: FleetDocument, today = limaDate()) {
   if (d.kind === "TARJETA_PROPIEDAD") return "Sin vencimiento";
   if (d.expiryDate < today) return "Vencido";

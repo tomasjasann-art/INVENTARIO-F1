@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getDb } from "../../../db";
 import { appUsers, coordinators, fleetVehicles as vehicles, fleetAssignments as assignments, fleetDocuments as documents, fleetExpenses as expenses, fleetInvoices as invoices, fleetPayments as payments, fleetIdle as idle, fleetStations as stations } from "../../../db/schema";
 import { fleetAccess, fleetFailure, FleetError, sameOrigin, verifyAttachment, verifyPhotos } from "../../../lib/fleet-server";
-import { DOCUMENT_KINDS, expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate, type Expense, type ImportChange } from "../../../lib/fleet";
+import { fleetRecordVersion, DOCUMENT_KINDS, expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate, type Expense, type ImportChange } from "../../../lib/fleet";
 import { fuelImportChanges, fuelImportPatch, fuelImportValues } from "../../../lib/fleet-sync";
 import { resolveEvidenceImage } from "../../../lib/supabase-storage";
 
@@ -79,7 +79,30 @@ export async function POST(request: Request) {
     const body = await request.json() as Record<string, unknown>;
     const action = String(body.action || "");
     if (action !== "record" && !user.manager) throw new FleetError("Solo Logística o Administración pueden modificar este control.", 403);
-    if (action === "vehicle") {
+    const checkVersion = (kind: "assignment" | "document" | "invoice", record: Record<string, unknown>) => {
+      if (body._version !== fleetRecordVersion(kind, record)) throw new FleetError("El registro cambió. Actualiza la pantalla y vuelve a abrirlo antes de guardar o eliminar.", 409);
+    };
+    if (action === "deleteRecord") {
+      const { entity, id: recordId } = z.object({ entity: z.enum(["assignment", "document", "invoice"]), id, confirmed: z.literal(true) }).parse(body);
+      await db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
+        const table = { assignment: assignments, document: documents, invoice: invoices }[entity];
+        const [old] = await tx.select().from(table).where(eq(table.id, recordId)).for("update").limit(1);
+        if (!old) throw new FleetError("El registro ya no existe. Actualiza la pantalla.", 404);
+        checkVersion(entity, old);
+        if (entity === "assignment") {
+          if ("startedAt" in old && old.startedAt) throw new FleetError("No se puede eliminar una asignación con jornada iniciada. Puedes corregir sus datos de trabajo.");
+          const linked = await tx.select().from(expenses).where(eq(expenses.assignmentId, recordId)).limit(1);
+          if (linked.length) throw new FleetError("No se puede eliminar una asignación con gastos vinculados.");
+        }
+        if (entity === "invoice") {
+          const linked = await tx.select().from(expenses).where(eq(expenses.invoiceId, recordId)).limit(1);
+          const paid = await tx.select().from(payments).where(eq(payments.invoiceId, recordId)).limit(1);
+          if (linked.length || paid.length) throw new FleetError("No se puede eliminar una factura con pagos o abastecimientos vinculados.");
+        }
+        await tx.delete(table).where(eq(table.id, recordId));
+      });
+    } else if (action === "vehicle") {
       const { id: vehicleId, ...v } = vehicleSchema.parse(body);
       if (vehicleId) {
         const [old] = await db.select().from(vehicles).where(eq(vehicles.id, vehicleId)).limit(1);
@@ -94,13 +117,17 @@ export async function POST(request: Request) {
     } else if (action === "assignment") {
       const { id: assignmentId, ...input } = assignmentSchema.parse(body);
       await db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
         await tx.execute(sql`select pg_advisory_xact_lock(7610, ${input.vehicleId})`);
         // The vehicle master determines the mode; a posted mode cannot bypass driver evidence.
         const [vehicle] = await tx.select().from(vehicles).where(eq(vehicles.id, input.vehicleId)).for("share").limit(1);
         if (!vehicle) throw new FleetError("Selecciona un vehículo registrado.");
         const administrative = vehicle.usage === "ADMINISTRACION";
         const a = { ...input, endDate: administrative ? input.serviceDate : input.endDate || input.serviceDate, driverId: administrative ? null : input.driverId, trackingMode: administrative ? "ADMINISTRATIVO" : "OPERATIVO", responsibleName: administrative ? input.responsibleName : "", expectedStart: administrative ? "" : input.expectedStart, expectedEnd: administrative ? "" : input.expectedEnd, planStatus: administrative ? "CONFIRMADA" : input.planStatus, reason: administrative ? "" : input.reason };
-        if (!administrative) {
+        const [existing] = assignmentId ? await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).for("update").limit(1) : [];
+        if (assignmentId && !existing) throw new FleetError("Asignación no encontrada.", 404);
+        if (existing) checkVersion("assignment", existing);
+        if (!administrative && !existing?.startedAt) {
           if (!a.driverId) throw new FleetError("Selecciona una cuenta activa de conductor.");
           const [driver] = await tx.select().from(appUsers).where(and(eq(appUsers.id, a.driverId), eq(appUsers.active, true), eq(appUsers.role, "CONDUCTOR"))).limit(1);
           if (!driver) throw new FleetError("La cuenta debe estar activa y tener el rol CONDUCTOR.");
@@ -109,10 +136,17 @@ export async function POST(request: Request) {
           if (vehicle.status !== "OPERATIVO" && ["CONFIRMADA", "POR_CONFIRMAR"].includes(a.planStatus)) throw new FleetError("El vehículo está en mantenimiento o fuera de servicio.");
         }
         if (assignmentId) {
-          const [existing] = await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).for("update").limit(1);
           if (!existing) throw new FleetError("Asignación no encontrada.", 404);
-          if (existing.startedAt) throw new FleetError("La jornada ya comenzó. Sus datos de asignación quedan conservados para trazabilidad.");
-          await tx.update(assignments).set({ ...a, updatedAt: new Date().toISOString(), createdBy: user.actor }).where(eq(assignments.id, assignmentId));
+          if (existing.startedAt) {
+            const locked = ["vehicleId", "driverId", "trackingMode", "responsibleName", "serviceDate", "endDate", "expectedStart", "expectedEnd", "planStatus", "reason"] as const;
+            if (locked.some(key => a[key] !== existing[key])) throw new FleetError("La jornada ya comenzó. Solo puedes corregir coordinador, CECO, site, zona final y observaciones.");
+            if (!a.coordinator || !a.ceco) throw new FleetError("Indica el coordinador y el CECO del trabajo.");
+            await tx.update(assignments).set({ coordinator: a.coordinator, ceco: a.ceco, site: a.site, finalZone: a.finalZone, notes: a.notes, updatedAt: new Date().toISOString() }).where(eq(assignments.id, assignmentId));
+          } else {
+            const linked = await tx.select().from(expenses).where(eq(expenses.assignmentId, assignmentId));
+            if (linked.some(e => e.vehicleId !== a.vehicleId || e.date < a.serviceDate || e.date > a.endDate) || (linked.length && ["NO_SALIO", "CANCELADA"].includes(a.planStatus))) throw new FleetError("La corrección no es compatible con los gastos vinculados a esta asignación.");
+            await tx.update(assignments).set({ ...a, updatedAt: new Date().toISOString() }).where(eq(assignments.id, assignmentId));
+          }
         } else await tx.insert(assignments).values({ ...a, createdBy: user.actor, updatedAt: new Date().toISOString() });
       });
     } else if (action === "record") {
@@ -155,19 +189,26 @@ export async function POST(request: Request) {
       if (minutes > 1440) throw new FleetError("El ralentí de un día no puede superar 24 horas.");
       await db.insert(idle).values({ vehicleId, date: day, minutes, notes: text.parse(body.notes) }).onConflictDoUpdate({ target: [idle.vehicleId, idle.date], set: { minutes, notes: text.parse(body.notes) } });
     } else if (action === "document") {
-      const d = z.object({ vehicleId: id, kind: z.enum(DOCUMENT_KINDS), provider: text, reference: z.string().trim().min(1).max(200), startDate: date, expiryDate: z.union([date, z.literal("")]).default(""), attachment: text, notes: text }).parse(body);
+      const { id: documentId, ...d } = z.object({ id: optionalId, vehicleId: id, kind: z.enum(DOCUMENT_KINDS), provider: text, reference: z.string().trim().min(1).max(200), startDate: date, expiryDate: z.union([date, z.literal("")]).default(""), attachment: text, notes: text }).parse(body);
       if (d.kind === "TARJETA_PROPIEDAD") d.expiryDate = "";
       else if (!d.expiryDate || d.expiryDate < d.startDate) throw new FleetError("Indica un vencimiento posterior o igual al inicio de vigencia.");
-      d.attachment = await verifyAttachment(d.attachment, `fleet/${user.id}/document/`);
-      await db.insert(documents).values(d);
+      await db.transaction(async tx => {
+        const [old] = documentId ? await tx.select().from(documents).where(eq(documents.id, documentId)).for("update").limit(1) : [];
+        if (documentId && !old) throw new FleetError("Documento no encontrado.", 404);
+        if (old) checkVersion("document", old);
+        if (old && body.attachment === undefined) d.attachment = old.attachment;
+        if (!old || d.attachment !== old.attachment) d.attachment = await verifyAttachment(d.attachment, `fleet/${user.id}/document/`);
+        if (documentId) await tx.update(documents).set(d).where(eq(documents.id, documentId));
+        else await tx.insert(documents).values(d);
+      });
     } else if (action === "expense" || action === "bulkExpense" || action === "bulkPreview") {
       const inputRows = action === "expense" ? [body] : z.array(z.record(z.unknown())).min(1).max(5000).parse(body.rows);
       const rows: Array<Omit<Expense, "id">> = [];
       const preview: Array<{ row: number; input: Record<string, unknown>; plate: string; amount: unknown; reference: string; error?: string; warning?: string; assignmentId?: number | null; operation?: "NUEVO" | "ACTUALIZAR" | "SIN_CAMBIOS"; changes?: ImportChange[] }> = [];
       const nativeFuel = inputRows.some(r => (r.source as { format?: string } | null)?.format === "FUEL_ATIO");
       const knownVehicles = await db.select({ id: vehicles.id, plate: vehicles.plate }).from(vehicles);
-      const assignmentRows = nativeFuel || inputRows.some(r => r.assignmentId || r.autoAssign) ? await db.select().from(assignments) : [];
-      const invoiceRows = nativeFuel || inputRows.some(r => r.invoiceId) ? await db.select().from(invoices) : [];
+      let assignmentRows = nativeFuel || inputRows.some(r => r.assignmentId || r.autoAssign) ? await db.select().from(assignments) : [];
+      let invoiceRows = nativeFuel || inputRows.some(r => r.invoiceId) ? await db.select().from(invoices) : [];
       const fingerprints = new Set<string>();
       for (const [rowIndex, input] of inputRows.entries()) {
         const item: (typeof preview)[number] = { row: Number(input._row) || rowIndex + 2, input, plate: knownVehicles.find(v => v.id === Number(input.vehicleId))?.plate || String(input._plate || "Desconocida"), amount: input.amount, reference: String(input.reference || "") };
@@ -213,7 +254,21 @@ export async function POST(request: Request) {
         }
       }
       const synchronize = async (connection: Pick<typeof db, "select" | "insert" | "execute">, persist: boolean) => {
-        if (persist) await connection.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
+        if (persist) {
+          await connection.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
+          assignmentRows = await connection.select().from(assignments);
+          invoiceRows = await connection.select().from(invoices);
+          for (const row of rows) {
+            if (row.assignmentId) {
+              const a = assignmentRows.find(a => a.id === row.assignmentId);
+              if (!a || a.vehicleId !== row.vehicleId || row.date < a.serviceDate || row.date > a.endDate) throw new FleetError("La asignación cambió. Vuelve a validar la carga.", 409);
+            }
+            if (row.invoiceId) {
+              const i = invoiceRows.find(i => i.id === row.invoiceId);
+              if (!i || i.provider.toUpperCase() !== row.provider.toUpperCase()) throw new FleetError("La factura cambió. Vuelve a validar la carga.", 409);
+            }
+          }
+        }
         const query = connection.select().from(expenses).where(inArray(expenses.fingerprint, rows.map(r => r.fingerprint))).orderBy(expenses.id);
         const existing = rows.length ? await (persist ? query.for("update") : query) : [];
         const byFingerprint = new Map(existing.map(e => [e.fingerprint, e]));
@@ -266,14 +321,29 @@ export async function POST(request: Request) {
       const result = await db.transaction(tx => synchronize(tx, true));
       return Response.json({ ok: true, import: result });
     } else if (action === "invoice") {
-      const { amount: totalCents, ...i } = z.object({ provider: z.string().trim().min(1).max(200).transform(s => s.toUpperCase()), number: z.string().trim().min(1).max(100).transform(s => s.toUpperCase()), issueDate: date, dueDate: date, amount, attachment: text, notes: text }).parse(body);
+      const { id: invoiceId, amount: totalCents, ...i } = z.object({ id: optionalId, provider: z.string().trim().min(1).max(200).transform(s => s.toUpperCase()), number: z.string().trim().min(1).max(100).transform(s => s.toUpperCase()), issueDate: date, dueDate: date, amount, attachment: text, notes: text }).parse(body);
       if (i.dueDate < i.issueDate) throw new FleetError("El vencimiento no puede ser anterior a la emisión.");
-      i.attachment = await verifyAttachment(i.attachment, `fleet/${user.id}/invoice/`);
-      await db.insert(invoices).values({ ...i, totalCents });
+      await db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
+        const [old] = invoiceId ? await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).for("update").limit(1) : [];
+        if (invoiceId && !old) throw new FleetError("Factura no encontrada.", 404);
+        if (old) {
+          checkVersion("invoice", old);
+          const paid = await tx.select().from(payments).where(eq(payments.invoiceId, invoiceId!));
+          if (paid.reduce((sum, p) => sum + p.amountCents, 0) > totalCents) throw new FleetError("El total corregido no puede ser menor que los pagos registrados.");
+          const linked = await tx.select().from(expenses).where(eq(expenses.invoiceId, invoiceId!));
+          if (linked.some(e => e.provider.toUpperCase() !== i.provider.toUpperCase())) throw new FleetError("El proveedor debe coincidir con los abastecimientos vinculados.");
+          if (body.attachment === undefined) i.attachment = old.attachment;
+        }
+        if (!old || i.attachment !== old.attachment) i.attachment = await verifyAttachment(i.attachment, `fleet/${user.id}/invoice/`);
+        if (invoiceId) await tx.update(invoices).set({ ...i, totalCents }).where(eq(invoices.id, invoiceId));
+        else await tx.insert(invoices).values({ ...i, totalCents });
+      });
     } else if (action === "payment") {
       const { amount: amountCents, ...p } = z.object({ invoiceId: id, date, amount, reference: z.string().trim().min(1).max(200), attachment: text }).parse(body);
       p.attachment = await verifyAttachment(p.attachment, `fleet/${user.id}/payment/`, true);
       await db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
         await tx.execute(sql`select pg_advisory_xact_lock(7611, ${p.invoiceId})`);
         const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, p.invoiceId)).limit(1);
         if (!invoice) throw new FleetError("Factura no encontrada.", 404);
@@ -284,6 +354,7 @@ export async function POST(request: Request) {
     } else if (action === "linkAssignment") {
       const expenseId = id.parse(body.expenseId), assignmentId = id.parse(body.assignmentId);
       await db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
         const [expense] = await tx.select().from(expenses).where(eq(expenses.id, expenseId)).for("update").limit(1);
         const [assignment] = await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).limit(1);
         if (!expense || !assignment || assignment.vehicleId !== expense.vehicleId || expense.date < assignment.serviceDate || expense.date > assignment.endDate) throw new FleetError("Selecciona una jornada correspondiente a la placa y fecha del gasto.");
@@ -293,6 +364,7 @@ export async function POST(request: Request) {
     } else if (action === "linkInvoice") {
       const expenseId = id.parse(body.expenseId), invoiceId = id.parse(body.invoiceId);
       await db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
         const [expense] = await tx.select().from(expenses).where(eq(expenses.id, expenseId)).for("update").limit(1);
         const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
         if (!expense || expense.kind !== "COMBUSTIBLE" || !invoice || invoice.provider.toUpperCase() !== expense.provider.toUpperCase()) throw new FleetError("Selecciona una factura del mismo proveedor del combustible.");

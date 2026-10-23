@@ -23,3 +23,5 @@
 
 .fl-mileage-controls{display:flex;align-items:end;gap:20px;margin-bottom:18px}.fl-mileage-controls p,.fl-mileage-note{font-size:11px;color:var(--fl-muted)}.fl-mileage-note{padding:16px 20px;line-height:1.65}.fl-mileage-controls .fl-station-filter{min-width:220px}
 @media(max-width:600px){.fl-mileage-controls{align-items:stretch;flex-direction:column;gap:10px}.fl-mileage-note{padding:13px 14px}}
+
+.fl-delete{background:#b42318;color:#fff;border-color:#b42318}.fl-delete:hover{background:#912018}.fl-delete-link{color:#b42318}.fl-text-btn:disabled{color:#9aa4b2;cursor:not-allowed}.fl-row-actions>small{display:block;flex-basis:100%;font-size:9px;color:#8390a2}.fl-modal .fl-pad>p{margin:14px 0}

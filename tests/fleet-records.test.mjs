@@ -34,15 +34,86 @@ function reset(usage='OPERACIONES') {
   const db={
     select(){let table,predicate;const query={from(t){table=t.table;return query;},where(p){predicate=p;return query;},orderBy(){return query;},for(){return query;},limit(){return query;},then(resolve,reject){return Promise.resolve((state.rows[table]||[]).filter(row=>matches(row,predicate))).then(resolve,reject);}};return query;},
     async execute(){},async transaction(run){const previous=structuredClone({rows:state.rows,writes:state.writes});try{return await run(db);}catch(e){state.rows=previous.rows;state.writes=previous.writes;throw e;}},
-    insert(table){return {values(value){let conflict;const query={onConflictDoUpdate(options){conflict=options;return query;},then(resolve,reject){return Promise.resolve().then(()=>{state.writes.push({table:table.table,value,conflict});if(table.table==='fleetExpenses'){const saved=state.rows.fleetExpenses ||= [];for(const next of Array.isArray(value)?value:[value]){const old=saved.find(r=>r.fingerprint===next.fingerprint);if(old&&!conflict)throw Object.assign(new Error('duplicate'),{code:'23505'});if(old){for(const key of Object.keys(conflict.set))old[key]=next[key];}else saved.push({...next,id:state.nextExpenseId++});}}}).then(resolve,reject);}};return query;}};},
+    insert(table){return {values(value){let conflict;const query={onConflictDoUpdate(options){conflict=options;return query;},then(resolve,reject){return Promise.resolve().then(()=>{state.writes.push({table:table.table,value,conflict});if(table.table==='fleetExpenses'){const saved=state.rows.fleetExpenses ||= [];for(const next of Array.isArray(value)?value:[value]){const old=saved.find(r=>r.fingerprint===next.fingerprint);if(old&&!conflict)throw Object.assign(new Error('duplicate'),{code:'23505'});if(old){for(const key of Object.keys(conflict.set))old[key]=next[key];}else saved.push({...next,id:state.nextExpenseId++});}}else{const saved=state.rows[table.table] ||= [];for(const next of Array.isArray(value)?value:[value])saved.push({...next,id:next.id || state.nextExpenseId++});}}).then(resolve,reject);}};return query;}};},
+    delete(table){return {async where(predicate){state.writes.push({table:table.table,deleted:true,predicate});state.rows[table.table]=(state.rows[table.table]||[]).filter(row=>!matches(row,predicate));}};},
     update(table){return {set(value){return {async where(predicate){state.writes.push({table:table.table,value,predicate});for(const row of state.rows[table.table]||[])if(matches(row,predicate))Object.assign(row,value);}};}};},
   };
   state.db=db;globalThis.fleetRecordTest=state;return state;
 }
 const post = body => POST(new Request('https://f1.example/api/fleet',{method:'POST',headers:{origin:'https://f1.example','Content-Type':'application/json'},body:JSON.stringify(body)}));
 const assignment = overrides => ({action:'assignment',vehicleId:10,serviceDate:domain.limaDate(),endDate:domain.limaDate(),expectedStart:'08:00',expectedEnd:'18:00',driverId:2,...overrides});
-function journey(state,overrides={}) {const a={id:20,vehicleId:10,driverId:2,trackingMode:'OPERATIVO',planStatus:'CONFIRMADA',serviceDate:domain.limaDate(),endDate:domain.limaDate(),expectedStart:'08:00',expectedEnd:'18:00',startedAt:'',endedAt:'',coordinator:'Planificado',ceco:'7001',initialKm:null,finalKm:null,...overrides};state.rows.fleetAssignments=[a];return a;}
+function journey(state,overrides={}) {const a={id:20,vehicleId:10,driverId:2,trackingMode:'OPERATIVO',responsibleName:'',reason:'',site:'',finalZone:'',notes:'',createdBy:'original',updatedAt:'2026-10-22T12:00:00Z',startPhotos:[],endPhotos:[],planStatus:'CONFIRMADA',serviceDate:domain.limaDate(),endDate:domain.limaDate(),expectedStart:'08:00',expectedEnd:'18:00',startedAt:'',endedAt:'',coordinator:'Planificado',ceco:'7001',initialKm:null,finalKm:null,...overrides};state.rows.fleetAssignments=[a];return a;}
 const record = overrides => ({action:'record',assignmentId:20,phase:'INICIO',odometer:150,coordinator:'Coordinador real',ceco:'7002',photos:domain.PHOTO_SLOTS.map((slot,i)=>({slot,path:`supabase://kardex-evidencias/fleet/1/assignment-20/INICIO/${i}.jpg`})),...overrides});
+
+const version = (entity, row) => domain.fleetRecordVersion(entity,row);
+const deletion = (entity, row, extra={}) => post({action:'deleteRecord',entity,id:row.id,_version:version(entity,row),confirmed:true,...extra});
+const invoiceRow = (state,extra={}) => {const row={id:30,provider:'PRIMAX',number:'F001-1',issueDate:'2026-10-01',dueDate:'2026-10-31',totalCents:10000,attachment:'supabase://kardex-evidencias/fleet/9/invoice/original.pdf',notes:'Anterior',...extra};state.rows.fleetInvoices=[row];return row;};
+const documentRow = (state,extra={}) => {const row={id:40,vehicleId:10,kind:'SOAT',provider:'Aseguradora',reference:'POLIZA-1',startDate:'2026-01-01',expiryDate:'2027-01-01',attachment:'supabase://kardex-evidencias/fleet/9/document/original.pdf',notes:'Anterior',...extra};state.rows.fleetDocuments=[row];return row;};
+const editInvoice = (row,extra={}) => post({...row,action:'invoice',amount:row.totalCents/100,_version:version('invoice',row),...extra});
+const editDocument = (row,extra={}) => post({...row,action:'document',_version:version('document',row),...extra});
+const editAssignment = (row,extra={}) => post({...row,action:'assignment',_version:version('assignment',row),...extra});
+
+test('Editar un documento conserva su ID y el adjunto de otro administrador sin duplicar la renovación',async()=>{
+ const state=reset(),row=documentRow(state);const response=await editDocument(row,{reference:'POLIZA-CORREGIDA'});
+ assert.equal(response.status,200);assert.equal(state.rows.fleetDocuments.length,1);assert.equal(state.rows.fleetDocuments[0].id,40);assert.equal(state.rows.fleetDocuments[0].reference,'POLIZA-CORREGIDA');assert.equal(state.rows.fleetDocuments[0].attachment,row.attachment);assert.equal(state.storageChecks,0);
+ assert.equal((await editDocument(state.rows.fleetDocuments[0],{attachment:'supabase://kardex-evidencias/fleet/9/document/ajeno.pdf'})).status,400);
+});
+test('Las correcciones de documentos conservan las reglas de cada tipo y detectan cambios concurrentes',async()=>{
+ const state=reset(),row=documentRow(state),original={...row};row.notes='Cambio de otro usuario';
+ assert.equal((await editDocument(original,{reference:'NO APLICAR'})).status,409);assert.equal(state.writes.length,0);
+ assert.equal((await editDocument(row,{kind:'TARJETA_PROPIEDAD'})).status,200);assert.equal(state.rows.fleetDocuments[0].expiryDate,'');
+});
+test('Editar una factura conserva ID, pagos, abastecimientos y adjunto',async()=>{
+ const state=reset(),row=invoiceRow(state);state.rows.fleetPayments=[{id:50,invoiceId:30,amountCents:5000}];state.rows.fleetExpenses=[{id:60,invoiceId:30,provider:'PRIMAX'}];
+ assert.equal((await editInvoice(row,{number:'F001-CORREGIDA',amount:120})).status,200);
+ assert.equal(state.rows.fleetInvoices.length,1);assert.equal(state.rows.fleetInvoices[0].id,30);assert.equal(state.rows.fleetInvoices[0].totalCents,12000);assert.equal(state.rows.fleetInvoices[0].attachment,row.attachment);assert.equal(state.rows.fleetPayments.length,1);assert.equal(state.rows.fleetExpenses[0].invoiceId,30);assert.equal(state.storageChecks,0);
+});
+test('Una factura no admite total menor que lo pagado ni proveedor incompatible con sus despachos',async()=>{
+ const state=reset(),row=invoiceRow(state);state.rows.fleetPayments=[{invoiceId:30,amountCents:5000}];state.rows.fleetExpenses=[{invoiceId:30,provider:'PRIMAX'}];
+ assert.equal((await editInvoice(row,{amount:40})).status,400);assert.equal((await editInvoice(row,{provider:'OTRO'})).status,400);assert.equal(state.writes.length,0);
+});
+test('Una asignación sin Inicio permite corregir sus datos y conserva al creador',async()=>{
+ const state=reset(),row=journey(state);
+ assert.equal((await editAssignment(row,{site:'SITE CORREGIDO',coordinator:'Coordinador real'})).status,200);
+ assert.equal(state.rows.fleetAssignments[0].site,'SITE CORREGIDO');assert.equal(state.rows.fleetAssignments[0].createdBy,'original');assert.equal(state.rows.fleetAssignments.length,1);
+});
+test('Con Inicio se corrige la atribución sin cambiar la identidad, fotos ni kilometraje de la jornada',async()=>{
+ const state=reset(),row=journey(state,{startedAt:'2026-10-22T13:00:00Z',initialKm:150,startPhotos:[{slot:'Frente',path:'original'}]});
+ state.rows.appUsers[0].active=false;state.rows.fleetVehicles[0].status='MANTENIMIENTO';
+ assert.equal((await editAssignment(row,{coordinator:'Corrección',ceco:'9001',site:'Otro SITE'})).status,200);
+ const saved=state.rows.fleetAssignments[0];assert.equal(saved.coordinator,'Corrección');assert.equal(saved.initialKm,150);assert.equal(saved.startedAt,'2026-10-22T13:00:00Z');assert.deepEqual(saved.startPhotos,[{slot:'Frente',path:'original'}]);
+ assert.equal((await editAssignment(saved,{serviceDate:'2026-10-21'})).status,400);assert.equal((await editAssignment(saved,{ceco:''})).status,400);
+});
+test('La asignación rechaza una corrección incompatible con gastos vinculados',async()=>{
+ const state=reset(),row=journey(state);state.rows.fleetExpenses=[{id:60,assignmentId:20,vehicleId:10,date:row.serviceDate}];
+ assert.equal((await editAssignment(row,{serviceDate:'2026-10-23',endDate:'2026-10-23'})).status,400);assert.equal(state.writes.length,0);
+});
+test('Eliminar un documento o una asignación vacía elimina solo la fila seleccionada',async()=>{
+ for(const entity of ['document','assignment','invoice']){const state=reset(),row=entity==='document'?documentRow(state):entity==='assignment'?journey(state):invoiceRow(state);
+ const table={document:'fleetDocuments',assignment:'fleetAssignments',invoice:'fleetInvoices'}[entity];state.rows[table].push({...row,id:999});
+ assert.equal((await deletion(entity,row)).status,200);assert.deepEqual(state.rows[table].map(r=>r.id),[999]);}
+});
+test('Eliminar exige confirmación y versión vigente; no borra un registro modificado',async()=>{
+ const state=reset(),row=documentRow(state);assert.equal((await deletion('document',row,{confirmed:false})).status,400);
+ assert.equal((await deletion('document',row,{_version:'ANTIGUA'})).status,409);assert.equal(state.writes.length,0);
+});
+test('No se eliminan asignaciones iniciadas o con gastos, ni facturas con pagos o abastecimientos',async()=>{
+ for(const mode of ['started','assignmentExpense','invoiceExpense','payment']){const state=reset();let entity,row;
+ if(mode==='started'||mode==='assignmentExpense'){entity='assignment';row=journey(state,{startedAt:mode==='started'?'2026-10-22T13:00:00Z':''});if(mode==='assignmentExpense')state.rows.fleetExpenses=[{assignmentId:20}];}
+ else {entity='invoice';row=invoiceRow(state);if(mode==='payment')state.rows.fleetPayments=[{invoiceId:30,amountCents:1}];else state.rows.fleetExpenses=[{invoiceId:30}];}
+ assert.equal((await deletion(entity,row)).status,400);assert.equal(state.writes.length,0);}
+});
+test('Guardar una carga vuelve a comprobar las vinculaciones si la factura o asignación cambió',async()=>{
+ for(const entity of ['invoice','assignment']) {
+  const state=reset();const row=entity==='invoice'?invoiceRow(state):journey(state);
+  const run=state.db.transaction;state.db.transaction=async callback=>{if(entity==='invoice')row.provider='OTRO';else row.vehicleId=999;return run(callback);};
+  const response=await post({action:'expense',vehicleId:10,date:domain.limaDate(),kind:'COMBUSTIBLE',provider:'PRIMAX',reference:'QA-VALIDACION',fuel:'GLP',quantity:1,unit:'GAL',amount:10,odometer:150,...(entity==='invoice'?{invoiceId:30}:{assignmentId:20})});
+  assert.equal(response.status,409);assert.equal(state.writes.length,0);
+ }
+});
+test('Conductores y solo lectura no pueden editar ni eliminar estos registros',async()=>{
+ for(const role of ['CONDUCTOR','SOLO_LECTURA']){const state=reset(),row=documentRow(state);state.user.role=role;assert.equal((await editDocument(row)).status,403);assert.equal((await deletion('document',row)).status,403);assert.equal(state.writes.length,0);}
+});
 
 test('La tarjeta de propiedad guarda fecha de emisión y no exige vencimiento ni proveedor',async()=>{
   const state=reset();

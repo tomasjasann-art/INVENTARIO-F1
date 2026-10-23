@@ -2,9 +2,9 @@
 "use client";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Camera, CheckCircle2, LoaderCircle, X } from "lucide-react";
-import { PHOTO_SLOTS, type Assignment, type FleetPhoto } from "../../lib/fleet";
+import { PHOTO_SLOTS, type Assignment, type FleetPhoto, type EditableFleetRecord } from "../../lib/fleet";
 
-export type FieldSpec = { name: string; label: string; type?: string; required?: boolean; options?: { value: string; label: string }[]; hint?: string; step?: string; min?: string; operationsOnly?: boolean; administrationOnly?: boolean };
+export type FieldSpec = { name: string; label: string; type?: string; required?: boolean; options?: { value: string; label: string }[]; hint?: string; step?: string; min?: string; operationsOnly?: boolean; administrationOnly?: boolean; disabled?: boolean };
 export type FormSpec = { title: string; action: string; fields: FieldSpec[]; values?: Record<string, unknown>; uploadPurpose?: string; vehicleCecos?: Record<string, string>; vehicleUsages?: Record<string, string> };
 export type Save = (body: Record<string, unknown>) => Promise<boolean>;
 
@@ -58,7 +58,9 @@ export function EntityForm({ spec, onSave, onClose }: { spec: FormSpec; onSave: 
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const administrative = spec.action === "assignment" && spec.vehicleUsages?.[String(values.vehicleId)] === "ADMINISTRACION";
   const propertyCard = spec.action === "document" && values.kind === "TARJETA_PROPIEDAD";
+  const lockedAssignment = spec.action === "assignment" && Boolean(values.startedAt);
   const fields = spec.fields.filter(f => !propertyCard || f.name !== "expiryDate").map(f => {
+    if (lockedAssignment && ["vehicleId", "serviceDate", "endDate", "driverId", "responsibleName", "expectedStart", "expectedEnd", "planStatus", "reason"].includes(f.name)) return { ...f, disabled: true };
     if (spec.action !== "document") return f;
     if (f.name === "reference") return { ...f, label: propertyCard ? "N.º de tarjeta / documento" : "N.º de póliza / certificado" };
     if (propertyCard && f.name === "provider") return { ...f, label: "Entidad emisora (opcional)", required: false };
@@ -71,9 +73,20 @@ export function EntityForm({ spec, onSave, onClose }: { spec: FormSpec; onSave: 
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   }
-  return <Modal title={spec.title} onClose={onClose} busy={busy}><form onSubmit={submit}>{administrative && <p className="fl-muted">Registro administrativo: se agrega sin cuenta de conductor, Inicio, Final ni fotografías. Puedes indicar un responsable de gerencia.</p>}{propertyCard && <p className="fl-muted">La tarjeta de propiedad se registra con su fecha de emisión, sin fecha de vencimiento.</p>}<div className="fl-form-grid">{fields.filter(f => administrative ? !f.operationsOnly : !f.administrationOnly).map(f => <label className={`fl-field ${f.type === "textarea" ? "fl-wide" : ""}`} key={f.name}><span>{f.label}{f.required ? " *" : ""}</span>{f.options ? <select required={f.required} value={String(values[f.name] ?? "")} onChange={e => setValues({ ...values, [f.name]: e.target.value, ...(f.name === "vehicleId" && spec.vehicleCecos ? { ceco: spec.vehicleCecos[e.target.value] || "", driverId: "", responsibleName: "" } : {}) })}><option value="">Seleccionar</option>{f.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select> : f.type === "checkbox" ? <input type="checkbox" checked={Boolean(values[f.name])} onChange={e => setValues({ ...values, [f.name]: e.target.checked })} /> : f.type === "textarea" ? <textarea value={String(values[f.name] ?? "")} onChange={e => setValues({ ...values, [f.name]: e.target.value })} /> : <input type={f.type || "text"} required={f.required} min={f.min} step={f.step || (f.type === "number" ? "any" : undefined)} maxLength={f.type === "text" || !f.type ? 2000 : undefined} value={String(values[f.name] ?? "")} onChange={e => setValues({ ...values, [f.name]: e.target.value })} />}{f.hint && <small>{f.hint}</small>}</label>)}</div>
+  return <Modal title={spec.title} onClose={onClose} busy={busy}><form onSubmit={submit}>{administrative && <p className="fl-muted">Registro administrativo: se agrega sin cuenta de conductor, Inicio, Final ni fotografías. Puedes indicar un responsable de gerencia.</p>}{propertyCard && <p className="fl-muted">La tarjeta de propiedad se registra con su fecha de emisión, sin fecha de vencimiento.</p>}{lockedAssignment && <p className="fl-muted">La jornada ya tiene Inicio. Puedes corregir coordinador, CECO, site, zona final y observaciones. Las fotos y el kilometraje se conservan.</p>}<div className="fl-form-grid">{fields.filter(f => administrative ? !f.operationsOnly : !f.administrationOnly).map(f => <label className={`fl-field ${f.type === "textarea" ? "fl-wide" : ""}`} key={f.name}><span>{f.label}{f.required ? " *" : ""}</span>{f.options ? <select disabled={f.disabled} required={f.required} value={String(values[f.name] ?? "")} onChange={e => setValues({ ...values, [f.name]: e.target.value, ...(f.name === "vehicleId" && spec.vehicleCecos ? { ceco: spec.vehicleCecos[e.target.value] || "", driverId: "", responsibleName: "" } : {}) })}><option value="">Seleccionar</option>{f.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select> : f.type === "checkbox" ? <input disabled={f.disabled} type="checkbox" checked={Boolean(values[f.name])} onChange={e => setValues({ ...values, [f.name]: e.target.checked })} /> : f.type === "textarea" ? <textarea disabled={f.disabled} value={String(values[f.name] ?? "")} onChange={e => setValues({ ...values, [f.name]: e.target.value })} /> : <input disabled={f.disabled} type={f.type || "text"} required={f.required} min={f.min} step={f.step || (f.type === "number" ? "any" : undefined)} maxLength={f.type === "text" || !f.type ? 2000 : undefined} value={String(values[f.name] ?? "")} onChange={e => setValues({ ...values, [f.name]: e.target.value })} />}{f.hint && <small>{f.hint}</small>}</label>)}</div>
     {spec.uploadPurpose && <label className="fl-upload-document"><span>Adjuntar sustento (PDF o imagen){spec.action === "payment" ? " *" : ""}</span><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" disabled={busy} onChange={async e => { const file = e.target.files?.[0]; if (!file) return; setBusy(true); setError(""); try { setAttachment(await uploadFleetFile(file, spec.uploadPurpose!)); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }} />{attachment && <small><CheckCircle2 size={14} /> Archivo cargado</small>}</label>}
-    {error && <p role="alert" className="fl-error">{error}</p>}<footer><button type="button" className="fl-btn" onClick={onClose} disabled={busy}>Cancelar</button><button className="fl-btn fl-primary" disabled={busy || (spec.action === "payment" && !attachment)}>{busy ? "Procesando…" : "Guardar registro"}</button></footer></form></Modal>;
+    {error && <p role="alert" className="fl-error">{error}</p>}<footer><button type="button" className="fl-btn" onClick={onClose} disabled={busy}>Cancelar</button><button className="fl-btn fl-primary" disabled={busy || (spec.action === "payment" && !attachment)}>{busy ? "Procesando…" : spec.values?.id ? "Guardar cambios" : "Guardar registro"}</button></footer></form></Modal>;
+}
+
+export function DeleteRecordForm({ entity, id, version, label, onSave, onClose }: { entity: EditableFleetRecord; id: number; version: string; label: string; onSave: Save; onClose: () => void }) {
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  async function remove(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setBusy(true); setError("");
+    try { if (await onSave({ action: "deleteRecord", entity, id, _version: version, confirmed: true })) onClose(); }
+    catch (err) { setError((err as Error).message); }
+    finally { setBusy(false); }
+  }
+  return <Modal title="Confirmar eliminación" onClose={onClose} busy={busy}><form onSubmit={remove}><div className="fl-pad"><p><strong>{label}</strong></p><p className="fl-muted">Se eliminará este registro. Esta acción no se puede deshacer.</p></div>{error && <p role="alert" className="fl-error">{error}</p>}<footer><button type="button" className="fl-btn" disabled={busy} onClick={onClose}>Cancelar</button><button className="fl-btn fl-delete" disabled={busy}>{busy ? "Eliminando…" : "Sí, eliminar registro"}</button></footer></form></Modal>;
 }
 
 export function JourneyForm({ assignment, plate, phase, coordinators = [], onSave, onClose }: { assignment: Assignment; plate: string; phase: "INICIO" | "FINAL"; coordinators?: string[]; onSave: Save; onClose: () => void }) {
