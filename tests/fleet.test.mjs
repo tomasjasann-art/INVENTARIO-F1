@@ -250,3 +250,11 @@ test('Final conserva la atribución confirmada al Inicio y permite completar jor
   assert.deepEqual(f.journeyWork({coordinator:'Confirmado',ceco:'7001'},'FINAL',{coordinator:'Otro',ceco:'9999'}),{coordinator:'Confirmado',ceco:'7001'});
   assert.deepEqual(f.journeyWork({coordinator:'',ceco:'7001'},'FINAL',{coordinator:'Completar',ceco:'9999'}),{coordinator:'Completar',ceco:'7001'});
 });
+
+test('El histórico suma recorridos en el informe mensual sin fotos, cuentas ni pendientes de Inicio',()=>{
+ const a={id:1,vehicleId:1,trackingMode:'HISTORICO',driverId:null,responsibleName:'Conductor anterior',serviceDate:'2026-09-10',endDate:'2026-09-10',planStatus:'CONFIRMADA',initialKm:100,finalKm:150,startedAt:'',endedAt:'',source:{formId:'1'}};
+ const b={...a,id:2,initialKm:180,finalKm:200};const data=monthlyData([], [a,b]);
+ assert.equal(f.distance(a),50);assert.equal(f.assignmentStatus(a),'Registro histórico');assert.equal(report.vehicleReport(data.vehicles[0],[a,b],[],'JORNADAS').journeyKm,70);
+ const r=monthly.monthlyReport(data,data.vehicles,'2026-09','JORNADAS',30,new Date('2026-10-22T20:00:00Z'));assert.equal(r.totals.km,70);assert.equal(r.assignments.filter(a=>["Sin Inicio","Cierre pendiente"].includes(f.assignmentStatus(a))).length,0);
+ assert.equal(f.matchingAssignments({vehicleId:1,date:'2026-09-10',source:null},[a,b]).length,0);
+});

@@ -399,6 +399,7 @@ export const fleetVehicles = pgTable("fleet_vehicles", {
 }).enableRLS();
 export const fleetAssignments = pgTable("fleet_assignments", {
   id: serial("id").primaryKey(), vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id), driverId: integer("driver_id").references(() => appUsers.id),
+  importKey: text("import_key").unique(), source: jsonb("source").$type<import("../lib/fleet").HistoricalSource | null>(),
   trackingMode: text("tracking_mode").notNull().default("OPERATIVO"), responsibleName: text("responsible_name").notNull().default(""),
   serviceDate: text("service_date").notNull(), endDate: text("end_date").notNull(), expectedStart: text("expected_start").notNull(), expectedEnd: text("expected_end").notNull(),
   coordinator: text("coordinator").notNull().default(""), ceco: text("ceco").notNull().default(""), site: text("site").notNull().default(""), finalZone: text("final_zone").notNull().default(""), notes: text("notes").notNull().default(""),
@@ -406,7 +407,7 @@ export const fleetAssignments = pgTable("fleet_assignments", {
   initialKm: doublePrecision("initial_km"), finalKm: doublePrecision("final_km"), startedAt: text("started_at").notNull().default(""), endedAt: text("ended_at").notNull().default(""),
   startPhotos: jsonb("start_photos").$type<import("../lib/fleet").FleetPhoto[]>().notNull().default([]), endPhotos: jsonb("end_photos").$type<import("../lib/fleet").FleetPhoto[]>().notNull().default([]),
   startRegisteredBy: text("start_registered_by").notNull().default(""), endRegisteredBy: text("end_registered_by").notNull().default(""), startNotes: text("start_notes").notNull().default(""), endNotes: text("end_notes").notNull().default(""), createdBy: text("created_by").notNull(), updatedAt: text("updated_at").notNull(),
-}, t => [uniqueIndex("fleet_vehicle_daily_assignment").on(t.vehicleId, t.serviceDate), index("fleet_assignment_driver_date").on(t.driverId, t.serviceDate)]).enableRLS();
+}, t => [uniqueIndex("fleet_vehicle_daily_assignment").on(t.vehicleId, t.serviceDate).where(sql`${t.trackingMode} <> 'HISTORICO'`), index("fleet_assignment_driver_date").on(t.driverId, t.serviceDate)]).enableRLS();
 export const fleetInvoices = pgTable("fleet_invoices", {
   id: serial("id").primaryKey(), provider: text("provider").notNull(), number: text("number").notNull(), issueDate: text("issue_date").notNull(), dueDate: text("due_date").notNull(), totalCents: integer("total_cents").notNull(), attachment: text("attachment").notNull().default(""), notes: text("notes").notNull().default(""),
 }, t => [uniqueIndex("fleet_invoice_provider_number").on(t.provider, t.number)]).enableRLS();

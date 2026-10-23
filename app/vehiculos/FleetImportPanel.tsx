@@ -4,10 +4,11 @@ import { Download, Upload } from "lucide-react";
 import { type FleetData, type ImportChange } from "../../lib/fleet";
 import { FLEET_WORKBOOK_OPTIONS, parseFleetImport } from "../../lib/fleet-import";
 import { Badge, Empty, Table, money } from "./FleetUI";
+import FleetHistoryImport from "./FleetHistoryImport";
 import type { Save } from "./FleetForms";
 
 type PreviewRow = { row: number; input: Record<string, unknown>; error?: string; warning?: string; plate?: string; amount?: number; reference?: string; assignmentId?: number | null; operation?: "NUEVO" | "ACTUALIZAR" | "SIN_CAMBIOS"; changes?: ImportChange[] };
-export function ImportPanel({ data, onSave, manager }: { data: FleetData; onSave: Save; manager: boolean }) {
+function ExpenseImportPanel({ data, onSave, manager }: { data: FleetData; onSave: Save; manager: boolean }) {
   const [kind, setKind] = useState("COMBUSTIBLE"), [provider, setProvider] = useState(""), [unit, setUnit] = useState("GAL");
   const [rows, setRows] = useState<PreviewRow[]>([]), [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [info, setInfo] = useState("");
@@ -56,4 +57,9 @@ export function ImportPanel({ data, onSave, manager }: { data: FleetData; onSave
     <Table heads={["Fila", "Placa / fecha / hora", "Estación / plaza", "Comprobante", "Combustible / volumen", "Precio unitario", "Importe", "Odómetro", "Jornada", "Acción / cambios"]} rows={rows.slice(page * pageSize, (page + 1) * pageSize).map(r => { const source = r.input.source as { time?: string; station?: string; voucherDate?: string } | null; return [r.row, <><strong>{r.plate}</strong><small>{String(r.input.date)} {source?.time}</small></>, source?.station || String(r.input.collector || "—"), <>{r.reference}<small>{source?.voucherDate}</small></>, kind === "COMBUSTIBLE" ? <>{String(r.input.fuel)}<small>{String(r.input.quantity)} {String(r.input.unit)}</small></> : "—", kind === "COMBUSTIBLE" ? String(r.input.unitPrice) : "—", Number.isFinite(Number(r.amount)) ? money(Math.round(Number(r.amount) * 100)) : "—", r.input.odometer == null ? "—" : String(r.input.odometer), r.assignmentId ? `#${r.assignmentId}` : "Pendiente", r.error || <><Badge>{r.operation === "ACTUALIZAR" ? "Actualizar" : r.operation === "SIN_CAMBIOS" ? "Sin cambios" : "Nuevo"}</Badge>{r.changes?.map(c => <small key={c.field}>{c.label}: {showChange(c.field, c.before)} → {showChange(c.field, c.after)}</small>)}{r.warning && <small>{r.warning}</small>}</>]; })} />
     {rows.length > pageSize && <div className="fl-import-summary"><button className="fl-btn" disabled={page === 0 || busy} onClick={() => setPage(page - 1)}>Anterior</button><span>Filas {page * pageSize + 1}–{Math.min((page + 1) * pageSize, rows.length)} de {rows.length}</span><button className="fl-btn" disabled={(page + 1) * pageSize >= rows.length || busy} onClick={() => setPage(page + 1)}>Siguiente</button></div>}</>}
   </> : <Empty text="La carga masiva está reservada para Logística." />}</section>;
+}
+
+export function ImportPanel(props: { data: FleetData; onSave: Save; manager: boolean }) {
+  const [historical, setHistorical] = useState(false);
+  return <><div className="fl-head-actions fl-import-mode"><button className={`fl-btn ${!historical ? "fl-primary" : ""}`} aria-pressed={!historical} onClick={() => setHistorical(false)}>Combustible y peajes</button><button className={`fl-btn ${historical ? "fl-primary" : ""}`} aria-pressed={historical} onClick={() => setHistorical(true)}>Seguimiento histórico</button></div>{historical ? <FleetHistoryImport {...props} /> : <ExpenseImportPanel {...props} />}</>;
 }

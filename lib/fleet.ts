@@ -1,7 +1,8 @@
 export const PHOTO_SLOTS = ["Frente", "Posterior", "Lateral izquierdo", "Lateral derecho", "Tablero / kilometraje", "Interior", "Control de recepción y entrega"] as const;
 export type FleetPhoto = { slot: string; path: string; url?: string };
 export type Vehicle = { id: number; plate: string; ceco: string; usage: string; tenure: string; category: string; type: string; brand: string; model: string; engine: string; chassis: string; color: string; titleDate: string; year: number | null; status: string; target: number; initialKm: number; notes: string };
-export type Assignment = { id: number; vehicleId: number; driverId: number | null; trackingMode: string; responsibleName: string; serviceDate: string; endDate: string; expectedStart: string; expectedEnd: string; coordinator: string; ceco: string; site: string; finalZone: string; notes: string; planStatus: string; reason: string; initialKm: number | null; finalKm: number | null; startedAt: string; endedAt: string; startPhotos: FleetPhoto[]; endPhotos: FleetPhoto[]; startNotes: string; endNotes: string; startRegisteredBy?: string; endRegisteredBy?: string; createdBy: string; updatedAt: string };
+export type HistoricalSource = { format: "HISTORICO"; formId: string; formStarted: string; formEnded: string; monthLabel: string; collector: string; reportedKm: number | null; file: string; sheet: string; row: number };
+export type Assignment = { id: number; vehicleId: number; driverId: number | null; trackingMode: string; responsibleName: string; serviceDate: string; endDate: string; expectedStart: string; expectedEnd: string; coordinator: string; ceco: string; site: string; finalZone: string; notes: string; planStatus: string; reason: string; initialKm: number | null; finalKm: number | null; startedAt: string; endedAt: string; startPhotos: FleetPhoto[]; endPhotos: FleetPhoto[]; startNotes: string; endNotes: string; startRegisteredBy?: string; endRegisteredBy?: string; createdBy: string; updatedAt: string; importKey?: string | null; source?: HistoricalSource | null };
 export type ImportChange = { field: string; label: string; before: string | number | null; after: string | number | null };
 export type FuelCorrection = { at: string; by: string; changes: ImportChange[] };
 export type ExpenseSource = { format: "FUEL_ATIO" | "TOLL_REPORT"; transactionId: string; time: string; station: string; lane: string; voucher: string; voucherDate: string; file: string; sheet: string; row: number; corrections?: FuelCorrection[] };
@@ -20,6 +21,7 @@ export function normalizedPlate(value: unknown) { return String(value ?? "").toU
 export function minutesFromTime(value: string) { const m = /^(\d{1,4}):([0-5]\d)$/.exec(value.trim()); if (!m) throw new Error("Ingresa el ralentí como horas:minutos (ejemplo 01:35)."); return Number(m[1]) * 60 + Number(m[2]); }
 export function timeFromMinutes(minutes: number) { return `${Math.floor(minutes / 60).toString().padStart(2, "0")}:${(minutes % 60).toString().padStart(2, "0")}`; }
 export function assignmentStatus(a: Assignment, now = new Date()) {
+  if (isHistorical(a)) return "Registro histórico";
   if (isAdministrative(a)) return "Registro administrativo";
   if (["NO_SALIO", "CANCELADA"].includes(a.planStatus)) return a.planStatus === "NO_SALIO" ? "No salió" : "Cancelada";
   if (a.planStatus === "POR_CONFIRMAR" && !a.startedAt) return "Por confirmar";
@@ -31,7 +33,7 @@ export const DOCUMENT_KINDS = ["SOAT", "REVISION_TECNICA", "SEGURO", "TARJETA_PR
 export const DOCUMENT_LABELS: Record<string, string> = { SOAT: "SOAT", REVISION_TECNICA: "Revisión técnica", SEGURO: "Seguro", TARJETA_PROPIEDAD: "Tarjeta de propiedad" };
 export type EditableFleetRecord = "assignment" | "document" | "invoice";
 export function fleetRecordVersion(kind: EditableFleetRecord, record: Record<string, unknown>) {
-  const fields = kind === "assignment" ? ["id", "vehicleId", "driverId", "trackingMode", "responsibleName", "serviceDate", "endDate", "expectedStart", "expectedEnd", "coordinator", "ceco", "site", "finalZone", "notes", "planStatus", "reason", "startedAt", "endedAt", "initialKm", "finalKm", "updatedAt"] : kind === "document" ? ["id", "vehicleId", "kind", "provider", "reference", "startDate", "expiryDate", "attachment", "notes"] : ["id", "provider", "number", "issueDate", "dueDate", "totalCents", "attachment", "notes"];
+  const fields = kind === "assignment" ? ["id", "vehicleId", "driverId", "trackingMode", "responsibleName", "serviceDate", "endDate", "expectedStart", "expectedEnd", "coordinator", "ceco", "site", "finalZone", "notes", "planStatus", "reason", "startedAt", "endedAt", "initialKm", "finalKm", "updatedAt", "source"] : kind === "document" ? ["id", "vehicleId", "kind", "provider", "reference", "startDate", "expiryDate", "attachment", "notes"] : ["id", "provider", "number", "issueDate", "dueDate", "totalCents", "attachment", "notes"];
   return JSON.stringify(fields.map(field => record[field] ?? null));
 }
 export function documentStatus(d: FleetDocument, today = limaDate()) {
@@ -41,9 +43,16 @@ export function documentStatus(d: FleetDocument, today = limaDate()) {
   return days <= 30 ? `Vence en ${days} días` : "Vigente";
 }
 export function gallons(e: Expense) { return e.kind !== "COMBUSTIBLE" ? 0 : e.unit === "GAL" ? e.quantity : e.unit === "L" ? e.quantity / 3.785411784 : 0; }
-export function distance(a: Assignment) { return a.endedAt && a.initialKm !== null && a.finalKm !== null ? Math.max(0, a.finalKm - a.initialKm) : 0; }
+export function distance(a: Assignment) { return (a.endedAt || isHistorical(a)) && a.initialKm !== null && a.finalKm !== null ? Math.max(0, a.finalKm - a.initialKm) : 0; }
 export function canManageFleet(role: string) { return role === "ADMINISTRADOR" || role === "LOGISTICA"; }
 export function isAdministrative(a: Pick<Assignment, "trackingMode">) { return a.trackingMode === "ADMINISTRATIVO"; }
+export function isHistorical(a: Pick<Assignment, "trackingMode">) { return a.trackingMode === "HISTORICO"; }
+export function historicalValues(a: Pick<Assignment, "vehicleId" | "serviceDate" | "responsibleName" | "initialKm" | "finalKm" | "coordinator" | "ceco" | "site" | "source">) {
+  return [a.vehicleId, a.serviceDate, a.responsibleName, a.initialKm, a.finalKm, a.coordinator, a.ceco, a.site, a.source?.collector || ""];
+}
+export function historicalIdentity(a: Parameters<typeof historicalValues>[0]) {
+  return a.source?.formId ? ["HISTORICO_FORM", a.vehicleId, a.source.formId] : ["HISTORICO_FILA", ...historicalValues(a)];
+}
 export function activeDrivers(users: FleetUser[]) { return users.filter(u => u.role === "CONDUCTOR" && u.active !== false); }
 export function expenseIdentity(e: Pick<Expense, "vehicleId" | "date" | "kind" | "provider" | "reference" | "source">) {
   const clean = (v: string) => v.trim().replace(/\s+/g, " ").toUpperCase();
@@ -55,6 +64,7 @@ export function matchingAssignments(e: Pick<Expense, "vehicleId" | "date" | "sou
   const at = e.source?.time ? `${e.date}T${e.source.time}` : "";
   const local = (value: string) => new Date(Date.parse(value) - 5 * 3600000).toISOString().slice(0, 19);
   return assignments.filter(a => {
+    if (isHistorical(a)) return false;
     if (a.vehicleId !== e.vehicleId || a.planStatus !== "CONFIRMADA" || e.date < a.serviceDate || e.date > a.endDate) return false;
     if (isAdministrative(a) || !at) return true;
     const start = a.startedAt ? local(a.startedAt) : `${a.serviceDate}T${a.expectedStart}:00`;
@@ -65,6 +75,7 @@ export function matchingAssignments(e: Pick<Expense, "vehicleId" | "date" | "sou
 export function odometerReview(e: Pick<Expense, "kind" | "odometer">, a?: Assignment) {
   if (e.kind !== "COMBUSTIBLE" || e.odometer === null) return "";
   if (!a) return "Sin jornada vinculada";
+  if (isHistorical(a)) return e.odometer < (a.initialKm ?? 0) || e.odometer > (a.finalKm ?? Infinity) ? "Revisar: fuera del rango histórico" : "Dentro del rango histórico";
   if (isAdministrative(a)) return "Administración: sin marcación";
   if (a.initialKm === null) return "Inicio pendiente de registrar";
   if (e.odometer < a.initialKm || (a.finalKm !== null && e.odometer > a.finalKm)) return `Revisar: fuera del rango ${a.initialKm}–${a.finalKm ?? "Final pendiente"} km`;

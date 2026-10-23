@@ -1,4 +1,4 @@
-import { distance, gallons, isAdministrative, type Assignment, type Expense, type Vehicle } from "./fleet";
+import { isHistorical, distance, gallons, isAdministrative, type Assignment, type Expense, type Vehicle } from "./fleet";
 
 export type DistanceSource = "COMBUSTIBLE" | "JORNADAS";
 export type OdometerIssue = { reading: Expense; previous?: Expense; reason: string };
@@ -31,7 +31,7 @@ export function fuelDistance(expenses: Expense[]) {
 
 export function vehicleReport(vehicle: Vehicle, assignments: Assignment[], expenses: Expense[], source: DistanceSource) {
   const journeys = assignments.filter(a => a.vehicleId === vehicle.id && !isAdministrative(a));
-  const closed = journeys.filter(a => a.endedAt && a.initialKm !== null && a.finalKm !== null && a.finalKm >= a.initialKm);
+  const closed = journeys.filter(a => (a.endedAt || isHistorical(a)) && a.initialKm !== null && a.finalKm !== null && a.finalKm >= a.initialKm);
   const journeyKm = closed.length ? closed.reduce((sum, a) => sum + distance(a), 0) : null;
   const allExpenses = expenses.filter(e => e.vehicleId === vehicle.id);
   const fuel = allExpenses.filter(e => e.kind === "COMBUSTIBLE");

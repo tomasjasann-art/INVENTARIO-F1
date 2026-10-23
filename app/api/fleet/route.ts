@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getDb } from "../../../db";
 import { appUsers, coordinators, fleetVehicles as vehicles, fleetAssignments as assignments, fleetDocuments as documents, fleetExpenses as expenses, fleetInvoices as invoices, fleetPayments as payments, fleetIdle as idle, fleetStations as stations } from "../../../db/schema";
 import { fleetAccess, fleetFailure, FleetError, sameOrigin, verifyAttachment, verifyPhotos } from "../../../lib/fleet-server";
-import { fleetRecordVersion, DOCUMENT_KINDS, expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate, type Expense, type ImportChange } from "../../../lib/fleet";
+import { historicalIdentity, historicalValues, isHistorical, fleetRecordVersion, DOCUMENT_KINDS, expenseIdentity, matchingAssignments, odometerReview, isAdministrative, journeyWork, limaDate, minutesFromTime, normalizedPlate, type Expense, type ImportChange } from "../../../lib/fleet";
 import { fuelImportChanges, fuelImportPatch, fuelImportValues } from "../../../lib/fleet-sync";
 import { resolveEvidenceImage } from "../../../lib/supabase-storage";
 
@@ -24,6 +24,12 @@ const assignmentSchema = z.object({ id: optionalId, vehicleId: id, driverId: opt
 const sourceSchema = z.object({ format: z.enum(["FUEL_ATIO", "TOLL_REPORT"]), transactionId: z.string().trim().max(200).default(""), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/), station: z.string().trim().min(1).max(300), lane: z.string().trim().max(100).default(""), voucher: z.string().trim().max(200).default(""), voucherDate: z.union([date, z.literal("")]).default(""), file: z.string().max(200), sheet: z.string().max(100), row: z.number().int().positive() });
 const expenseSchema = z.object({ vehicleId: id, assignmentId: optionalId, date, kind: z.enum(["COMBUSTIBLE", "PEAJE", "MANTENIMIENTO"]), amount: amount, quantity: z.coerce.number().min(0).max(1_000_000).default(0), unit: z.enum(["GAL", "L", "M3"]).default("GAL"), fuel: text, unitPrice: z.coerce.number().min(0).max(1_000_000).default(0), odometer: optionalKm, provider: text, collector: text, reference: z.string().trim().min(1, "Ingresa el número de servicio o comprobante").max(200), invoiceId: optionalId, maintenanceType: text, nextKm: optionalKm, attachment: text, notes: text, source: sourceSchema.nullable().default(null) });
 const stationSchema = z.object({ id: optionalId, name: z.string().trim().min(1).max(200), provider: text, address: z.string().trim().min(1).max(500), district: text, city: text, region: text, fuels: text, hours: text, restrictions: text, latitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-90).max(90).nullable()), longitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-180).max(180).nullable()), verified: z.boolean(), active: z.boolean().default(true) });
+const historySourceSchema = z.object({ format: z.literal("HISTORICO"), formId: z.string().trim().max(200).default(""), formStarted: text, formEnded: text, monthLabel: text, collector: text, reportedKm: km.nullable().default(null), file: z.string().min(1).max(200), sheet: z.string().min(1).max(100), row: z.number().int().positive() });
+const historyKm = z.preprocess(v => v === null || v === undefined || v === "" ? undefined : v, km);
+const historySchema = z.object({ vehicleId: id, serviceDate: date.refine(d => d < limaDate(), "El histórico debe ser anterior a hoy"), responsibleName: z.string().trim().min(1).max(200), initialKm: historyKm, finalKm: historyKm, coordinator: text, ceco: text, site: text, notes: text, source: historySourceSchema }).superRefine((a, ctx) => {
+  if (a.finalKm < a.initialKm) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "El kilometraje final es menor que el inicial" });
+  if (a.source.reportedKm !== null && Math.abs(a.finalKm - a.initialKm - a.source.reportedKm) > .1) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Km recorridos no coincide con Final menos Inicial" });
+});
 const importVersion = (e: Expense) => createHash("sha256").update(JSON.stringify([e.id, fuelImportValues(e), e.assignmentId, e.invoiceId, e.attachment, e.notes, e.source?.corrections?.length || 0])).digest("hex");
 
 // Always return a JSON error before the platform or browser times out.
@@ -82,7 +88,64 @@ export async function POST(request: Request) {
     const checkVersion = (kind: "assignment" | "document" | "invoice", record: Record<string, unknown>) => {
       if (body._version !== fleetRecordVersion(kind, record)) throw new FleetError("El registro cambió. Actualiza la pantalla y vuelve a abrirlo antes de guardar o eliminar.", 409);
     };
-    if (action === "deleteRecord") {
+    if (action === "historyPreview" || action === "historyImport") {
+      const inputs = z.array(z.record(z.unknown())).min(1).max(5000).parse(body.rows);
+      const run = async (tx: Pick<typeof db, "select" | "insert" | "execute">, persist: boolean) => {
+        if (persist) await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
+        const known = await tx.select().from(vehicles), previous = await tx.select().from(assignments);
+        const keys = new Map<string, string>(), additions: Array<typeof assignments.$inferInsert> = [];
+        const preview: Array<{ row: number; input: Record<string, unknown>; plate: string; operation?: string; warning?: string; error?: string }> = [];
+        let unchanged = 0, duplicates = 0;
+        for (const input of inputs) {
+          const item: (typeof preview)[number] = { row: Number(input._row || (input.source as { row?: number })?.row), input, plate: known.find(v => v.id === Number(input.vehicleId))?.plate || String(input._plate || "") };
+          try {
+            if (input._error) throw new FleetError(String(input._error));
+            const a = historySchema.parse(input);
+            if (!known.some(v => v.id === a.vehicleId)) throw new FleetError("La placa no está registrada.");
+            const key = createHash("sha256").update(JSON.stringify(historicalIdentity(a))).digest("hex"), values = JSON.stringify(historicalValues(a));
+            if (keys.has(key)) {
+              if (keys.get(key) !== values) throw new FleetError("El mismo formulario aparece con datos diferentes. Revisa ambas filas.");
+              item.operation = "REPETIDO"; duplicates++;
+            } else {
+              keys.set(key, values);
+              const old = previous.find(p => p.importKey === key);
+              if (old) {
+                if (JSON.stringify(historicalValues(old)) !== values) throw new FleetError("Este formulario ya se cargó con otros datos. Corrige el registro desde Seguimiento diario.");
+                item.operation = "SIN_CAMBIOS"; unchanged++;
+              } else {
+                if (previous.some(p => !isHistorical(p) && p.vehicleId === a.vehicleId && p.serviceDate <= a.serviceDate && p.endDate >= a.serviceDate)) throw new FleetError("Este día ya tiene una asignación del sistema. Revisa el seguimiento para evitar contarlo dos veces.");
+                item.operation = "NUEVO";
+                additions.push({ ...a, importKey: key, driverId: null, trackingMode: "HISTORICO", endDate: a.serviceDate, expectedStart: "", expectedEnd: "", planStatus: "CONFIRMADA", reason: "", finalZone: "", startedAt: "", endedAt: "", startPhotos: [], endPhotos: [], createdBy: user.actor, updatedAt: new Date().toISOString() });
+              }
+            }
+            if (!a.coordinator || !a.ceco || !a.site) item.warning = "El archivo tiene datos de trabajo incompletos; se conservan en blanco.";
+            item.input = { ...a, _row: item.row, _plate: item.plate };
+          } catch (err) { item.error = err instanceof z.ZodError ? err.issues.map(i => i.message).join(" · ") : (err as Error).message; }
+          preview.push(item);
+        }
+        if (persist) {
+          if (preview.some(p => p.error)) throw new FleetError("La carga contiene observaciones. Vuelve a validar y corrige las filas observadas antes de importar.");
+          for (let index = 0; index < additions.length; index += 200) await tx.insert(assignments).values(additions.slice(index, index + 200));
+        }
+        return { rows: preview, import: { inserted: additions.length, updated: 0, unchanged, duplicates } };
+      };
+      if (action === "historyPreview") return Response.json(await run(db, false));
+      return Response.json({ ok: true, ...(await db.transaction(tx => run(tx, true))) });
+    } else if (action === "historyAssignment") {
+      const aId = id.parse(body.id);
+      await db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
+        const [old] = await tx.select().from(assignments).where(eq(assignments.id, aId)).for("update").limit(1);
+        if (!old || !isHistorical(old) || !old.source) throw new FleetError("Seguimiento histórico no encontrado.", 404);
+        checkVersion("assignment", old);
+        const a = historySchema.parse({ ...body, source: { ...old.source, collector: text.parse(body.collector), reportedKm: null } });
+        const [v] = await tx.select().from(vehicles).where(eq(vehicles.id, a.vehicleId)).limit(1);
+        if (!v) throw new FleetError("Placa no registrada.");
+        const linked = await tx.select().from(expenses).where(eq(expenses.assignmentId, aId));
+        if (linked.some(e => e.vehicleId !== a.vehicleId || e.date !== a.serviceDate)) throw new FleetError("La corrección no corresponde a la placa y fecha de los gastos vinculados.");
+        await tx.update(assignments).set({ ...a, source: { ...old.source, collector: a.source.collector }, endDate: a.serviceDate, updatedAt: new Date().toISOString() }).where(eq(assignments.id, aId));
+      });
+    } else if (action === "deleteRecord") {
       const { entity, id: recordId } = z.object({ entity: z.enum(["assignment", "document", "invoice"]), id, confirmed: z.literal(true) }).parse(body);
       await db.transaction(async tx => {
         await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
@@ -127,6 +190,7 @@ export async function POST(request: Request) {
         const [existing] = assignmentId ? await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).for("update").limit(1) : [];
         if (assignmentId && !existing) throw new FleetError("Asignación no encontrada.", 404);
         if (existing) checkVersion("assignment", existing);
+        if (existing && isHistorical(existing)) throw new FleetError("Usa el formulario de edición de seguimiento histórico.");
         if (!administrative && !existing?.startedAt) {
           if (!a.driverId) throw new FleetError("Selecciona una cuenta activa de conductor.");
           const [driver] = await tx.select().from(appUsers).where(and(eq(appUsers.id, a.driverId), eq(appUsers.active, true), eq(appUsers.role, "CONDUCTOR"))).limit(1);
@@ -154,6 +218,7 @@ export async function POST(request: Request) {
       const aId = id.parse(body.assignmentId), phase = z.enum(["INICIO", "FINAL"]).parse(body.phase), odometer = km.parse(body.odometer);
       const [a] = await db.select().from(assignments).where(eq(assignments.id, aId)).limit(1);
       if (!a || (!user.manager && a.driverId !== user.id)) throw new FleetError("Esta asignación no te corresponde.", 403);
+      if (isHistorical(a)) throw new FleetError("El histórico no registra Inicio, Final ni fotos desde la app.");
       if (isAdministrative(a) || !a.driverId) throw new FleetError("El registro administrativo no requiere Inicio, Final ni fotografías.");
       const photos = await verifyPhotos(body.photos, `fleet/${user.id}/assignment-${aId}/${phase}/`);
       await db.transaction(async tx => {

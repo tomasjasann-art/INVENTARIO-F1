@@ -7,7 +7,9 @@ const url = text => `data:text/javascript;base64,${Buffer.from(text).toString('b
 const compile = source => ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const domainUrl = url(compile(await readFile(new URL('../lib/fleet.ts',import.meta.url),'utf8')));
 const f = await import(domainUrl);
-const parser = await import(url(compile(await readFile(new URL('../lib/fleet-import.ts',import.meta.url),'utf8')).replace('"./fleet"',JSON.stringify(domainUrl))));
+const parserUrl = url(compile(await readFile(new URL('../lib/fleet-import.ts',import.meta.url),'utf8')).replace('"./fleet"',JSON.stringify(domainUrl)));
+const parser = await import(parserUrl);
+const history = await import(url(compile(await readFile(new URL('../lib/fleet-history.ts',import.meta.url),'utf8')).replace('"./fleet"',JSON.stringify(domainUrl)).replace('"./fleet-import"',JSON.stringify(parserUrl))));
 const fuelHeaders=['Fecha Controlador','Hora','Sitio','Combustible','Volumen Despachado','Precio unitario Despachado','Monto Despachado','Odometro','Codigo Vehiculo','Numero de Comprobante ERP','Numero de Comprobante','Id Transaccion'];
 const fuelRow=['2026/10/22','07:18:45','Estación de prueba','GLP-G',6.337,6.99,44.30,'17811','QA-1001','','TICKET-1','transaction-1'];
 const vehicles=[{id:10,plate:'QA1001'}];
@@ -79,4 +81,17 @@ test('La atribución automática requiere una única jornada y respeta fecha y h
 test('Odómetro de abastecimiento se compara sin modificar el Inicio o Final',()=>{
   const a={trackingMode:'OPERATIVO',initialKm:100,finalKm:200};const e={kind:'COMBUSTIBLE',odometer:150};
   assert.equal(f.odometerReview(e,a),'Dentro del rango de la jornada');assert.match(f.odometerReview({...e,odometer:250},a),/fuera del rango/);assert.match(f.odometerReview(e,{...a,finalKm:null}),/Final pendiente/);assert.equal(f.odometerReview(e),'Sin jornada vinculada');assert.equal(a.initialKm,100);assert.equal(a.finalKm,200);
+});
+
+const historicalHeaders=['Id','Hora de inicio','Hora de finalización','Fecha','Mes','Placa del Vehiculo','Kilometraje Inicial','Kilometraje Final','Conductores','Coordinador','CECO','SITE','COLECTOR','Km Recorridos'];
+const historicalRow=[101,'10/2/26 8:00:00','10/2/26 8:01:00','2026-09-30','Set','QA1001','100','160','Conductor\u00a0QA','','','','Referencia',60];
+test('El histórico respeta Fecha, conserva referencias del formulario y excluye octubre',()=>{
+ const r=history.parseFleetHistory([{name:'Anterior',rows:[historicalHeaders,historicalRow,[...historicalRow.slice(0,3),'2026-10-01',...historicalRow.slice(4)]]}],vehicles,{file:'control.xlsx',from:'2026-01-01',to:'2026-09-30'});
+ assert.equal(r.inputs.length,1);assert.equal(r.excluded,1);assert.equal(r.inputs[0].serviceDate,'2026-09-30');assert.equal(r.inputs[0].responsibleName,'Conductor QA');assert.equal(r.inputs[0].source.formStarted,'10/2/26 8:00:00');assert.equal(r.inputs[0].initialKm,100);assert.equal(r.inputs[0].source.collector,'Referencia');assert.equal(r.inputs[0].coordinator,'');
+});
+test('El histórico observa errores de fecha y kilómetros en lugar de sustituirlos por cero',()=>{
+ const invalid=[...historicalRow];invalid[3]='2026-02-30';invalid[6]='incorrecto';
+ const parsed=history.parseFleetHistory([{name:'Anterior',rows:[historicalHeaders,invalid]}],vehicles,{file:'control.xlsx',from:'2026-01-01',to:'2026-09-30'});
+ assert.match(parsed.inputs[0]._error,/Fecha inválida/);assert.match(parsed.inputs[0]._error,/kilometraje/);assert.equal(parsed.inputs[0].initialKm,null);
+ const mismatch=[...historicalRow];mismatch[13]=61;assert.match(history.parseFleetHistory([{name:'Anterior',rows:[historicalHeaders,mismatch]}],vehicles,{file:'control.xlsx',from:'2026-01-01',to:'2026-09-30'}).inputs[0]._error,/no coincide/);
 });

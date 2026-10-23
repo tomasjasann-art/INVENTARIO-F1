@@ -127,6 +127,13 @@
       "when": 1792709817679,
       "tag": "0017_vehicle_property_card",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792729861449,
+      "tag": "0018_historical_fleet_journeys",
+      "breakpoints": true
     }
   ]
 }

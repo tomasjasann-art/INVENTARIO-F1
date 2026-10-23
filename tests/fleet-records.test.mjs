@@ -283,3 +283,33 @@ test('Los peajes repetidos conservan su control de duplicados',async()=>{
   const state=reset(),input=expense();state.rows.fleetExpenses=[storedFuel(input)];
   const rows=await validatedInputs([input]);assert.match(rows[0].error,/ya fue cargado/);assert.equal(state.writes.length,0);
 });
+
+const historyRow = extra => ({vehicleId:10,serviceDate:'2026-09-10',responsibleName:'Conductor histórico',initialKm:100,finalKm:150,coordinator:'',ceco:'',site:'',source:{format:'HISTORICO',formId:'H-1',formStarted:'2026-09-11 08:00',formEnded:'2026-09-11 08:01',monthLabel:'Set',collector:'Referencia',reportedKm:50,file:'control.xlsx',sheet:'Anterior',row:2},...extra});
+test('La carga histórica conserva dos viajes del mismo día, omite repetidos y se puede repetir sin duplicados',async()=>{
+ const state=reset();const a=historyRow(),b=historyRow({initialKm:150,finalKm:190,source:{...a.source,formId:'H-2',reportedKm:40,row:3}}),input=[a,{...a,source:{...a.source,row:4}},b];
+ const preview=await (await post({action:'historyPreview',rows:input})).json();assert.deepEqual(preview.import,{inserted:2,updated:0,unchanged:0,duplicates:1});assert.equal(state.writes.length,0);
+ const response=await post({action:'historyImport',rows:input});assert.equal(response.status,200);assert.equal(state.rows.fleetAssignments.length,2);
+ for(const saved of state.rows.fleetAssignments){assert.equal(saved.trackingMode,'HISTORICO');assert.equal(saved.driverId,null);assert.equal(saved.startedAt,'');assert.equal(saved.endedAt,'');assert.deepEqual(saved.startPhotos,[]);assert.equal(saved.responsibleName,'Conductor histórico');}
+ assert.equal((await (await post({action:'historyImport',rows:input})).json()).import.inserted,0);assert.equal(state.rows.fleetAssignments.length,2);
+});
+test('El histórico no sustituye datos corregidos, no ocupa una jornada real y no carga parcialmente filas inválidas',async()=>{
+ const state=reset(),a=historyRow();await post({action:'historyImport',rows:[a]});const writes=state.writes.length;
+ assert.equal((await post({action:'historyImport',rows:[historyRow({finalKm:140,source:{...a.source,reportedKm:40}})]})).status,400);assert.equal(state.writes.length,writes);
+ const other=reset();journey(other,{serviceDate:'2026-09-10',endDate:'2026-09-10'});assert.equal((await post({action:'historyImport',rows:[a]})).status,400);assert.equal(other.writes.length,0);
+ reset();assert.equal((await post({action:'historyImport',rows:[a,historyRow({finalKm:90})]})).status,400);assert.equal(globalThis.fleetRecordTest.writes.length,0);
+});
+test('El histórico conserva formularios con el mismo ID cuando pertenecen a placas distintas',async()=>{
+ const state=reset();state.rows.fleetVehicles.push({id:11,usage:'OPERACIONES'});const a=historyRow();
+ assert.equal((await post({action:'historyImport',rows:[a,{...a,vehicleId:11}]})).status,200);assert.equal(state.rows.fleetAssignments.length,2);
+});
+test('El histórico no crea acceso móvil ni admite Inicio y sus correcciones conservan la referencia de origen',async()=>{
+ const state=reset();await post({action:'historyImport',rows:[historyRow()]});const a=state.rows.fleetAssignments[0];
+ assert.equal((await post({action:'record',assignmentId:a.id,phase:'INICIO',odometer:100,photos:[]})).status,400);
+ assert.equal((await post({...a,action:'historyAssignment',collector:'Referencia corregida',finalKm:160,_version:version('assignment',a)})).status,200);
+ assert.equal(state.rows.fleetAssignments[0].source.formId,'H-1');assert.equal(state.rows.fleetAssignments[0].source.reportedKm,50);assert.equal(state.rows.fleetAssignments[0].finalKm,160);
+ state.user.role='CONDUCTOR';assert.equal((await post({action:'historyImport',rows:[historyRow()]})).status,403);
+});
+
+test('El servidor histórico rechaza kilómetros vacíos y fechas actuales aunque se omita el error del parser',async()=>{
+ for(const extra of [{initialKm:null},{finalKm:''},{serviceDate:domain.limaDate()}]){const state=reset();assert.equal((await post({action:'historyImport',rows:[historyRow(extra)]})).status,400);assert.equal(state.writes.length,0);}
+});
