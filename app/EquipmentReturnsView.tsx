@@ -439,6 +439,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   const [processingKey, setProcessingKey] = useState("");
   const [progress, setProgress] = useState(0);
   const [excelImportStatus, setExcelImportStatus] = useState("");
+  const [excelDragging, setExcelDragging] = useState(false);
   const [error, setError] = useState("");
   const [receivingBatch, setReceivingBatch] = useState("");
   const [receiptDrafts, setReceiptDrafts] = useState<ReceiptDraft[]>([]);
@@ -485,6 +486,18 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     ...rows.map((row) => row.condition),
     ...receiptDrafts.map((receipt) => receipt.condition),
   ].map((value) => value.trim().toUpperCase()).filter(Boolean))].toSorted(), [receiptDrafts, returns, rows]);
+  const bulkPreview = useMemo(() => {
+    const serialCounts = new Map<string, number>();
+    rows.forEach((row) => {
+      const serialKey = normalizeEquipmentIdentifier(row.serial);
+      if (serialKey) serialCounts.set(serialKey, (serialCounts.get(serialKey) ?? 0) + 1);
+    });
+    const ready = rows.filter((row) => {
+      const serialKey = normalizeEquipmentIdentifier(row.serial);
+      return Boolean(row.productId) && serialKey.length >= 5 && serialCounts.get(serialKey) === 1;
+    }).length;
+    return { total: rows.length, ready, review: rows.length - ready };
+  }, [rows]);
 
   function updateRow(key: string, patch: Partial<DraftRow>) {
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
@@ -590,7 +603,41 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     setComments("");
     setProgress(0);
     setExcelImportStatus("");
+    setExcelDragging(false);
     setError("");
+  }
+
+  async function downloadBulkTemplate() {
+    const XLSX = await import("xlsx");
+    const headers = [
+      "ID", "Coordinador F1", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
+      "Tarea Hardware", "SKU", "Descripción", "Serie/Lote", "Solicitud de Devolución", "Largo", "Cantidad",
+      "Condición", "M3", "Site", "Observación", "Foto de Serie Legible Equipo", "Foto de Modelo Legible Equipo",
+      "Foto Panorámica de Equipos", "Opcional Etiqueta Entel",
+    ];
+    const example = [
+      1, "COORDINADOR F1", "RED", "DEVOLUCIÓN DE SITE", "RACK", "SUBPROYECTO", "PROYECTO ORIGEN",
+      "TAREA", "ENT960000001", "DESCRIPCIÓN DEL EQUIPO", "SERIE001", "PEDIDO-001", 20, 1,
+      "USADO OPERATIVO", 0.32, "SITE-001", "OBSERVACIÓN", "PEGAR FOTO", "PEGAR FOTO", "PEGAR FOTO", "OPCIONAL",
+    ];
+    const sheet = XLSX.utils.aoa_to_sheet([headers, example]);
+    sheet["!cols"] = headers.map((header) => ({ wch: Math.min(36, Math.max(12, header.length + 3)) }));
+    sheet["!autofilter"] = { ref: `A1:${XLSX.utils.encode_col(headers.length - 1)}2` };
+    const instructions = XLSX.utils.aoa_to_sheet([
+      ["PLANTILLA DE CARGA MASIVA DE DEVOLUCIONES"],
+      ["Regla", "Detalle"],
+      ["Una fila por serie", "Los equipos seriados deben ir en líneas independientes con su SKU asociado."],
+      ["Fotos", "Pega cada foto como imagen dentro de su columna y alineada con la fila correspondiente."],
+      ["Lotes", "Para lotes indica Serie/Lote y la cantidad total de esa línea."],
+      ["Revisión", "La carga se mostrará primero en pantalla para corregir SKU, serie, condición y evidencias."],
+      ["Stock", "La carga lógica no suma stock. El stock se actualiza recién al confirmar la llegada física."],
+      ["Límite", "Máximo 100 líneas por archivo y por site."],
+    ]);
+    instructions["!cols"] = [{ wch: 20 }, { wch: 105 }];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, "Devoluciones");
+    XLSX.utils.book_append_sheet(workbook, instructions, "Instrucciones");
+    XLSX.writeFile(workbook, "plantilla-carga-masiva-devoluciones-f1.xlsx", { compression: true });
   }
 
   async function importExcel(file?: File) {
@@ -604,6 +651,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     let totalRows = 1;
     try {
       const imported = await parseEquipmentReturnExcel(file);
+      if (imported.rows.length > 100) throw new Error(`El archivo contiene ${imported.rows.length} filas. El máximo por carga y por site es 100.`);
       totalRows = imported.rows.length;
       const draftRows = imported.rows.map((source) => {
         const product = products.find((item) => normalizeEquipmentIdentifier(item.sku) === normalizeEquipmentIdentifier(source.sku))
@@ -762,6 +810,14 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     if (!coordinatorF1 || !site.trim()) return setError("Selecciona el Coordinador F1 e ingresa el site.");
     const invalidIndex = rows.findIndex((row) => !row.productId || normalizeEquipmentIdentifier(row.serial).length < 5);
     if (invalidIndex >= 0) return setError(`Fila ${invalidIndex + 1}: selecciona el SKU y completa una Serie/Lote válida.`);
+    const seenSerials = new Set<string>();
+    const duplicateIndex = rows.findIndex((row) => {
+      const serialKey = normalizeEquipmentIdentifier(row.serial);
+      if (seenSerials.has(serialKey)) return true;
+      seenSerials.add(serialKey);
+      return false;
+    });
+    if (duplicateIndex >= 0) return setError(`Fila ${duplicateIndex + 1}: la Serie/Lote está repetida dentro de esta carga.`);
     const ok = await onSave({
       action: "equipmentReturnBatchCreate",
       coordinatorF1,
@@ -886,10 +942,22 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     <section className="panel return-batch-builder">
       <div className="panel-title"><div><h2>Nueva carga lógica por site</h2><p>Una carga genera un número F1 y puede incluir varias series, lotes y SKU.</p></div><span className="logical-badge">NO AFECTA STOCK</span></div>
       <form onSubmit={submit}>
-        <div className="return-excel-import">
+        <div
+          className={`return-excel-import ${excelDragging ? "is-dragging" : ""}`}
+          onDragEnter={(event) => { event.preventDefault(); setExcelDragging(true); }}
+          onDragOver={(event) => { event.preventDefault(); setExcelDragging(true); }}
+          onDragLeave={(event) => { event.preventDefault(); if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setExcelDragging(false); }}
+          onDrop={(event) => {
+            event.preventDefault();
+            setExcelDragging(false);
+            const selected = [...event.dataTransfer.files].find((file) => file.name.toLowerCase().endsWith(".xlsx"));
+            if (!selected) return setError("Arrastra un archivo Excel con extensión .xlsx.");
+            void importExcel(selected);
+          }}
+        >
           <span className="return-excel-icon"><FileSpreadsheet size={22} /></span>
-          <div><strong>Cargar Excel de devolución</strong><small>Importa cada fila con sus fotos incrustadas. Podrás revisar y corregir antes de registrar.</small>{excelImportStatus && <p>{excelImportStatus}</p>}</div>
-          <label className={`secondary-button ${processingKey === "excel-import" ? "is-busy" : ""}`}><FileSpreadsheet size={15} />{processingKey === "excel-import" ? `Procesando ${progress}%` : "Seleccionar Excel"}<input type="file" hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={Boolean(processingKey)} onChange={(event) => { const selected = event.target.files?.[0]; event.target.value = ""; void importExcel(selected); }} /></label>
+          <div><strong>Carga masiva de devoluciones</strong><small>Arrastra tu Excel o selecciónalo. Importa hasta 100 líneas con sus fotos incrustadas y permite corregirlas antes de registrar.</small>{excelImportStatus && <><p>{excelImportStatus}</p><div className="return-bulk-preview"><span><b>{bulkPreview.total}</b> filas</span><span className="ready"><b>{bulkPreview.ready}</b> listas</span><span className={bulkPreview.review ? "review" : "ready"}><b>{bulkPreview.review}</b> por revisar</span></div></>}</div>
+          <div className="return-excel-actions"><button type="button" className="secondary-button" disabled={Boolean(processingKey)} onClick={() => void downloadBulkTemplate()}><Download size={15} />Descargar plantilla</button><label className={`secondary-button ${processingKey === "excel-import" ? "is-busy" : ""}`}><FileSpreadsheet size={15} />{processingKey === "excel-import" ? `Procesando ${progress}%` : "Seleccionar Excel"}<input type="file" hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={Boolean(processingKey)} onChange={(event) => { const selected = event.target.files?.[0]; event.target.value = ""; void importExcel(selected); }} /></label></div>
           {processingKey === "excel-import" && <div className="return-excel-progress" aria-label={`Importación ${progress}%`}><span style={{ width: `${progress}%` }} /></div>}
         </div>
         <div className="return-batch-header">

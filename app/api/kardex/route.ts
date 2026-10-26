@@ -990,7 +990,11 @@ export async function POST(request: Request) {
       const site = normalizeParty(batchPayload.site);
       const warehouse = normalizeParty(batchPayload.warehouse) || "RED";
       const comments = clean(batchPayload.comments);
-      const batchRows = Array.isArray(batchPayload.rows) ? batchPayload.rows.slice(0, 100) : [];
+      const requestedRows = Array.isArray(batchPayload.rows) ? batchPayload.rows : [];
+      if (requestedRows.length > 100) {
+        return Response.json({ error: `La carga contiene ${requestedRows.length} filas. El máximo permitido por site es 100.` }, { status: 400 });
+      }
+      const batchRows = requestedRows;
       if (!coordinatorF1 || !site || !batchRows.length) {
         return Response.json({ error: "Selecciona Coordinador F1, ingresa el site y agrega al menos una fila." }, { status: 400 });
       }
