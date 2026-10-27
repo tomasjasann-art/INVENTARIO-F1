@@ -281,6 +281,7 @@ type EquipmentReturnEvidenceUploadInput = {
 
 type EquipmentReturnBatchCreateInput = {
   action?: "equipmentReturnBatchCreate";
+  updateExistingContractorOnly?: boolean;
   coordinatorF1?: string;
   orderNumber?: string;
   entryDate?: string;
@@ -1094,14 +1095,39 @@ export async function POST(request: Request) {
       if (missingProduct) return Response.json({ error: `Fila ${missingProduct.item}: el SKU seleccionado ya no existe.` }, { status: 404 });
 
       const activeReturnRows = await db.select().from(equipmentReturns).where(inArray(equipmentReturns.serialKey, normalizedRows.map((row) => row.serialKey)));
-      const activeReturn = activeReturnRows.find((candidate) => {
-        if (["RECIBIDA_FISICA", "RECHAZADA"].includes(candidate.status)) return false;
-        return normalizedRows.some((input) => input.serialKey === candidate.serialKey && (
-          input.itemType === "EQUIPO"
+      const activeMatches = normalizedRows.map((input) => activeReturnRows.find((candidate) => {
+        if (["RECIBIDA_FISICA", "RECHAZADA"].includes(candidate.status) || input.serialKey !== candidate.serialKey) return false;
+        return input.itemType === "EQUIPO"
           || candidate.itemType === "EQUIPO"
-          || (candidate.productId === input.productId && normalizeParty(candidate.site) === input.site)
-        ));
-      });
+          || (candidate.productId === input.productId && normalizeParty(candidate.site) === input.site);
+      }) ?? null);
+      const activeReturn = activeMatches.find((candidate) => candidate !== null);
+      const allRowsMatchActiveReturns = activeMatches.length > 0 && activeMatches.every((candidate) => candidate !== null);
+      if (batchPayload.updateExistingContractorOnly && !allRowsMatchActiveReturns) {
+        return Response.json({ error: "La actualización contiene una fila que no pertenece a una devolución activa. Sepárala de las filas nuevas." }, { status: 409 });
+      }
+      if (allRowsMatchActiveReturns) {
+        const updatedIds = await db.transaction(async (tx) => {
+          const ids: number[] = [];
+          for (const [index, candidate] of activeMatches.entries()) {
+            if (!candidate) continue;
+            const row = normalizedRows[index];
+            await tx.update(equipmentReturns).set({
+              dismantlingContractorDocument: row.contractorDocument,
+              dismantlingContractorName: row.contractorName,
+              updatedAt: sql`CURRENT_TIMESTAMP`,
+            }).where(eq(equipmentReturns.id, candidate.id));
+            ids.push(candidate.id);
+          }
+          return ids;
+        });
+        return Response.json({
+          ok: true,
+          mode: "CONTRACTOR_UPDATED",
+          updated: updatedIds.length,
+          batchCodes: [...new Set(activeMatches.flatMap((candidate) => candidate?.batchCode ? [candidate.batchCode] : []))],
+        });
+      }
       if (activeReturn) return Response.json({ error: activeReturn.itemType === "LOTE"
         ? `El lote ${activeReturn.serial} ya tiene una devolución activa para el mismo SKU en el site ${activeReturn.site}.`
         : `La serie de equipo ${activeReturn.serial} ya tiene una devolución activa.` }, { status: 409 });

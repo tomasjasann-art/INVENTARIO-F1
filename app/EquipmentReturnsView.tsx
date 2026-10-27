@@ -613,6 +613,19 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     }).length;
     return { total: rows.length, ready, review: rows.length - ready };
   }, [coordinatorF1, rows, site, suppliers]);
+  const activeReturnMatchCount = useMemo(() => {
+    const activeStatuses: ReturnStatus[] = ["PENDIENTE_APROBACION", "OBSERVADA", "APROBADA_PENDIENTE_RECEPCION"];
+    return rows.filter((row) => {
+      const serialKey = normalizeEquipmentIdentifier(row.serial);
+      const rowSite = (row.site || site).trim().toUpperCase().replace(/\s+/g, " ");
+      return returns.some((record) => {
+        if (!activeStatuses.includes(record.status) || normalizeEquipmentIdentifier(record.serial) !== serialKey) return false;
+        if (row.itemType === "EQUIPO" || record.itemType === "EQUIPO") return true;
+        return record.productId === row.productId && record.site.trim().toUpperCase().replace(/\s+/g, " ") === rowSite;
+      });
+    }).length;
+  }, [returns, rows, site]);
+  const contractorOnlyUpdatePreview = rows.length > 0 && activeReturnMatchCount === rows.length;
 
   function updateRow(key: string, patch: Partial<DraftRow>) {
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
@@ -990,8 +1003,12 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         ? `Fila ${duplicateIndex + 1}: el lote está repetido para el mismo SKU dentro del site ${(repeated.site || site).trim().toUpperCase()}.`
         : `Fila ${duplicateIndex + 1}: la serie del equipo está repetida dentro de esta carga.`);
     }
+    if (activeReturnMatchCount > 0 && activeReturnMatchCount < rows.length) {
+      return setError("La carga mezcla devoluciones existentes con filas nuevas. Sepáralas en dos archivos para evitar cambios accidentales.");
+    }
     const ok = await onSave({
       action: "equipmentReturnBatchCreate",
+      updateExistingContractorOnly: contractorOnlyUpdatePreview,
       coordinatorF1,
       orderNumber,
       entryDate,
@@ -1026,7 +1043,9 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         rememberIdentifier: row.rememberIdentifier && Boolean(row.partNumber.trim()),
         notes: row.notes,
       })),
-    }, "Carga lógica del sitio registrada con número F1. Todavía no afecta el stock.");
+    }, contractorOnlyUpdatePreview
+      ? "RUC y razón social actualizados en la devolución existente. Los demás datos permanecen sin cambios."
+      : "Carga lógica del sitio registrada con número F1. Todavía no afecta el stock.");
     if (ok) resetDraft();
   }
 
@@ -1203,7 +1222,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         </div>
         <div className="return-add-row"><button className="secondary-button" type="button" onClick={() => setRows((current) => [...current, { ...newDraftRow(), site, coordinatorF1 }])}><Plus size={16} />Agregar fila manual</button><small>Las filas seriadas deben mantenerse separadas con su SKU asociado. Cada fila puede tener un site y coordinador diferentes.</small></div>
         {error && <div className="inline-error">{error}</div>}
-        <div className="return-submit-row"><span><ScanLine size={16} />Revisa la tabla y las evidencias antes de registrar.</span><button className="primary-button" type="submit" disabled={saving || Boolean(processingKey)}>{saving ? "Guardando…" : "Generar N.º F1 y registrar carga lógica"}</button></div>
+        <div className="return-submit-row"><span><ScanLine size={16} />{contractorOnlyUpdatePreview ? "Actualización detectada: solo cambiará el RUC y la razón social de la devolución existente." : "Revisa la tabla y las evidencias antes de registrar."}</span><button className="primary-button" type="submit" disabled={saving || Boolean(processingKey)}>{saving ? "Guardando…" : contractorOnlyUpdatePreview ? "Actualizar RUC de la devolución" : "Generar N.º F1 y registrar carga lógica"}</button></div>
       </form>
     </section>
 
