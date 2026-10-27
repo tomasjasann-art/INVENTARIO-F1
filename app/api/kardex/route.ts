@@ -244,6 +244,7 @@ type EquipmentReturnStatusInput = {
 };
 
 type EquipmentReturnBatchRowInput = {
+  site?: string;
   productId?: number;
   serial?: string;
   itemType?: "EQUIPO" | "LOTE";
@@ -990,7 +991,7 @@ export async function POST(request: Request) {
       const coordinatorF1 = normalizeParty(batchPayload.coordinatorF1);
       const orderNumber = clean(batchPayload.orderNumber).toUpperCase();
       const entryDate = normalizeKardexDate(batchPayload.entryDate);
-      const site = normalizeParty(batchPayload.site);
+      const defaultSite = normalizeParty(batchPayload.site);
       const warehouse = normalizeParty(batchPayload.warehouse) || "RED";
       const comments = clean(batchPayload.comments);
       const requestedRows = Array.isArray(batchPayload.rows) ? batchPayload.rows : [];
@@ -998,8 +999,8 @@ export async function POST(request: Request) {
         return Response.json({ error: `La carga contiene ${requestedRows.length} filas. El máximo permitido por site es 100.` }, { status: 400 });
       }
       const batchRows = requestedRows;
-      if (!coordinatorF1 || !entryDate || !site || !batchRows.length) {
-        return Response.json({ error: "Selecciona Coordinador F1, fecha de ingreso, site y agrega al menos una fila." }, { status: 400 });
+      if (!coordinatorF1 || !entryDate || !batchRows.length) {
+        return Response.json({ error: "Selecciona Coordinador F1, fecha de ingreso y agrega al menos una fila." }, { status: 400 });
       }
       const [coordinator] = await db.select().from(coordinators).where(and(
         eq(coordinators.organization, "F1"),
@@ -1011,6 +1012,7 @@ export async function POST(request: Request) {
       const normalizedRows = batchRows.map((row, index) => ({
         input: row,
         item: index + 1,
+        site: normalizeParty(row.site) || defaultSite,
         productId: Number(row.productId),
         serial: clean(row.serial).toUpperCase(),
         serialKey: normalizeEquipmentIdentifier(row.serial),
@@ -1022,19 +1024,19 @@ export async function POST(request: Request) {
       const repeatedControls = new Set<string>();
       const seenControls = new Set<string>();
       normalizedRows.forEach((row) => {
-        const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${row.serialKey}` : `EQUIPO:${row.serialKey}`;
+        const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${row.site}:${row.serialKey}` : `EQUIPO:${row.serialKey}`;
         if (seenControls.has(controlKey)) repeatedControls.add(controlKey);
         seenControls.add(controlKey);
       });
       const invalidRow = normalizedRows.find((row) => {
-        const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${row.serialKey}` : `EQUIPO:${row.serialKey}`;
-        return !row.productId || row.serialKey.length < 5 || repeatedControls.has(controlKey);
+        const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${row.site}:${row.serialKey}` : `EQUIPO:${row.serialKey}`;
+        return !row.site || !row.productId || row.serialKey.length < 5 || repeatedControls.has(controlKey);
       });
       if (invalidRow) {
-        const controlKey = invalidRow.itemType === "LOTE" ? `LOTE:${invalidRow.productId}:${invalidRow.serialKey}` : `EQUIPO:${invalidRow.serialKey}`;
+        const controlKey = invalidRow.itemType === "LOTE" ? `LOTE:${invalidRow.productId}:${invalidRow.site}:${invalidRow.serialKey}` : `EQUIPO:${invalidRow.serialKey}`;
         const reason = repeatedControls.has(controlKey)
-          ? invalidRow.itemType === "LOTE" ? "el lote está repetido para el mismo SKU en este site" : "la serie del equipo está repetida en esta carga"
-          : "falta SKU o Serie/Lote válido";
+          ? invalidRow.itemType === "LOTE" ? `el lote está repetido para el mismo SKU en el site ${invalidRow.site}` : "la serie del equipo está repetida en esta carga"
+          : !invalidRow.site ? "falta el site" : "falta SKU o Serie/Lote válido";
         return Response.json({ error: `Fila ${invalidRow.item}: ${reason}.` }, { status: 400 });
       }
       const invalidTypeRow = normalizedRows.find((row) => !["EQUIPO", "LOTE"].includes(row.itemType));
@@ -1054,7 +1056,7 @@ export async function POST(request: Request) {
         return normalizedRows.some((input) => input.serialKey === candidate.serialKey && (
           input.itemType === "EQUIPO"
           || candidate.itemType === "EQUIPO"
-          || (candidate.productId === input.productId && normalizeParty(candidate.site) === site)
+          || (candidate.productId === input.productId && normalizeParty(candidate.site) === input.site)
         ));
       });
       if (activeReturn) return Response.json({ error: activeReturn.itemType === "LOTE"
@@ -1119,7 +1121,7 @@ export async function POST(request: Request) {
           coordinatorF1: coordinator.name,
           orderNumber: orderNumber || historical?.orderNumber || "",
           entryDate,
-          site,
+          site: row.site,
           warehouse,
           batchComments: comments,
           networkComponent: clean(input.networkComponent),

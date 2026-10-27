@@ -149,6 +149,7 @@ type Props = {
 
 type DraftRow = {
   key: string;
+  site: string;
   productId: number | null;
   productSearch: string;
   serial: string;
@@ -212,6 +213,7 @@ type ReturnBatch = {
 function newDraftRow(key = crypto.randomUUID()): DraftRow {
   return {
     key,
+    site: "",
     productId: null,
     productSearch: "",
     serial: "",
@@ -522,17 +524,19 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     const identifierCounts = new Map<string, number>();
     rows.forEach((row) => {
       const serialKey = normalizeEquipmentIdentifier(row.serial);
-      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId ?? 0}:${serialKey}` : `EQUIPO:${serialKey}`;
+      const rowSite = (row.site || site).trim().toUpperCase().replace(/\s+/g, " ");
+      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId ?? 0}:${rowSite}:${serialKey}` : `EQUIPO:${serialKey}`;
       if (serialKey) identifierCounts.set(controlKey, (identifierCounts.get(controlKey) ?? 0) + 1);
     });
     const ready = rows.filter((row) => {
       const serialKey = normalizeEquipmentIdentifier(row.serial);
-      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId ?? 0}:${serialKey}` : `EQUIPO:${serialKey}`;
+      const rowSite = (row.site || site).trim().toUpperCase().replace(/\s+/g, " ");
+      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId ?? 0}:${rowSite}:${serialKey}` : `EQUIPO:${serialKey}`;
       const validQuantity = row.itemType === "LOTE" || row.quantity === 1;
-      return Boolean(row.productId) && serialKey.length >= 5 && identifierCounts.get(controlKey) === 1 && validQuantity;
+      return Boolean(row.productId) && Boolean(rowSite) && serialKey.length >= 5 && identifierCounts.get(controlKey) === 1 && validQuantity;
     }).length;
     return { total: rows.length, ready, review: rows.length - ready };
-  }, [rows]);
+  }, [rows, site]);
 
   function updateRow(key: string, patch: Partial<DraftRow>) {
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
@@ -699,6 +703,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         const itemType = source.itemType || (product?.category.toUpperCase() === "LOTE" ? "LOTE" : "EQUIPO");
         return {
           ...newDraftRow(),
+          site: source.site.toUpperCase(),
           productId: product?.id ?? null,
           productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
           serial: source.serial.toUpperCase(),
@@ -850,7 +855,9 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     event.preventDefault();
     setError("");
     if (processingKey) return setError("Espera a que termine la lectura o carga de fotografías.");
-    if (!coordinatorF1 || !site.trim() || !entryDate) return setError("Selecciona el Coordinador F1, la fecha de ingreso e ingresa el site.");
+    if (!coordinatorF1 || !entryDate) return setError("Selecciona el Coordinador F1 y la fecha de ingreso.");
+    const missingSiteIndex = rows.findIndex((row) => !(row.site || site).trim());
+    if (missingSiteIndex >= 0) return setError(`Fila ${missingSiteIndex + 1}: completa el site o ingresa un site predeterminado.`);
     const invalidIndex = rows.findIndex((row) => !row.productId || normalizeEquipmentIdentifier(row.serial).length < 5);
     if (invalidIndex >= 0) return setError(`Fila ${invalidIndex + 1}: selecciona el SKU y completa una Serie/Lote válida.`);
     const invalidEquipmentQuantityIndex = rows.findIndex((row) => row.itemType === "EQUIPO" && row.quantity !== 1);
@@ -858,7 +865,8 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     const seenControls = new Set<string>();
     const duplicateIndex = rows.findIndex((row) => {
       const serialKey = normalizeEquipmentIdentifier(row.serial);
-      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${serialKey}` : `EQUIPO:${serialKey}`;
+      const rowSite = (row.site || site).trim().toUpperCase().replace(/\s+/g, " ");
+      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${rowSite}:${serialKey}` : `EQUIPO:${serialKey}`;
       if (seenControls.has(controlKey)) return true;
       seenControls.add(controlKey);
       return false;
@@ -866,7 +874,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     if (duplicateIndex >= 0) {
       const repeated = rows[duplicateIndex];
       return setError(repeated.itemType === "LOTE"
-        ? `Fila ${duplicateIndex + 1}: el lote está repetido para el mismo SKU dentro de este site.`
+        ? `Fila ${duplicateIndex + 1}: el lote está repetido para el mismo SKU dentro del site ${(repeated.site || site).trim().toUpperCase()}.`
         : `Fila ${duplicateIndex + 1}: la serie del equipo está repetida dentro de esta carga.`);
     }
     const ok = await onSave({
@@ -878,6 +886,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       warehouse,
       comments,
       rows: rows.map((row) => ({
+        site: (row.site || site).trim().toUpperCase(),
         productId: row.productId,
         serial: row.serial,
         itemType: row.itemType,
@@ -1015,7 +1024,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         </div>
         <div className="return-batch-header">
           <label className="field"><span>Coordinador F1 *</span><input list="return-f1-coordinators" value={coordinatorF1} onChange={(event) => setCoordinatorF1(event.target.value.toUpperCase())} placeholder="Busca al coordinador" required /><datalist id="return-f1-coordinators">{f1Coordinators.map((coordinator) => <option value={coordinator.name} key={coordinator.id} />)}</datalist></label>
-          <label className="field"><span>Site de desmontaje *</span><input value={site} onChange={(event) => setSite(event.target.value.toUpperCase())} placeholder="Código o nombre del site" required /></label>
+          <label className="field"><span>Site predeterminado</span><input value={site} onChange={(event) => setSite(event.target.value.toUpperCase())} placeholder="Se usa si la fila no tiene site" /></label>
           <label className="field"><span>Almacén de procedencia</span><input value={warehouse} onChange={(event) => setWarehouse(event.target.value.toUpperCase())} placeholder="RED" /></label>
           <label className="field"><span>Fecha de ingreso *</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} required /></label>
           <label className="field"><span>N.º Pedido relacionado</span><input value={orderNumber} onChange={(event) => setOrderNumber(event.target.value.toUpperCase())} placeholder="Pedido / código Oracle" /></label>
@@ -1027,12 +1036,14 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         <div className="return-table-top-scroll" ref={entryTableTopScrollRef} onScroll={(event) => { const target = entryTableScrollRef.current; if (target && target.scrollLeft !== event.currentTarget.scrollLeft) target.scrollLeft = event.currentTarget.scrollLeft; }} aria-label="Desplazamiento horizontal superior de la tabla"><div style={{ width: `${entryTableWidth}px` }} /></div>
         <div className="table-wrap return-entry-table-wrap" ref={entryTableScrollRef} onScroll={(event) => { const target = entryTableTopScrollRef.current; if (target && target.scrollLeft !== event.currentTarget.scrollLeft) target.scrollLeft = event.currentTarget.scrollLeft; }}>
           <table className="return-entry-table" ref={entryTableRef}>
-            <thead><tr><th>#</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Tipo *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
+            <thead><tr><th>#</th><th>Site *</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Tipo *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
             <tbody>{rows.map((row, index) => {
               const product = products.find((item) => item.id === row.productId);
-              const rowCsv = csvPayload({ item: index + 1, coordinatorF1, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site });
+              const effectiveSite = (row.site || site).trim().toUpperCase();
+              const rowCsv = csvPayload({ item: index + 1, coordinatorF1, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site: effectiveSite });
               return <tr key={row.key}>
                 <td className="return-row-number"><strong>{index + 1}</strong></td>
+                <td><input className="table-input" aria-label={`Site fila ${index + 1}`} value={row.site} onChange={(event) => updateRow(row.key, { site: event.target.value.toUpperCase() })} placeholder={site || "Código o nombre"} /></td>
                 <td><input className="table-input" aria-label={`Componente fila ${index + 1}`} value={row.networkComponent} onChange={(event) => updateRow(row.key, { networkComponent: event.target.value.toUpperCase() })} placeholder="Rack / antena" /></td>
                 <td><input className="table-input" aria-label={`Subproyecto fila ${index + 1}`} value={row.subProject} onChange={(event) => updateRow(row.key, { subProject: event.target.value.toUpperCase() })} /></td>
                 <td><input className="table-input" aria-label={`Proyecto origen fila ${index + 1}`} value={row.sourceProject} onChange={(event) => updateRow(row.key, { sourceProject: event.target.value.toUpperCase() })} /></td>
@@ -1058,7 +1069,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             })}</tbody>
           </table>
         </div>
-        <div className="return-add-row"><button className="secondary-button" type="button" onClick={() => setRows((current) => [...current, newDraftRow()])}><Plus size={16} />Agregar fila manual</button><small>Las filas seriadas deben mantenerse separadas con su SKU asociado.</small></div>
+        <div className="return-add-row"><button className="secondary-button" type="button" onClick={() => setRows((current) => [...current, { ...newDraftRow(), site }])}><Plus size={16} />Agregar fila manual</button><small>Las filas seriadas deben mantenerse separadas con su SKU asociado. Cada fila puede tener un site diferente.</small></div>
         {error && <div className="inline-error">{error}</div>}
         <div className="return-submit-row"><span><ScanLine size={16} />Revisa la tabla y las evidencias antes de registrar.</span><button className="primary-button" type="submit" disabled={saving || Boolean(processingKey)}>{saving ? "Guardando…" : "Generar N.º F1 y registrar carga lógica"}</button></div>
       </form>
