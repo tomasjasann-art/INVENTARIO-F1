@@ -54,6 +54,7 @@ export type EquipmentReturnRecord = {
   site: string;
   warehouse: string;
   batchComments: string;
+  returnDate: string;
   networkComponent: string;
   subProject: string;
   sourceProject: string;
@@ -204,6 +205,7 @@ type ReturnBatch = {
   coordinatorF1: string;
   warehouse: string;
   orderNumber: string;
+  returnDate: string;
   createdAt: string;
 };
 
@@ -264,6 +266,13 @@ function displayDate(value: string) {
   const date = new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("es-PE", { dateStyle: "short", timeStyle: "short", timeZone: "America/Lima" }).format(date);
+}
+
+function displayDay(value: string) {
+  if (!value) return "—";
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("es-PE", { dateStyle: "short", timeZone: "America/Lima" }).format(date);
 }
 
 function today() {
@@ -393,6 +402,7 @@ function returnExportRows(batch: ReturnBatch) {
   return batch.rows.map((record) => ({
     ID: record.batchItem,
     "N.º F1": batch.code,
+    "Fecha de devolución": record.returnDate,
     "Coordinador F1": record.coordinatorF1,
     Almacén: record.warehouse,
     Comentario: record.batchComments,
@@ -439,6 +449,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   const [site, setSite] = useState("");
   const [warehouse, setWarehouse] = useState("RED");
   const [orderNumber, setOrderNumber] = useState("");
+  const [returnDate, setReturnDate] = useState(today());
   const [comments, setComments] = useState("");
   const [processingKey, setProcessingKey] = useState("");
   const [progress, setProgress] = useState(0);
@@ -466,6 +477,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         coordinatorF1: sorted[0]?.coordinatorF1 || "—",
         warehouse: sorted[0]?.warehouse || "RED",
         orderNumber: sorted[0]?.orderNumber || "",
+        returnDate: sorted[0]?.returnDate || "",
         createdAt: sorted[0]?.logicalRegisteredAt || sorted[0]?.createdAt || "",
       };
     }).toSorted((left, right) => Math.max(...right.rows.map((row) => row.id)) - Math.max(...left.rows.map((row) => row.id)));
@@ -607,6 +619,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     setSite("");
     setWarehouse("RED");
     setOrderNumber("");
+    setReturnDate(today());
     setComments("");
     setProgress(0);
     setExcelImportStatus("");
@@ -617,13 +630,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   async function downloadBulkTemplate() {
     const XLSX = await import("xlsx");
     const headers = [
-      "ID", "Coordinador F1", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
+      "ID", "Fecha de Devolución", "Coordinador F1", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
       "Tarea Hardware", "SKU", "Descripción", "Serie/Lote", "Tipo de Registro", "Solicitud de Devolución", "Largo", "Cantidad",
       "Condición", "M3", "Site", "Observación", "Foto de Serie Legible Equipo", "Foto de Modelo Legible Equipo",
       "Foto Panorámica de Equipos", "Opcional Etiqueta Entel",
     ];
     const example = [
-      1, "COORDINADOR F1", "RED", "DEVOLUCIÓN DE SITE", "RACK", "SUBPROYECTO", "PROYECTO ORIGEN",
+      1, today(), "COORDINADOR F1", "RED", "DEVOLUCIÓN DE SITE", "RACK", "SUBPROYECTO", "PROYECTO ORIGEN",
       "TAREA", "ENT960000001", "DESCRIPCIÓN DEL EQUIPO", "SERIE001", "EQUIPO", "PEDIDO-001", 20, 1,
       "USADO OPERATIVO", 0.32, "SITE-001", "OBSERVACIÓN", "PEGAR FOTO", "PEGAR FOTO", "PEGAR FOTO", "OPCIONAL",
     ];
@@ -635,6 +648,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       ["Regla", "Detalle"],
       ["Una fila por serie", "Los equipos seriados deben ir en líneas independientes con su SKU asociado."],
       ["Tipo de registro", "Selecciona EQUIPO para una serie individual (cantidad 1) o LOTE cuando una misma identificación representa varias unidades."],
+      ["Fecha", "Completa la Fecha de Devolución. Si todas las filas pertenecen a una carga, se usará la primera fecha encontrada."],
       ["Fotos", "Pega cada foto como imagen dentro de su columna y alineada con la fila correspondiente."],
       ["Lotes", "Para lotes indica Serie/Lote y la cantidad total de esa línea."],
       ["Revisión", "La carga se mostrará primero en pantalla para corregir SKU, serie, condición y evidencias."],
@@ -691,11 +705,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       const firstWithSite = imported.rows.find((row) => row.site)?.site;
       const firstWithWarehouse = imported.rows.find((row) => row.warehouse)?.warehouse;
       const firstWithOrder = imported.rows.find((row) => row.orderNumber)?.orderNumber;
+      const firstWithReturnDate = imported.rows.find((row) => row.returnDate)?.returnDate;
       const firstWithComments = imported.rows.find((row) => row.comments)?.comments;
       if (firstWithCoordinator) setCoordinatorF1(firstWithCoordinator.toUpperCase());
       if (firstWithSite) setSite(firstWithSite.toUpperCase());
       if (firstWithWarehouse) setWarehouse(firstWithWarehouse.toUpperCase());
       if (firstWithOrder) setOrderNumber(firstWithOrder.toUpperCase());
+      if (firstWithReturnDate) setReturnDate(firstWithReturnDate);
       if (firstWithComments) setComments(firstWithComments);
 
       const needsOcr = imported.rows.some((source, index) => {
@@ -816,7 +832,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     event.preventDefault();
     setError("");
     if (processingKey) return setError("Espera a que termine la lectura o carga de fotografías.");
-    if (!coordinatorF1 || !site.trim()) return setError("Selecciona el Coordinador F1 e ingresa el site.");
+    if (!coordinatorF1 || !site.trim() || !returnDate) return setError("Selecciona el Coordinador F1, la fecha de devolución e ingresa el site.");
     const invalidIndex = rows.findIndex((row) => !row.productId || normalizeEquipmentIdentifier(row.serial).length < 5);
     if (invalidIndex >= 0) return setError(`Fila ${invalidIndex + 1}: selecciona el SKU y completa una Serie/Lote válida.`);
     const invalidEquipmentQuantityIndex = rows.findIndex((row) => row.itemType === "EQUIPO" && row.quantity !== 1);
@@ -833,6 +849,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       action: "equipmentReturnBatchCreate",
       coordinatorF1,
       orderNumber,
+      returnDate,
       site,
       warehouse,
       comments,
@@ -976,6 +993,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           <label className="field"><span>Coordinador F1 *</span><input list="return-f1-coordinators" value={coordinatorF1} onChange={(event) => setCoordinatorF1(event.target.value.toUpperCase())} placeholder="Busca al coordinador" required /><datalist id="return-f1-coordinators">{f1Coordinators.map((coordinator) => <option value={coordinator.name} key={coordinator.id} />)}</datalist></label>
           <label className="field"><span>Site de desmontaje *</span><input value={site} onChange={(event) => setSite(event.target.value.toUpperCase())} placeholder="Código o nombre del site" required /></label>
           <label className="field"><span>Almacén de procedencia</span><input value={warehouse} onChange={(event) => setWarehouse(event.target.value.toUpperCase())} placeholder="RED" /></label>
+          <label className="field"><span>Fecha de devolución *</span><input type="date" value={returnDate} onChange={(event) => setReturnDate(event.target.value)} required /></label>
           <label className="field"><span>N.º Pedido relacionado</span><input value={orderNumber} onChange={(event) => setOrderNumber(event.target.value.toUpperCase())} placeholder="Pedido / código Oracle" /></label>
           <label className="field field-wide"><span>Comentario general</span><input value={comments} onChange={(event) => setComments(event.target.value)} placeholder="Referencia de la desinstalación o devolución" /></label>
         </div>
@@ -1059,7 +1077,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             <button className="secondary-button" onClick={() => void exportExcel(batch)}><FileSpreadsheet size={15} />Excel</button>
             <button className="secondary-button" onClick={() => exportCsv(batch)}><Download size={15} />CSV</button>
             <button className="secondary-button" onClick={() => void copyCsvColumn(batch)}><Copy size={15} />Copiar columna CSV</button>
-            <span>Registro lógico: {displayDate(batch.createdAt)} · Almacén: {batch.warehouse}</span>
+            <span>Fecha devolución: {displayDay(batch.returnDate)} · Registro lógico: {displayDate(batch.createdAt)} · Almacén: {batch.warehouse}</span>
           </div>
           <div className="table-wrap"><table className="return-site-table"><thead><tr><th>Ítem</th><th>SKU / Descripción</th><th>Serie / Lote</th><th>Cant.</th><th>Condición / M3</th><th>CSV</th><th>Evidencias fotográficas</th></tr></thead><tbody>{batch.rows.map((record) => <tr key={record.id}>
             <td><strong>{record.batchItem}</strong></td>

@@ -279,6 +279,7 @@ type EquipmentReturnBatchCreateInput = {
   action?: "equipmentReturnBatchCreate";
   coordinatorF1?: string;
   orderNumber?: string;
+  returnDate?: string;
   site?: string;
   warehouse?: string;
   comments?: string;
@@ -988,6 +989,7 @@ export async function POST(request: Request) {
       const batchPayload = payload as EquipmentReturnBatchCreateInput;
       const coordinatorF1 = normalizeParty(batchPayload.coordinatorF1);
       const orderNumber = clean(batchPayload.orderNumber).toUpperCase();
+      const returnDate = normalizeKardexDate(batchPayload.returnDate);
       const site = normalizeParty(batchPayload.site);
       const warehouse = normalizeParty(batchPayload.warehouse) || "RED";
       const comments = clean(batchPayload.comments);
@@ -996,8 +998,8 @@ export async function POST(request: Request) {
         return Response.json({ error: `La carga contiene ${requestedRows.length} filas. El máximo permitido por site es 100.` }, { status: 400 });
       }
       const batchRows = requestedRows;
-      if (!coordinatorF1 || !site || !batchRows.length) {
-        return Response.json({ error: "Selecciona Coordinador F1, ingresa el site y agrega al menos una fila." }, { status: 400 });
+      if (!coordinatorF1 || !returnDate || !site || !batchRows.length) {
+        return Response.json({ error: "Selecciona Coordinador F1, fecha de devolución, site y agrega al menos una fila." }, { status: 400 });
       }
       const [coordinator] = await db.select().from(coordinators).where(and(
         eq(coordinators.organization, "F1"),
@@ -1073,8 +1075,8 @@ export async function POST(request: Request) {
       const sequenceRows = await db.execute<{ returnSequence: string }>(sql`select nextval('equipment_return_code_seq')::text as "returnSequence"`);
       const returnSequence = Number(sequenceRows[0]?.returnSequence);
       if (!Number.isFinite(returnSequence)) return Response.json({ error: "No se pudo generar el número F1 de devolución." }, { status: 500 });
-      const returnDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date()).replaceAll("-", "");
-      const batchCode = `DEV-F1-${returnDate}-${String(returnSequence).padStart(6, "0")}`;
+      const returnCodeDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date()).replaceAll("-", "");
+      const batchCode = `DEV-F1-${returnCodeDate}-${String(returnSequence).padStart(6, "0")}`;
       const createdBy = access.displayName || user.displayName || user.email;
       const matchMethods = ["HISTORIAL_SERIE", "PART_NUMBER_GUARDADO", "PART_NUMBER_DESCRIPCION", "SKU_VISIBLE", "MANUAL"];
 
@@ -1098,6 +1100,7 @@ export async function POST(request: Request) {
           sourceMovementId: historical?.id || Number(input.sourceMovementId) || null,
           coordinatorF1: coordinator.name,
           orderNumber: orderNumber || historical?.orderNumber || "",
+          returnDate,
           site,
           warehouse,
           batchComments: comments,

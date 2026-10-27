@@ -329,6 +329,7 @@ export const equipmentReturns = pgTable(
     site: text("site").notNull().default(""),
     warehouse: text("warehouse").notNull().default("RED"),
     batchComments: text("batch_comments").notNull().default(""),
+    returnDate: text("return_date").notNull().default(""),
     networkComponent: text("network_component").notNull().default(""),
     subProject: text("sub_project").notNull().default(""),
     sourceProject: text("source_project").notNull().default(""),

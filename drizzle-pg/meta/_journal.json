@@ -169,6 +169,13 @@
       "when": 1793122895537,
       "tag": "0023_equipment_return_item_type",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793123527724,
+      "tag": "0024_equipment_return_date",
+      "breakpoints": true
     }
   ]
 }
