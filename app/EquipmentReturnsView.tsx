@@ -608,10 +608,11 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId ?? 0}:${rowSite}:${serialKey}` : `EQUIPO:${serialKey}`;
       const validQuantity = row.itemType === "LOTE" || row.quantity === 1;
       const rowCoordinator = (row.coordinatorF1 || coordinatorF1).trim();
-      return Boolean(row.productId) && Boolean(rowSite) && Boolean(rowCoordinator) && serialKey.length >= 5 && identifierCounts.get(controlKey) === 1 && validQuantity;
+      const contractor = suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === row.contractorDocument);
+      return Boolean(row.productId) && Boolean(rowSite) && Boolean(rowCoordinator) && Boolean(contractor) && serialKey.length >= 5 && identifierCounts.get(controlKey) === 1 && validQuantity;
     }).length;
     return { total: rows.length, ready, review: rows.length - ready };
-  }, [coordinatorF1, rows, site]);
+  }, [coordinatorF1, rows, site, suppliers]);
 
   function updateRow(key: string, patch: Partial<DraftRow>) {
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
@@ -713,9 +714,20 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   function updateContractorDocument(row: DraftRow, value: string) {
     const document = value.replace(/\D/g, "").slice(0, 11);
     const supplier = suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === document);
+    const contractorWarnings = row.warnings.filter((warning) => ![
+      "Completa el RUC de la contrata",
+      "El RUC de la contrata no está",
+      "La contrata está inactiva",
+    ].some((prefix) => warning.startsWith(prefix)));
+    const registeredSupplier = suppliers.find((item) => item.documentType === "RUC" && item.documentNumber === document);
     updateRow(row.key, {
       contractorDocument: document,
-      contractorName: supplier?.businessName.toUpperCase() || (document === row.contractorDocument ? row.contractorName : ""),
+      contractorName: supplier?.businessName.toUpperCase() || "",
+      warnings: document.length === 11 && !registeredSupplier
+        ? [...contractorWarnings, "El RUC de la contrata no está en Empresas y personas."]
+        : registeredSupplier && !registeredSupplier.active
+          ? [...contractorWarnings, "La contrata está inactiva en Empresas y personas."]
+          : contractorWarnings,
     });
   }
 
@@ -736,13 +748,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   async function downloadBulkTemplate() {
     const XLSX = await import("xlsx");
     const headers = [
-      "ID", "Fecha de Ingreso", "Coordinador F1", "RUC Contrata", "Contrata Desmontaje", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
+      "ID", "Fecha de Ingreso", "Coordinador F1", "RUC Contrata", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
       "Tarea Hardware", "SKU", "Descripción", "Serie/Lote", "Tipo de Registro", "Solicitud de Devolución", "Largo", "Cantidad",
       "Condición", "M3", "Site", "Observación", "Foto de Serie Legible Equipo", "Foto de Modelo Legible Equipo",
       "Foto Panorámica de Equipos", "Opcional Etiqueta Entel",
     ];
     const example = [
-      1, today(), "COORDINADOR F1", "20123456789", "CONTRATA QUE REALIZÓ EL DESMONTAJE", "RED", "DEVOLUCIÓN DE SITE", "RACK", "SUBPROYECTO", "PROYECTO ORIGEN",
+      1, today(), "COORDINADOR F1", "20123456789", "RED", "DEVOLUCIÓN DE SITE", "RACK", "SUBPROYECTO", "PROYECTO ORIGEN",
       "TAREA", "ENT960000001", "DESCRIPCIÓN DEL EQUIPO", "SERIE001", "EQUIPO", "PEDIDO-001", 20, 1,
       "USADO OPERATIVO", 0.32, "SITE-001", "OBSERVACIÓN", "PEGAR FOTO", "PEGAR FOTO", "PEGAR FOTO", "OPCIONAL",
     ];
@@ -757,7 +769,8 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       ["Fecha", "Completa la Fecha de Ingreso. Si todas las filas pertenecen a una carga, se usará la primera fecha encontrada."],
       ["Fotos", "Pega cada foto como imagen dentro de su columna y alineada con la fila correspondiente."],
       ["Lotes", "Para lotes indica Serie/Lote y la cantidad total de esa línea."],
-      ["Contrata", "Indica el RUC y la razón social de la contrata que realizó el desmontaje. Si el RUC está en el maestro, el nombre se completará automáticamente."],
+      ["Contrata", "Indica únicamente el RUC de la contrata que realizó el desmontaje. La razón social se completará automáticamente desde el maestro Empresas y personas."],
+      ["RUC no registrado", "La fila quedará por revisar. Registra o activa primero el RUC en Empresas y personas; no se aceptarán razones sociales escritas manualmente."],
       ["Revisión", "La carga se mostrará primero en pantalla para corregir SKU, serie, condición y evidencias."],
       ["Stock", "La carga lógica no suma stock. El stock se actualiza recién al confirmar la llegada física."],
       ["Límite", "Máximo 100 líneas por archivo y por site."],
@@ -785,14 +798,14 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       const draftRows = imported.rows.map((source) => {
         const product = products.find((item) => normalizeEquipmentIdentifier(item.sku) === normalizeEquipmentIdentifier(source.sku))
           ?? products.find((item) => source.description && normalizeEquipmentIdentifier(item.description) === normalizeEquipmentIdentifier(source.description));
-        const supplier = suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === source.contractorDocument);
+        const supplier = suppliers.find((item) => item.documentType === "RUC" && item.documentNumber === source.contractorDocument);
         const itemType = source.itemType || (product?.category.toUpperCase() === "LOTE" ? "LOTE" : "EQUIPO");
         return {
           ...newDraftRow(),
           site: source.site.toUpperCase(),
           coordinatorF1: source.coordinatorF1.toUpperCase(),
           contractorDocument: source.contractorDocument,
-          contractorName: (supplier?.businessName || source.contractorName).toUpperCase(),
+          contractorName: supplier?.active ? supplier.businessName.toUpperCase() : "",
           productId: product?.id ?? null,
           productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
           serial: source.serial.toUpperCase(),
@@ -808,7 +821,11 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           matchMethod: product ? "SKU_VISIBLE" : "MANUAL",
           matchConfidence: product ? 100 : 0,
           notes: source.notes,
-          warnings: [...source.warnings, ...(source.contractorDocument && !supplier && !source.contractorName ? ["El RUC de la contrata no está en el maestro; completa la razón social."] : [])],
+          warnings: [...source.warnings,
+            ...(!source.contractorDocument ? ["Completa el RUC de la contrata que realizó el desmontaje."] : []),
+            ...(source.contractorDocument && !supplier ? ["El RUC de la contrata no está en Empresas y personas."] : []),
+            ...(supplier && !supplier.active ? ["La contrata está inactiva en Empresas y personas."] : []),
+          ],
         } satisfies DraftRow;
       });
 
@@ -948,10 +965,10 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     if (!entryDate) return setError("Selecciona la fecha de ingreso.");
     const missingCoordinatorIndex = rows.findIndex((row) => !(row.coordinatorF1 || coordinatorF1).trim());
     if (missingCoordinatorIndex >= 0) return setError(`Fila ${missingCoordinatorIndex + 1}: selecciona el Coordinador F1 o ingresa uno predeterminado.`);
-    const missingContractorIndex = rows.findIndex((row) => !row.contractorName.trim());
-    if (missingContractorIndex >= 0) return setError(`Fila ${missingContractorIndex + 1}: completa la contrata que realizó el desmontaje.`);
-    const invalidContractorDocumentIndex = rows.findIndex((row) => row.contractorDocument && !/^\d{11}$/.test(row.contractorDocument));
-    if (invalidContractorDocumentIndex >= 0) return setError(`Fila ${invalidContractorDocumentIndex + 1}: el RUC de la contrata debe tener 11 dígitos o quedar vacío.`);
+    const invalidContractorDocumentIndex = rows.findIndex((row) => !/^\d{11}$/.test(row.contractorDocument));
+    if (invalidContractorDocumentIndex >= 0) return setError(`Fila ${invalidContractorDocumentIndex + 1}: completa el RUC de 11 dígitos de la contrata que realizó el desmontaje.`);
+    const missingContractorIndex = rows.findIndex((row) => !suppliers.some((item) => item.active && item.documentType === "RUC" && item.documentNumber === row.contractorDocument));
+    if (missingContractorIndex >= 0) return setError(`Fila ${missingContractorIndex + 1}: el RUC no existe o está inactivo en Empresas y personas.`);
     const missingSiteIndex = rows.findIndex((row) => !(row.site || site).trim());
     if (missingSiteIndex >= 0) return setError(`Fila ${missingSiteIndex + 1}: completa el site o ingresa un site predeterminado.`);
     const invalidIndex = rows.findIndex((row) => !row.productId || normalizeEquipmentIdentifier(row.serial).length < 5);
@@ -985,7 +1002,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         site: (row.site || site).trim().toUpperCase(),
         coordinatorF1: (row.coordinatorF1 || coordinatorF1).trim().toUpperCase(),
         contractorDocument: row.contractorDocument,
-        contractorName: row.contractorName.trim().toUpperCase(),
+        contractorName: suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === row.contractorDocument)?.businessName.toUpperCase() || "",
         productId: row.productId,
         serial: row.serial,
         itemType: row.itemType,
@@ -1158,7 +1175,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
                 <td className="return-row-number"><strong>{index + 1}</strong></td>
                 <td><input className="table-input" aria-label={`Site fila ${index + 1}`} value={row.site} onChange={(event) => updateRow(row.key, { site: event.target.value.toUpperCase() })} placeholder={site || "Código o nombre"} /></td>
                 <td><input className="table-input" aria-label={`Coordinador F1 fila ${index + 1}`} list="return-f1-coordinators" value={row.coordinatorF1} onChange={(event) => updateRow(row.key, { coordinatorF1: event.target.value.toUpperCase() })} placeholder={coordinatorF1 || "Seleccionar"} />{effectiveCoordinator && !matchedCoordinator && <span className="return-table-warning"><Plus size={12} />Nuevo: se agregará al maestro F1</span>}{matchedCoordinator && !matchedCoordinator.active && <span className="return-table-warning"><AlertTriangle size={12} />Inactivo: actívalo en Configuración</span>}</td>
-                <td className="return-contractor-cell"><input className="table-input" aria-label={`RUC contrata fila ${index + 1}`} inputMode="numeric" maxLength={11} value={row.contractorDocument} onChange={(event) => updateContractorDocument(row, event.target.value)} placeholder="RUC (opcional)" /><input className="table-input" aria-label={`Contrata desmontaje fila ${index + 1}`} value={row.contractorName} onChange={(event) => updateRow(row.key, { contractorName: event.target.value.toUpperCase() })} placeholder="Razón social / contrata" required />{matchedSupplier?.active && <small>Maestro: {matchedSupplier.businessName}</small>}{matchedSupplier && !matchedSupplier.active && <span className="return-table-warning"><AlertTriangle size={12} />Proveedor inactivo</span>}{row.contractorDocument.length === 11 && !matchedSupplier && row.contractorName && <span className="return-table-warning"><Plus size={12} />Se agregará al maestro de empresas</span>}</td>
+                <td className="return-contractor-cell"><input className="table-input" aria-label={`RUC contrata fila ${index + 1}`} inputMode="numeric" maxLength={11} value={row.contractorDocument} onChange={(event) => updateContractorDocument(row, event.target.value)} placeholder="RUC de 11 dígitos" required /><input className="table-input" aria-label={`Razón social contrata fila ${index + 1}`} value={matchedSupplier?.active ? matchedSupplier.businessName : ""} placeholder="Razón social automática" readOnly />{matchedSupplier?.active && <small>Razón social tomada del maestro</small>}{matchedSupplier && !matchedSupplier.active && <span className="return-table-warning"><AlertTriangle size={12} />Proveedor inactivo</span>}{row.contractorDocument.length === 11 && !matchedSupplier && <span className="return-table-warning"><AlertTriangle size={12} />RUC no registrado en Empresas y personas</span>}</td>
                 <td><input className="table-input" aria-label={`Componente fila ${index + 1}`} value={row.networkComponent} onChange={(event) => updateRow(row.key, { networkComponent: event.target.value.toUpperCase() })} placeholder="Rack / antena" /></td>
                 <td><input className="table-input" aria-label={`Subproyecto fila ${index + 1}`} value={row.subProject} onChange={(event) => updateRow(row.key, { subProject: event.target.value.toUpperCase() })} /></td>
                 <td><input className="table-input" aria-label={`Proyecto origen fila ${index + 1}`} value={row.sourceProject} onChange={(event) => updateRow(row.key, { sourceProject: event.target.value.toUpperCase() })} /></td>

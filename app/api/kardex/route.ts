@@ -1074,36 +1074,17 @@ export async function POST(request: Request) {
       const contractorRows = await db.select().from(suppliers).where(eq(suppliers.documentType, "RUC"));
       const contractorByDocument = new Map(contractorRows.map((row) => [row.documentNumber, row]));
       for (const row of normalizedRows) {
-        if (!row.contractorDocument) {
-          if (!row.contractorName) return Response.json({ error: `Fila ${row.item}: completa la contrata que realizó el desmontaje.` }, { status: 400 });
-          continue;
-        }
         if (!/^\d{11}$/.test(row.contractorDocument)) {
-          return Response.json({ error: `Fila ${row.item}: el RUC de la contrata debe tener 11 dígitos.` }, { status: 400 });
+          return Response.json({ error: `Fila ${row.item}: completa el RUC de 11 dígitos de la contrata que realizó el desmontaje.` }, { status: 400 });
         }
         const existingContractor = contractorByDocument.get(row.contractorDocument);
+        if (!existingContractor) {
+          return Response.json({ error: `Fila ${row.item}: el RUC ${row.contractorDocument} no existe en Empresas y personas. Regístralo antes de continuar.` }, { status: 400 });
+        }
         if (existingContractor && !existingContractor.active) {
           return Response.json({ error: `Fila ${row.item}: la contrata ${existingContractor.businessName} está inactiva. Actívala en Empresas y personas.` }, { status: 409 });
         }
-        if (existingContractor) {
-          row.contractorName = normalizeParty(existingContractor.businessName);
-          continue;
-        }
-        if (!row.contractorName) {
-          return Response.json({ error: `Fila ${row.item}: el RUC ${row.contractorDocument} no está en el maestro; completa también la razón social.` }, { status: 400 });
-        }
-        const [createdContractor] = await db.insert(suppliers).values({
-          documentType: "RUC",
-          documentNumber: row.contractorDocument,
-          businessName: row.contractorName,
-          tradeName: "",
-          source: "DEVOLUCION_EXCEL",
-          active: true,
-        }).onConflictDoNothing().returning();
-        const contractor = createdContractor ?? (await db.select().from(suppliers).where(eq(suppliers.documentNumber, row.contractorDocument)).limit(1))[0];
-        if (!contractor) return Response.json({ error: `Fila ${row.item}: no se pudo registrar la contrata ${row.contractorName}.` }, { status: 409 });
-        contractorByDocument.set(contractor.documentNumber, contractor);
-        row.contractorName = normalizeParty(contractor.businessName);
+        row.contractorName = normalizeParty(existingContractor.businessName);
       }
 
       const productIds = [...new Set(normalizedRows.map((row) => row.productId))];
