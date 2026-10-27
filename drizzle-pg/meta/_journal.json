@@ -183,6 +183,13 @@
       "when": 1793124847144,
       "tag": "0025_equipment_return_lot_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793134064597,
+      "tag": "0026_equipment_return_contractor",
+      "breakpoints": true
     }
   ]
 }

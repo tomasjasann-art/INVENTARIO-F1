@@ -325,6 +325,8 @@ export const equipmentReturns = pgTable(
     batchCode: text("batch_code").notNull().default(""),
     batchItem: integer("batch_item").notNull().default(1),
     coordinatorF1: text("coordinator_f1").notNull(),
+    dismantlingContractorDocument: text("dismantling_contractor_document").notNull().default(""),
+    dismantlingContractorName: text("dismantling_contractor_name").notNull().default(""),
     orderNumber: text("order_number").notNull().default(""),
     site: text("site").notNull().default(""),
     warehouse: text("warehouse").notNull().default("RED"),

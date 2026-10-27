@@ -246,6 +246,8 @@ type EquipmentReturnStatusInput = {
 type EquipmentReturnBatchRowInput = {
   site?: string;
   coordinatorF1?: string;
+  contractorDocument?: string;
+  contractorName?: string;
   productId?: number;
   serial?: string;
   itemType?: "EQUIPO" | "LOTE";
@@ -1008,6 +1010,8 @@ export async function POST(request: Request) {
         item: index + 1,
         site: normalizeParty(row.site) || defaultSite,
         coordinatorF1: normalizeParty(row.coordinatorF1) || coordinatorF1,
+        contractorDocument: normalizeDocumentNumber(row.contractorDocument),
+        contractorName: normalizeParty(row.contractorName),
         productId: Number(row.productId),
         serial: clean(row.serial).toUpperCase(),
         serialKey: normalizeEquipmentIdentifier(row.serial),
@@ -1065,6 +1069,41 @@ export async function POST(request: Request) {
         if (!coordinator) return Response.json({ error: `Fila ${row.item}: no se pudo registrar el Coordinador F1 ${row.coordinatorF1}.` }, { status: 409 });
         coordinatorByName.set(normalizeParty(coordinator.name), coordinator);
         coordinatorByKey.set(normalizeEquipmentIdentifier(coordinator.name), coordinator);
+      }
+
+      const contractorRows = await db.select().from(suppliers).where(eq(suppliers.documentType, "RUC"));
+      const contractorByDocument = new Map(contractorRows.map((row) => [row.documentNumber, row]));
+      for (const row of normalizedRows) {
+        if (!row.contractorDocument) {
+          if (!row.contractorName) return Response.json({ error: `Fila ${row.item}: completa la contrata que realizó el desmontaje.` }, { status: 400 });
+          continue;
+        }
+        if (!/^\d{11}$/.test(row.contractorDocument)) {
+          return Response.json({ error: `Fila ${row.item}: el RUC de la contrata debe tener 11 dígitos.` }, { status: 400 });
+        }
+        const existingContractor = contractorByDocument.get(row.contractorDocument);
+        if (existingContractor && !existingContractor.active) {
+          return Response.json({ error: `Fila ${row.item}: la contrata ${existingContractor.businessName} está inactiva. Actívala en Empresas y personas.` }, { status: 409 });
+        }
+        if (existingContractor) {
+          row.contractorName = normalizeParty(existingContractor.businessName);
+          continue;
+        }
+        if (!row.contractorName) {
+          return Response.json({ error: `Fila ${row.item}: el RUC ${row.contractorDocument} no está en el maestro; completa también la razón social.` }, { status: 400 });
+        }
+        const [createdContractor] = await db.insert(suppliers).values({
+          documentType: "RUC",
+          documentNumber: row.contractorDocument,
+          businessName: row.contractorName,
+          tradeName: "",
+          source: "DEVOLUCION_EXCEL",
+          active: true,
+        }).onConflictDoNothing().returning();
+        const contractor = createdContractor ?? (await db.select().from(suppliers).where(eq(suppliers.documentNumber, row.contractorDocument)).limit(1))[0];
+        if (!contractor) return Response.json({ error: `Fila ${row.item}: no se pudo registrar la contrata ${row.contractorName}.` }, { status: 409 });
+        contractorByDocument.set(contractor.documentNumber, contractor);
+        row.contractorName = normalizeParty(contractor.businessName);
       }
 
       const productIds = [...new Set(normalizedRows.map((row) => row.productId))];
@@ -1143,6 +1182,8 @@ export async function POST(request: Request) {
           coordinatorId: rowCoordinator.id,
           sourceMovementId: historical?.id || Number(input.sourceMovementId) || null,
           coordinatorF1: rowCoordinator.name,
+          dismantlingContractorDocument: row.contractorDocument,
+          dismantlingContractorName: row.contractorName,
           orderNumber: orderNumber || historical?.orderNumber || "",
           entryDate,
           site: row.site,
@@ -1276,6 +1317,8 @@ export async function POST(request: Request) {
               origin,
               owner: product.owner,
               recordStatus: "Disponible",
+              contractorDocument: record.dismantlingContractorDocument,
+              contractor: record.dismantlingContractorName,
               registeredBy: operator,
               notes: `Desinstalación recibida desde ${record.returnCode}${clean(receipt.notes) ? ` · ${clean(receipt.notes)}` : ""}`,
             }).returning();

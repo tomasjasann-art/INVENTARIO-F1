@@ -50,6 +50,8 @@ export type EquipmentReturnRecord = {
   sourceMovementId: number | null;
   stockMovementId: number | null;
   coordinatorF1: string;
+  dismantlingContractorDocument: string;
+  dismantlingContractorName: string;
   orderNumber: string;
   site: string;
   warehouse: string;
@@ -127,6 +129,14 @@ type ReturnCoordinator = {
   active: boolean;
 };
 
+type ReturnSupplier = {
+  id: number;
+  documentType: "RUC" | "DNI";
+  documentNumber: string;
+  businessName: string;
+  active: boolean;
+};
+
 type ReturnMovement = {
   id: number;
   productId: number;
@@ -141,6 +151,7 @@ type Props = {
   productIdentifiers: ProductIdentifier[];
   movements: ReturnMovement[];
   coordinators: ReturnCoordinator[];
+  suppliers: ReturnSupplier[];
   returns: EquipmentReturnRecord[];
   loading: boolean;
   saving: boolean;
@@ -151,6 +162,8 @@ type DraftRow = {
   key: string;
   site: string;
   coordinatorF1: string;
+  contractorDocument: string;
+  contractorName: string;
   productId: number | null;
   productSearch: string;
   serial: string;
@@ -216,6 +229,8 @@ function newDraftRow(key = crypto.randomUUID()): DraftRow {
     key,
     site: "",
     coordinatorF1: "",
+    contractorDocument: "",
+    contractorName: "",
     productId: null,
     productSearch: "",
     serial: "",
@@ -323,6 +338,8 @@ function saveBlob(name: string, content: BlobPart, type: string) {
 function csvPayload(values: {
   item: number;
   coordinatorF1: string;
+  contractorDocument: string;
+  contractorName: string;
   warehouse: string;
   networkComponent: string;
   subProject: string;
@@ -335,7 +352,7 @@ function csvPayload(values: {
   volumeM3: string;
   site: string;
 }) {
-  return [values.item, values.coordinatorF1, values.warehouse, values.networkComponent, values.subProject, values.sourceProject, values.hardwareTask, values.sku, values.serial, values.quantity, values.condition, values.volumeM3, values.site].map(csvCell).join(",");
+  return [values.item, values.coordinatorF1, values.contractorDocument, values.contractorName, values.warehouse, values.networkComponent, values.subProject, values.sourceProject, values.hardwareTask, values.sku, values.serial, values.quantity, values.condition, values.volumeM3, values.site].map(csvCell).join(",");
 }
 
 function photoKindFromName(fileName: string) {
@@ -431,6 +448,8 @@ function returnExportRows(batch: ReturnBatch) {
     "N.º F1": batch.code,
     "Fecha de ingreso": record.entryDate,
     "Coordinador F1": record.coordinatorF1,
+    "RUC Contrata": record.dismantlingContractorDocument,
+    "Contrata que desmontó": record.dismantlingContractorName,
     Almacén: record.warehouse,
     Comentario: record.batchComments,
     Componente: record.networkComponent,
@@ -451,6 +470,8 @@ function returnExportRows(batch: ReturnBatch) {
     CSV: csvPayload({
       item: record.batchItem,
       coordinatorF1: record.coordinatorF1,
+      contractorDocument: record.dismantlingContractorDocument,
+      contractorName: record.dismantlingContractorName,
       warehouse: record.warehouse,
       networkComponent: record.networkComponent,
       subProject: record.subProject,
@@ -470,7 +491,7 @@ function returnExportRows(batch: ReturnBatch) {
   }));
 }
 
-export default function EquipmentReturnsView({ products, productIdentifiers, movements, coordinators, returns, loading, saving, onSave }: Props) {
+export default function EquipmentReturnsView({ products, productIdentifiers, movements, coordinators, suppliers, returns, loading, saving, onSave }: Props) {
   const [rows, setRows] = useState<DraftRow[]>(() => [newDraftRow("draft-initial")]);
   const [coordinatorF1, setCoordinatorF1] = useState("");
   const [site, setSite] = useState("");
@@ -689,6 +710,15 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     });
   }
 
+  function updateContractorDocument(row: DraftRow, value: string) {
+    const document = value.replace(/\D/g, "").slice(0, 11);
+    const supplier = suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === document);
+    updateRow(row.key, {
+      contractorDocument: document,
+      contractorName: supplier?.businessName.toUpperCase() || (document === row.contractorDocument ? row.contractorName : ""),
+    });
+  }
+
   function resetDraft() {
     setRows([newDraftRow()]);
     setCoordinatorF1("");
@@ -706,13 +736,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   async function downloadBulkTemplate() {
     const XLSX = await import("xlsx");
     const headers = [
-      "ID", "Fecha de Ingreso", "Coordinador F1", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
+      "ID", "Fecha de Ingreso", "Coordinador F1", "RUC Contrata", "Contrata Desmontaje", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
       "Tarea Hardware", "SKU", "Descripción", "Serie/Lote", "Tipo de Registro", "Solicitud de Devolución", "Largo", "Cantidad",
       "Condición", "M3", "Site", "Observación", "Foto de Serie Legible Equipo", "Foto de Modelo Legible Equipo",
       "Foto Panorámica de Equipos", "Opcional Etiqueta Entel",
     ];
     const example = [
-      1, today(), "COORDINADOR F1", "RED", "DEVOLUCIÓN DE SITE", "RACK", "SUBPROYECTO", "PROYECTO ORIGEN",
+      1, today(), "COORDINADOR F1", "20123456789", "CONTRATA QUE REALIZÓ EL DESMONTAJE", "RED", "DEVOLUCIÓN DE SITE", "RACK", "SUBPROYECTO", "PROYECTO ORIGEN",
       "TAREA", "ENT960000001", "DESCRIPCIÓN DEL EQUIPO", "SERIE001", "EQUIPO", "PEDIDO-001", 20, 1,
       "USADO OPERATIVO", 0.32, "SITE-001", "OBSERVACIÓN", "PEGAR FOTO", "PEGAR FOTO", "PEGAR FOTO", "OPCIONAL",
     ];
@@ -727,6 +757,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       ["Fecha", "Completa la Fecha de Ingreso. Si todas las filas pertenecen a una carga, se usará la primera fecha encontrada."],
       ["Fotos", "Pega cada foto como imagen dentro de su columna y alineada con la fila correspondiente."],
       ["Lotes", "Para lotes indica Serie/Lote y la cantidad total de esa línea."],
+      ["Contrata", "Indica el RUC y la razón social de la contrata que realizó el desmontaje. Si el RUC está en el maestro, el nombre se completará automáticamente."],
       ["Revisión", "La carga se mostrará primero en pantalla para corregir SKU, serie, condición y evidencias."],
       ["Stock", "La carga lógica no suma stock. El stock se actualiza recién al confirmar la llegada física."],
       ["Límite", "Máximo 100 líneas por archivo y por site."],
@@ -754,11 +785,14 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       const draftRows = imported.rows.map((source) => {
         const product = products.find((item) => normalizeEquipmentIdentifier(item.sku) === normalizeEquipmentIdentifier(source.sku))
           ?? products.find((item) => source.description && normalizeEquipmentIdentifier(item.description) === normalizeEquipmentIdentifier(source.description));
+        const supplier = suppliers.find((item) => item.active && item.documentType === "RUC" && item.documentNumber === source.contractorDocument);
         const itemType = source.itemType || (product?.category.toUpperCase() === "LOTE" ? "LOTE" : "EQUIPO");
         return {
           ...newDraftRow(),
           site: source.site.toUpperCase(),
           coordinatorF1: source.coordinatorF1.toUpperCase(),
+          contractorDocument: source.contractorDocument,
+          contractorName: (supplier?.businessName || source.contractorName).toUpperCase(),
           productId: product?.id ?? null,
           productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
           serial: source.serial.toUpperCase(),
@@ -774,7 +808,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           matchMethod: product ? "SKU_VISIBLE" : "MANUAL",
           matchConfidence: product ? 100 : 0,
           notes: source.notes,
-          warnings: [...source.warnings],
+          warnings: [...source.warnings, ...(source.contractorDocument && !supplier && !source.contractorName ? ["El RUC de la contrata no está en el maestro; completa la razón social."] : [])],
         } satisfies DraftRow;
       });
 
@@ -914,6 +948,10 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     if (!entryDate) return setError("Selecciona la fecha de ingreso.");
     const missingCoordinatorIndex = rows.findIndex((row) => !(row.coordinatorF1 || coordinatorF1).trim());
     if (missingCoordinatorIndex >= 0) return setError(`Fila ${missingCoordinatorIndex + 1}: selecciona el Coordinador F1 o ingresa uno predeterminado.`);
+    const missingContractorIndex = rows.findIndex((row) => !row.contractorName.trim());
+    if (missingContractorIndex >= 0) return setError(`Fila ${missingContractorIndex + 1}: completa la contrata que realizó el desmontaje.`);
+    const invalidContractorDocumentIndex = rows.findIndex((row) => row.contractorDocument && !/^\d{11}$/.test(row.contractorDocument));
+    if (invalidContractorDocumentIndex >= 0) return setError(`Fila ${invalidContractorDocumentIndex + 1}: el RUC de la contrata debe tener 11 dígitos o quedar vacío.`);
     const missingSiteIndex = rows.findIndex((row) => !(row.site || site).trim());
     if (missingSiteIndex >= 0) return setError(`Fila ${missingSiteIndex + 1}: completa el site o ingresa un site predeterminado.`);
     const invalidIndex = rows.findIndex((row) => !row.productId || normalizeEquipmentIdentifier(row.serial).length < 5);
@@ -946,6 +984,8 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       rows: rows.map((row) => ({
         site: (row.site || site).trim().toUpperCase(),
         coordinatorF1: (row.coordinatorF1 || coordinatorF1).trim().toUpperCase(),
+        contractorDocument: row.contractorDocument,
+        contractorName: row.contractorName.trim().toUpperCase(),
         productId: row.productId,
         serial: row.serial,
         itemType: row.itemType,
@@ -1106,17 +1146,19 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         <div className="return-table-top-scroll" ref={entryTableTopScrollRef} onScroll={(event) => { const target = entryTableScrollRef.current; if (target && target.scrollLeft !== event.currentTarget.scrollLeft) target.scrollLeft = event.currentTarget.scrollLeft; }} aria-label="Desplazamiento horizontal superior de la tabla"><div style={{ width: `${entryTableWidth}px` }} /></div>
         <div className="table-wrap return-entry-table-wrap" ref={entryTableScrollRef} onScroll={(event) => { const target = entryTableTopScrollRef.current; if (target && target.scrollLeft !== event.currentTarget.scrollLeft) target.scrollLeft = event.currentTarget.scrollLeft; }}>
           <table className="return-entry-table" ref={entryTableRef}>
-            <thead><tr><th>#</th><th>Site *</th><th>Coordinador F1 *</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Tipo *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
+            <thead><tr><th>#</th><th>Site *</th><th>Coordinador F1 *</th><th>Contrata que desmontó *</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Tipo *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
             <tbody>{rows.map((row, index) => {
               const product = products.find((item) => item.id === row.productId);
               const effectiveSite = (row.site || site).trim().toUpperCase();
               const effectiveCoordinator = (row.coordinatorF1 || coordinatorF1).trim().toUpperCase();
               const matchedCoordinator = coordinators.find((item) => item.organization === "F1" && normalizeEquipmentIdentifier(item.name) === normalizeEquipmentIdentifier(effectiveCoordinator));
-              const rowCsv = csvPayload({ item: index + 1, coordinatorF1: effectiveCoordinator, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site: effectiveSite });
+              const matchedSupplier = suppliers.find((item) => item.documentType === "RUC" && item.documentNumber === row.contractorDocument);
+              const rowCsv = csvPayload({ item: index + 1, coordinatorF1: effectiveCoordinator, contractorDocument: row.contractorDocument, contractorName: row.contractorName, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site: effectiveSite });
               return <tr key={row.key}>
                 <td className="return-row-number"><strong>{index + 1}</strong></td>
                 <td><input className="table-input" aria-label={`Site fila ${index + 1}`} value={row.site} onChange={(event) => updateRow(row.key, { site: event.target.value.toUpperCase() })} placeholder={site || "Código o nombre"} /></td>
                 <td><input className="table-input" aria-label={`Coordinador F1 fila ${index + 1}`} list="return-f1-coordinators" value={row.coordinatorF1} onChange={(event) => updateRow(row.key, { coordinatorF1: event.target.value.toUpperCase() })} placeholder={coordinatorF1 || "Seleccionar"} />{effectiveCoordinator && !matchedCoordinator && <span className="return-table-warning"><Plus size={12} />Nuevo: se agregará al maestro F1</span>}{matchedCoordinator && !matchedCoordinator.active && <span className="return-table-warning"><AlertTriangle size={12} />Inactivo: actívalo en Configuración</span>}</td>
+                <td className="return-contractor-cell"><input className="table-input" aria-label={`RUC contrata fila ${index + 1}`} inputMode="numeric" maxLength={11} value={row.contractorDocument} onChange={(event) => updateContractorDocument(row, event.target.value)} placeholder="RUC (opcional)" /><input className="table-input" aria-label={`Contrata desmontaje fila ${index + 1}`} value={row.contractorName} onChange={(event) => updateRow(row.key, { contractorName: event.target.value.toUpperCase() })} placeholder="Razón social / contrata" required />{matchedSupplier?.active && <small>Maestro: {matchedSupplier.businessName}</small>}{matchedSupplier && !matchedSupplier.active && <span className="return-table-warning"><AlertTriangle size={12} />Proveedor inactivo</span>}{row.contractorDocument.length === 11 && !matchedSupplier && row.contractorName && <span className="return-table-warning"><Plus size={12} />Se agregará al maestro de empresas</span>}</td>
                 <td><input className="table-input" aria-label={`Componente fila ${index + 1}`} value={row.networkComponent} onChange={(event) => updateRow(row.key, { networkComponent: event.target.value.toUpperCase() })} placeholder="Rack / antena" /></td>
                 <td><input className="table-input" aria-label={`Subproyecto fila ${index + 1}`} value={row.subProject} onChange={(event) => updateRow(row.key, { subProject: event.target.value.toUpperCase() })} /></td>
                 <td><input className="table-input" aria-label={`Proyecto origen fila ${index + 1}`} value={row.sourceProject} onChange={(event) => updateRow(row.key, { sourceProject: event.target.value.toUpperCase() })} /></td>
@@ -1188,10 +1230,11 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             <button className="secondary-button" onClick={() => void copyCsvColumn(batch)}><Copy size={15} />Copiar columna CSV</button>
             <span>Fecha ingreso: {displayDay(batch.entryDate)} · Registro lógico: {displayDate(batch.createdAt)} · Almacén: {batch.warehouse}</span>
           </div>
-          <div className="table-wrap"><table className="return-site-table"><thead><tr><th>Ítem</th><th>Site</th><th>Coordinador F1</th><th>SKU / Descripción</th><th>Serie / Lote</th><th>Cant.</th><th>Condición / M3</th><th>CSV</th><th>Evidencias fotográficas</th></tr></thead><tbody>{batch.rows.map((record) => <tr key={record.id}>
+          <div className="table-wrap"><table className="return-site-table"><thead><tr><th>Ítem</th><th>Site</th><th>Coordinador F1</th><th>Contrata que desmontó</th><th>SKU / Descripción</th><th>Serie / Lote</th><th>Cant.</th><th>Condición / M3</th><th>CSV</th><th>Evidencias fotográficas</th></tr></thead><tbody>{batch.rows.map((record) => <tr key={record.id}>
             <td><strong>{record.batchItem}</strong></td>
             <td><strong>{record.site}</strong></td>
             <td><strong>{record.coordinatorF1}</strong></td>
+            <td><strong>{record.dismantlingContractorName || "—"}</strong><small>{record.dismantlingContractorDocument || "Sin RUC"}</small></td>
             <td><strong>{record.skuSnapshot}</strong><small>{record.descriptionSnapshot}</small></td>
             <td><strong>{record.serial}</strong><small>PN: {record.detectedPartNumber || "—"}</small></td>
             <td><strong>{record.quantity}</strong><small>{record.length ? `Largo: ${record.length}` : ""}</small></td>

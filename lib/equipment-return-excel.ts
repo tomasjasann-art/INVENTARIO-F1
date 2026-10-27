@@ -12,6 +12,8 @@ export type ReturnExcelRow = {
   excelRow: number;
   entryDate: string;
   coordinatorF1: string;
+  contractorDocument: string;
+  contractorName: string;
   warehouse: string;
   comments: string;
   networkComponent: string;
@@ -62,6 +64,8 @@ const HEADER_ALIASES = {
   id: ["ID", "ITEM", "FILA"],
   entryDate: ["FECHA", "FECHA INGRESO", "FECHA DE INGRESO", "FECHA DE CARGA", "FECHA DEVOLUCION", "FECHA DE DEVOLUCION"],
   coordinatorF1: ["COORDINADOR REDES", "COORDINADOR F1", "CORD F1", "CORDF1"],
+  contractorDocument: ["RUC CONTRATA", "RUC DE CONTRATA", "RUC CONTRATISTA", "RUC"],
+  contractorName: ["CONTRATA", "CONTRATA DESMONTAJE", "CONTRATA QUE DESMONTO", "CONTRATISTA", "RAZON SOCIAL", "RAZÓN SOCIAL"],
   warehouse: ["ALMACEN", "ALMACÉN"],
   comments: ["COMENTARIOS", "COMENTARIO"],
   networkComponent: ["COMPONENTE", "COMENTARIO APLICA PARA LI EL TIPO DE ESTADO"],
@@ -322,6 +326,8 @@ export async function parseEquipmentReturnExcel(file: File): Promise<ReturnExcel
       excelRow,
       entryDate: normalizeKardexDate(columns.entryDate === undefined ? "" : values[columns.entryDate]),
       coordinatorF1: cell(values, columns, "coordinatorF1"),
+      contractorDocument: cell(values, columns, "contractorDocument").replace(/\D/g, ""),
+      contractorName: cell(values, columns, "contractorName"),
       warehouse: cell(values, columns, "warehouse"),
       comments: cell(values, columns, "comments"),
       networkComponent: cell(values, columns, "networkComponent"),
