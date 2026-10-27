@@ -10,7 +10,7 @@ export type ReturnExcelPhoto = {
 
 export type ReturnExcelRow = {
   excelRow: number;
-  returnDate: string;
+  entryDate: string;
   coordinatorF1: string;
   warehouse: string;
   comments: string;
@@ -60,7 +60,7 @@ const RELATIONSHIP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/r
 
 const HEADER_ALIASES = {
   id: ["ID", "ITEM", "FILA"],
-  returnDate: ["FECHA", "FECHA DEVOLUCION", "FECHA DE DEVOLUCION", "FECHA DE CARGA"],
+  entryDate: ["FECHA", "FECHA INGRESO", "FECHA DE INGRESO", "FECHA DE CARGA", "FECHA DEVOLUCION", "FECHA DE DEVOLUCION"],
   coordinatorF1: ["COORDINADOR REDES", "COORDINADOR F1", "CORD F1", "CORDF1"],
   warehouse: ["ALMACEN", "ALMACÉN"],
   comments: ["COMENTARIOS", "COMENTARIO"],
@@ -320,7 +320,7 @@ export async function parseEquipmentReturnExcel(file: File): Promise<ReturnExcel
     if (!photos.panoramica) warnings.push("El Excel no incluye una foto panorámica en esta fila.");
     rows.push({
       excelRow,
-      returnDate: normalizeKardexDate(columns.returnDate === undefined ? "" : values[columns.returnDate]),
+      entryDate: normalizeKardexDate(columns.entryDate === undefined ? "" : values[columns.entryDate]),
       coordinatorF1: cell(values, columns, "coordinatorF1"),
       warehouse: cell(values, columns, "warehouse"),
       comments: cell(values, columns, "comments"),

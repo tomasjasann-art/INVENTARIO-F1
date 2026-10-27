@@ -21,7 +21,7 @@ import {
   XCircle,
 } from "lucide-react";
 import Image from "next/image";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent } from "react";
 import { parseEquipmentReturnExcel } from "../lib/equipment-return-excel";
 import { normalizeEquipmentIdentifier, recognizeEquipmentReturn } from "../lib/equipment-return-recognition";
@@ -54,7 +54,7 @@ export type EquipmentReturnRecord = {
   site: string;
   warehouse: string;
   batchComments: string;
-  returnDate: string;
+  entryDate: string;
   networkComponent: string;
   subProject: string;
   sourceProject: string;
@@ -205,7 +205,7 @@ type ReturnBatch = {
   coordinatorF1: string;
   warehouse: string;
   orderNumber: string;
-  returnDate: string;
+  entryDate: string;
   createdAt: string;
 };
 
@@ -402,7 +402,7 @@ function returnExportRows(batch: ReturnBatch) {
   return batch.rows.map((record) => ({
     ID: record.batchItem,
     "N.º F1": batch.code,
-    "Fecha de devolución": record.returnDate,
+    "Fecha de ingreso": record.entryDate,
     "Coordinador F1": record.coordinatorF1,
     Almacén: record.warehouse,
     Comentario: record.batchComments,
@@ -449,7 +449,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   const [site, setSite] = useState("");
   const [warehouse, setWarehouse] = useState("RED");
   const [orderNumber, setOrderNumber] = useState("");
-  const [returnDate, setReturnDate] = useState(today());
+  const [entryDate, setEntryDate] = useState(today());
   const [comments, setComments] = useState("");
   const [processingKey, setProcessingKey] = useState("");
   const [progress, setProgress] = useState(0);
@@ -458,6 +458,22 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   const [error, setError] = useState("");
   const [receivingBatch, setReceivingBatch] = useState("");
   const [receiptDrafts, setReceiptDrafts] = useState<ReceiptDraft[]>([]);
+  const entryTableRef = useRef<HTMLTableElement>(null);
+  const entryTableScrollRef = useRef<HTMLDivElement>(null);
+  const entryTableTopScrollRef = useRef<HTMLDivElement>(null);
+  const [entryTableWidth, setEntryTableWidth] = useState(0);
+
+  useEffect(() => {
+    const table = entryTableRef.current;
+    const viewport = entryTableScrollRef.current;
+    if (!table || !viewport) return;
+    const updateWidth = () => setEntryTableWidth(Math.max(table.scrollWidth, viewport.clientWidth));
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(table);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [rows.length]);
 
   const f1Coordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "F1");
   const entelCoordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "ENTEL");
@@ -477,7 +493,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         coordinatorF1: sorted[0]?.coordinatorF1 || "—",
         warehouse: sorted[0]?.warehouse || "RED",
         orderNumber: sorted[0]?.orderNumber || "",
-        returnDate: sorted[0]?.returnDate || "",
+        entryDate: sorted[0]?.entryDate || "",
         createdAt: sorted[0]?.logicalRegisteredAt || sorted[0]?.createdAt || "",
       };
     }).toSorted((left, right) => Math.max(...right.rows.map((row) => row.id)) - Math.max(...left.rows.map((row) => row.id)));
@@ -503,15 +519,17 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     ...receiptDrafts.map((receipt) => receipt.condition),
   ].map((value) => value.trim().toUpperCase()).filter(Boolean))].toSorted(), [receiptDrafts, returns, rows]);
   const bulkPreview = useMemo(() => {
-    const serialCounts = new Map<string, number>();
+    const identifierCounts = new Map<string, number>();
     rows.forEach((row) => {
       const serialKey = normalizeEquipmentIdentifier(row.serial);
-      if (serialKey) serialCounts.set(serialKey, (serialCounts.get(serialKey) ?? 0) + 1);
+      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId ?? 0}:${serialKey}` : `EQUIPO:${serialKey}`;
+      if (serialKey) identifierCounts.set(controlKey, (identifierCounts.get(controlKey) ?? 0) + 1);
     });
     const ready = rows.filter((row) => {
       const serialKey = normalizeEquipmentIdentifier(row.serial);
+      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId ?? 0}:${serialKey}` : `EQUIPO:${serialKey}`;
       const validQuantity = row.itemType === "LOTE" || row.quantity === 1;
-      return Boolean(row.productId) && serialKey.length >= 5 && serialCounts.get(serialKey) === 1 && validQuantity;
+      return Boolean(row.productId) && serialKey.length >= 5 && identifierCounts.get(controlKey) === 1 && validQuantity;
     }).length;
     return { total: rows.length, ready, review: rows.length - ready };
   }, [rows]);
@@ -619,7 +637,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     setSite("");
     setWarehouse("RED");
     setOrderNumber("");
-    setReturnDate(today());
+    setEntryDate(today());
     setComments("");
     setProgress(0);
     setExcelImportStatus("");
@@ -630,7 +648,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   async function downloadBulkTemplate() {
     const XLSX = await import("xlsx");
     const headers = [
-      "ID", "Fecha de Devolución", "Coordinador F1", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
+      "ID", "Fecha de Ingreso", "Coordinador F1", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
       "Tarea Hardware", "SKU", "Descripción", "Serie/Lote", "Tipo de Registro", "Solicitud de Devolución", "Largo", "Cantidad",
       "Condición", "M3", "Site", "Observación", "Foto de Serie Legible Equipo", "Foto de Modelo Legible Equipo",
       "Foto Panorámica de Equipos", "Opcional Etiqueta Entel",
@@ -648,7 +666,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       ["Regla", "Detalle"],
       ["Una fila por serie", "Los equipos seriados deben ir en líneas independientes con su SKU asociado."],
       ["Tipo de registro", "Selecciona EQUIPO para una serie individual (cantidad 1) o LOTE cuando una misma identificación representa varias unidades."],
-      ["Fecha", "Completa la Fecha de Devolución. Si todas las filas pertenecen a una carga, se usará la primera fecha encontrada."],
+      ["Fecha", "Completa la Fecha de Ingreso. Si todas las filas pertenecen a una carga, se usará la primera fecha encontrada."],
       ["Fotos", "Pega cada foto como imagen dentro de su columna y alineada con la fila correspondiente."],
       ["Lotes", "Para lotes indica Serie/Lote y la cantidad total de esa línea."],
       ["Revisión", "La carga se mostrará primero en pantalla para corregir SKU, serie, condición y evidencias."],
@@ -705,13 +723,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       const firstWithSite = imported.rows.find((row) => row.site)?.site;
       const firstWithWarehouse = imported.rows.find((row) => row.warehouse)?.warehouse;
       const firstWithOrder = imported.rows.find((row) => row.orderNumber)?.orderNumber;
-      const firstWithReturnDate = imported.rows.find((row) => row.returnDate)?.returnDate;
+      const firstWithEntryDate = imported.rows.find((row) => row.entryDate)?.entryDate;
       const firstWithComments = imported.rows.find((row) => row.comments)?.comments;
       if (firstWithCoordinator) setCoordinatorF1(firstWithCoordinator.toUpperCase());
       if (firstWithSite) setSite(firstWithSite.toUpperCase());
       if (firstWithWarehouse) setWarehouse(firstWithWarehouse.toUpperCase());
       if (firstWithOrder) setOrderNumber(firstWithOrder.toUpperCase());
-      if (firstWithReturnDate) setReturnDate(firstWithReturnDate);
+      if (firstWithEntryDate) setEntryDate(firstWithEntryDate);
       if (firstWithComments) setComments(firstWithComments);
 
       const needsOcr = imported.rows.some((source, index) => {
@@ -832,24 +850,30 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     event.preventDefault();
     setError("");
     if (processingKey) return setError("Espera a que termine la lectura o carga de fotografías.");
-    if (!coordinatorF1 || !site.trim() || !returnDate) return setError("Selecciona el Coordinador F1, la fecha de devolución e ingresa el site.");
+    if (!coordinatorF1 || !site.trim() || !entryDate) return setError("Selecciona el Coordinador F1, la fecha de ingreso e ingresa el site.");
     const invalidIndex = rows.findIndex((row) => !row.productId || normalizeEquipmentIdentifier(row.serial).length < 5);
     if (invalidIndex >= 0) return setError(`Fila ${invalidIndex + 1}: selecciona el SKU y completa una Serie/Lote válida.`);
     const invalidEquipmentQuantityIndex = rows.findIndex((row) => row.itemType === "EQUIPO" && row.quantity !== 1);
     if (invalidEquipmentQuantityIndex >= 0) return setError(`Fila ${invalidEquipmentQuantityIndex + 1}: un equipo seriado debe tener cantidad 1. Selecciona LOTE si la identificación agrupa varias unidades.`);
-    const seenSerials = new Set<string>();
+    const seenControls = new Set<string>();
     const duplicateIndex = rows.findIndex((row) => {
       const serialKey = normalizeEquipmentIdentifier(row.serial);
-      if (seenSerials.has(serialKey)) return true;
-      seenSerials.add(serialKey);
+      const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${serialKey}` : `EQUIPO:${serialKey}`;
+      if (seenControls.has(controlKey)) return true;
+      seenControls.add(controlKey);
       return false;
     });
-    if (duplicateIndex >= 0) return setError(`Fila ${duplicateIndex + 1}: la Serie/Lote está repetida dentro de esta carga.`);
+    if (duplicateIndex >= 0) {
+      const repeated = rows[duplicateIndex];
+      return setError(repeated.itemType === "LOTE"
+        ? `Fila ${duplicateIndex + 1}: el lote está repetido para el mismo SKU dentro de este site.`
+        : `Fila ${duplicateIndex + 1}: la serie del equipo está repetida dentro de esta carga.`);
+    }
     const ok = await onSave({
       action: "equipmentReturnBatchCreate",
       coordinatorF1,
       orderNumber,
-      returnDate,
+      entryDate,
       site,
       warehouse,
       comments,
@@ -993,15 +1017,16 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           <label className="field"><span>Coordinador F1 *</span><input list="return-f1-coordinators" value={coordinatorF1} onChange={(event) => setCoordinatorF1(event.target.value.toUpperCase())} placeholder="Busca al coordinador" required /><datalist id="return-f1-coordinators">{f1Coordinators.map((coordinator) => <option value={coordinator.name} key={coordinator.id} />)}</datalist></label>
           <label className="field"><span>Site de desmontaje *</span><input value={site} onChange={(event) => setSite(event.target.value.toUpperCase())} placeholder="Código o nombre del site" required /></label>
           <label className="field"><span>Almacén de procedencia</span><input value={warehouse} onChange={(event) => setWarehouse(event.target.value.toUpperCase())} placeholder="RED" /></label>
-          <label className="field"><span>Fecha de devolución *</span><input type="date" value={returnDate} onChange={(event) => setReturnDate(event.target.value)} required /></label>
+          <label className="field"><span>Fecha de ingreso *</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} required /></label>
           <label className="field"><span>N.º Pedido relacionado</span><input value={orderNumber} onChange={(event) => setOrderNumber(event.target.value.toUpperCase())} placeholder="Pedido / código Oracle" /></label>
           <label className="field field-wide"><span>Comentario general</span><input value={comments} onChange={(event) => setComments(event.target.value)} placeholder="Referencia de la desinstalación o devolución" /></label>
         </div>
         <datalist id="return-product-options">{products.map((item) => <option value={`${item.sku} — ${item.description}`} key={item.id} />)}</datalist>
         <datalist id="return-condition-options">{conditionOptions.map((condition) => <option value={condition} key={condition} />)}</datalist>
 
-        <div className="table-wrap return-entry-table-wrap">
-          <table className="return-entry-table">
+        <div className="return-table-top-scroll" ref={entryTableTopScrollRef} onScroll={(event) => { const target = entryTableScrollRef.current; if (target && target.scrollLeft !== event.currentTarget.scrollLeft) target.scrollLeft = event.currentTarget.scrollLeft; }} aria-label="Desplazamiento horizontal superior de la tabla"><div style={{ width: `${entryTableWidth}px` }} /></div>
+        <div className="table-wrap return-entry-table-wrap" ref={entryTableScrollRef} onScroll={(event) => { const target = entryTableTopScrollRef.current; if (target && target.scrollLeft !== event.currentTarget.scrollLeft) target.scrollLeft = event.currentTarget.scrollLeft; }}>
+          <table className="return-entry-table" ref={entryTableRef}>
             <thead><tr><th>#</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Tipo *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
             <tbody>{rows.map((row, index) => {
               const product = products.find((item) => item.id === row.productId);
@@ -1077,7 +1102,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             <button className="secondary-button" onClick={() => void exportExcel(batch)}><FileSpreadsheet size={15} />Excel</button>
             <button className="secondary-button" onClick={() => exportCsv(batch)}><Download size={15} />CSV</button>
             <button className="secondary-button" onClick={() => void copyCsvColumn(batch)}><Copy size={15} />Copiar columna CSV</button>
-            <span>Fecha devolución: {displayDay(batch.returnDate)} · Registro lógico: {displayDate(batch.createdAt)} · Almacén: {batch.warehouse}</span>
+            <span>Fecha ingreso: {displayDay(batch.entryDate)} · Registro lógico: {displayDate(batch.createdAt)} · Almacén: {batch.warehouse}</span>
           </div>
           <div className="table-wrap"><table className="return-site-table"><thead><tr><th>Ítem</th><th>SKU / Descripción</th><th>Serie / Lote</th><th>Cant.</th><th>Condición / M3</th><th>CSV</th><th>Evidencias fotográficas</th></tr></thead><tbody>{batch.rows.map((record) => <tr key={record.id}>
             <td><strong>{record.batchItem}</strong></td>

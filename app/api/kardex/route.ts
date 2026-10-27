@@ -279,7 +279,7 @@ type EquipmentReturnBatchCreateInput = {
   action?: "equipmentReturnBatchCreate";
   coordinatorF1?: string;
   orderNumber?: string;
-  returnDate?: string;
+  entryDate?: string;
   site?: string;
   warehouse?: string;
   comments?: string;
@@ -989,7 +989,7 @@ export async function POST(request: Request) {
       const batchPayload = payload as EquipmentReturnBatchCreateInput;
       const coordinatorF1 = normalizeParty(batchPayload.coordinatorF1);
       const orderNumber = clean(batchPayload.orderNumber).toUpperCase();
-      const returnDate = normalizeKardexDate(batchPayload.returnDate);
+      const entryDate = normalizeKardexDate(batchPayload.entryDate);
       const site = normalizeParty(batchPayload.site);
       const warehouse = normalizeParty(batchPayload.warehouse) || "RED";
       const comments = clean(batchPayload.comments);
@@ -998,8 +998,8 @@ export async function POST(request: Request) {
         return Response.json({ error: `La carga contiene ${requestedRows.length} filas. El máximo permitido por site es 100.` }, { status: 400 });
       }
       const batchRows = requestedRows;
-      if (!coordinatorF1 || !returnDate || !site || !batchRows.length) {
-        return Response.json({ error: "Selecciona Coordinador F1, fecha de devolución, site y agrega al menos una fila." }, { status: 400 });
+      if (!coordinatorF1 || !entryDate || !site || !batchRows.length) {
+        return Response.json({ error: "Selecciona Coordinador F1, fecha de ingreso, site y agrega al menos una fila." }, { status: 400 });
       }
       const [coordinator] = await db.select().from(coordinators).where(and(
         eq(coordinators.organization, "F1"),
@@ -1019,15 +1019,22 @@ export async function POST(request: Request) {
         normalizedPartNumber: normalizeEquipmentIdentifier(row.partNumber),
         quantity: Math.max(1, Math.min(100_000, Math.round(Number(row.quantity) || 1))),
       }));
-      const repeatedSerials = new Set<string>();
-      const seenSerials = new Set<string>();
+      const repeatedControls = new Set<string>();
+      const seenControls = new Set<string>();
       normalizedRows.forEach((row) => {
-        if (seenSerials.has(row.serialKey)) repeatedSerials.add(row.serialKey);
-        seenSerials.add(row.serialKey);
+        const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${row.serialKey}` : `EQUIPO:${row.serialKey}`;
+        if (seenControls.has(controlKey)) repeatedControls.add(controlKey);
+        seenControls.add(controlKey);
       });
-      const invalidRow = normalizedRows.find((row) => !row.productId || row.serialKey.length < 5 || repeatedSerials.has(row.serialKey));
+      const invalidRow = normalizedRows.find((row) => {
+        const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId}:${row.serialKey}` : `EQUIPO:${row.serialKey}`;
+        return !row.productId || row.serialKey.length < 5 || repeatedControls.has(controlKey);
+      });
       if (invalidRow) {
-        const reason = repeatedSerials.has(invalidRow.serialKey) ? "la serie/lote está repetida en esta carga" : "falta SKU o Serie/Lote válido";
+        const controlKey = invalidRow.itemType === "LOTE" ? `LOTE:${invalidRow.productId}:${invalidRow.serialKey}` : `EQUIPO:${invalidRow.serialKey}`;
+        const reason = repeatedControls.has(controlKey)
+          ? invalidRow.itemType === "LOTE" ? "el lote está repetido para el mismo SKU en este site" : "la serie del equipo está repetida en esta carga"
+          : "falta SKU o Serie/Lote válido";
         return Response.json({ error: `Fila ${invalidRow.item}: ${reason}.` }, { status: 400 });
       }
       const invalidTypeRow = normalizedRows.find((row) => !["EQUIPO", "LOTE"].includes(row.itemType));
@@ -1042,8 +1049,17 @@ export async function POST(request: Request) {
       if (missingProduct) return Response.json({ error: `Fila ${missingProduct.item}: el SKU seleccionado ya no existe.` }, { status: 404 });
 
       const activeReturnRows = await db.select().from(equipmentReturns).where(inArray(equipmentReturns.serialKey, normalizedRows.map((row) => row.serialKey)));
-      const activeReturn = activeReturnRows.find((row) => !["RECIBIDA_FISICA", "RECHAZADA"].includes(row.status));
-      if (activeReturn) return Response.json({ error: `La serie/lote ${activeReturn.serial} ya tiene una devolución activa.` }, { status: 409 });
+      const activeReturn = activeReturnRows.find((candidate) => {
+        if (["RECIBIDA_FISICA", "RECHAZADA"].includes(candidate.status)) return false;
+        return normalizedRows.some((input) => input.serialKey === candidate.serialKey && (
+          input.itemType === "EQUIPO"
+          || candidate.itemType === "EQUIPO"
+          || (candidate.productId === input.productId && normalizeParty(candidate.site) === site)
+        ));
+      });
+      if (activeReturn) return Response.json({ error: activeReturn.itemType === "LOTE"
+        ? `El lote ${activeReturn.serial} ya tiene una devolución activa para el mismo SKU en el site ${activeReturn.site}.`
+        : `La serie de equipo ${activeReturn.serial} ya tiene una devolución activa.` }, { status: 409 });
 
       const historicalMovements = await Promise.all(normalizedRows.map(async (row) => {
         const candidates = await db.select().from(movements)
@@ -1051,7 +1067,9 @@ export async function POST(request: Request) {
           .orderBy(desc(movements.id))
           .limit(100);
         const exact = candidates.filter((movement) => splitSeries(movement.serials).some((token) => normalizeEquipmentIdentifier(token) === row.serialKey));
-        return exact.find((movement) => ["salida", "baja"].includes(movement.type)) ?? exact[0] ?? null;
+        const sameProduct = exact.filter((movement) => movement.productId === row.productId);
+        const eligible = sameProduct.length ? sameProduct : row.itemType === "EQUIPO" ? exact : [];
+        return eligible.find((movement) => ["salida", "baja"].includes(movement.type)) ?? eligible[0] ?? null;
       }));
       for (const [index, historical] of historicalMovements.entries()) {
         if (historical && historical.productId !== normalizedRows[index].productId) {
@@ -1100,7 +1118,7 @@ export async function POST(request: Request) {
           sourceMovementId: historical?.id || Number(input.sourceMovementId) || null,
           coordinatorF1: coordinator.name,
           orderNumber: orderNumber || historical?.orderNumber || "",
-          returnDate,
+          entryDate,
           site,
           warehouse,
           batchComments: comments,

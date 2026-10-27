@@ -329,7 +329,7 @@ export const equipmentReturns = pgTable(
     site: text("site").notNull().default(""),
     warehouse: text("warehouse").notNull().default("RED"),
     batchComments: text("batch_comments").notNull().default(""),
-    returnDate: text("return_date").notNull().default(""),
+    entryDate: text("return_date").notNull().default(""),
     networkComponent: text("network_component").notNull().default(""),
     subProject: text("sub_project").notNull().default(""),
     sourceProject: text("source_project").notNull().default(""),
@@ -377,9 +377,12 @@ export const equipmentReturns = pgTable(
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
-    uniqueIndex("equipment_returns_active_serial_unique")
+    uniqueIndex("equipment_returns_active_equipment_unique")
       .on(table.serialKey)
-      .where(sql`${table.status} NOT IN ('RECIBIDA_FISICA', 'RECHAZADA')`),
+      .where(sql`${table.status} NOT IN ('RECIBIDA_FISICA', 'RECHAZADA') AND ${table.itemType} = 'EQUIPO'`),
+    uniqueIndex("equipment_returns_active_lot_site_sku_unique")
+      .on(table.serialKey, table.site, table.productId)
+      .where(sql`${table.status} NOT IN ('RECIBIDA_FISICA', 'RECHAZADA') AND ${table.itemType} = 'LOTE'`),
     uniqueIndex("equipment_returns_return_code_unique").on(table.returnCode),
     index("equipment_returns_batch_code_idx").on(table.batchCode, table.batchItem),
     index("equipment_returns_site_idx").on(table.site),

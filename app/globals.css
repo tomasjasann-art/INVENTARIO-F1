@@ -414,7 +414,9 @@ button { cursor: pointer; }
 @media (max-width: 700px) { .return-batch-header,.return-row-fields,.receipt-fields,.return-photo-grid { grid-template-columns: 1fr; }.return-batch-header .field-wide { grid-column: auto; }.return-excel-import { grid-template-columns: 42px minmax(0,1fr); }.return-excel-actions { grid-column: 1/-1; flex-direction: column; align-items: stretch; }.return-excel-import .secondary-button { width: 100%; }.return-batch-toolbar,.return-batch-card > footer,.receipt-confirm,.return-add-row { align-items: stretch; flex-direction: column; }.return-batch-toolbar > span { margin-left: 0; }.return-batch-card .return-actions { align-items: stretch; flex-direction: column; }.return-batch-card .return-actions .primary-button,.return-batch-card .return-actions .secondary-button { width: 100%; }.return-batch-card > header { align-items: flex-start; }.return-batch-clock { flex: 0 0 auto; }.return-csv-preview code { white-space: normal; word-break: break-all; } }
 
 /* Devoluciones: captura tabular y evidencias tipo reporte */
-.return-entry-table-wrap { margin-top: 15px; border: 1px solid #e2e6e8; border-radius: 11px; background: #fff; }
+.return-table-top-scroll { position: sticky; top: 7px; z-index: 12; height: 17px; overflow-x: auto; overflow-y: hidden; margin-top: 15px; border: 1px solid #e2e6e8; border-radius: 8px; background: #f8fafb; box-shadow: 0 3px 10px rgba(35,44,52,.08); scrollbar-color: #9da5aa #edf0f2; }
+.return-table-top-scroll > div { height: 1px; }
+.return-entry-table-wrap { margin-top: 5px; border: 1px solid #e2e6e8; border-radius: 11px; background: #fff; }
 .return-entry-table { min-width: 2460px; border-collapse: separate; border-spacing: 0; }
 .return-entry-table th { position: sticky; top: 0; z-index: 2; padding: 10px 8px; border-bottom: 1px solid #dce1e4; background: #f0f2f3; color: #626b72; font-size: 7px; font-weight: 900; letter-spacing: .035em; text-align: left; text-transform: uppercase; white-space: nowrap; }
 .return-entry-table td { min-width: 118px; padding: 9px 7px; border-right: 1px solid #edf0f2; border-bottom: 1px solid #e7eaec; background: #fff; vertical-align: top; }

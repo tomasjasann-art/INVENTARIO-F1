@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS "equipment_returns_active_serial_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "equipment_returns_active_equipment_unique" ON "equipment_returns" USING btree ("serial_key") WHERE "equipment_returns"."status" NOT IN ('RECIBIDA_FISICA', 'RECHAZADA') AND "equipment_returns"."item_type" = 'EQUIPO';--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "equipment_returns_active_lot_site_sku_unique" ON "equipment_returns" USING btree ("serial_key","site","product_id") WHERE "equipment_returns"."status" NOT IN ('RECIBIDA_FISICA', 'RECHAZADA') AND "equipment_returns"."item_type" = 'LOTE';
