@@ -59,6 +59,7 @@ export type EquipmentReturnRecord = {
   sourceProject: string;
   hardwareTask: string;
   serial: string;
+  itemType: "EQUIPO" | "LOTE";
   quantity: number;
   length: string;
   condition: string;
@@ -150,6 +151,7 @@ type DraftRow = {
   productId: number | null;
   productSearch: string;
   serial: string;
+  itemType: "EQUIPO" | "LOTE";
   partNumber: string;
   quantity: number;
   networkComponent: string;
@@ -211,6 +213,7 @@ function newDraftRow(key = crypto.randomUUID()): DraftRow {
     productId: null,
     productSearch: "",
     serial: "",
+    itemType: "EQUIPO",
     partNumber: "",
     quantity: 1,
     networkComponent: "",
@@ -400,6 +403,7 @@ function returnExportRows(batch: ReturnBatch) {
     SKU: record.skuSnapshot,
     Descripción: record.descriptionSnapshot,
     "Serie / Lote": record.serial,
+    "Tipo de registro": record.itemType,
     Largo: record.length,
     Cantidad: record.quantity,
     Condición: record.condition,
@@ -494,7 +498,8 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     });
     const ready = rows.filter((row) => {
       const serialKey = normalizeEquipmentIdentifier(row.serial);
-      return Boolean(row.productId) && serialKey.length >= 5 && serialCounts.get(serialKey) === 1;
+      const validQuantity = row.itemType === "LOTE" || row.quantity === 1;
+      return Boolean(row.productId) && serialKey.length >= 5 && serialCounts.get(serialKey) === 1 && validQuantity;
     }).length;
     return { total: rows.length, ready, review: rows.length - ready };
   }, [rows]);
@@ -547,6 +552,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           partNumber: recognized.partNumber,
           productId: recognized.productId,
           productSearch: product ? `${product.sku} — ${product.description}` : "",
+          itemType: product?.category.toUpperCase() === "LOTE" ? "LOTE" : "EQUIPO",
           sourceMovementId: recognized.sourceMovementId,
           matchMethod: recognized.matchMethod,
           matchConfidence: recognized.matchConfidence,
@@ -589,6 +595,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     updateRow(row.key, {
       productSearch: value,
       productId: product?.id ?? null,
+      itemType: product?.category.toUpperCase() === "LOTE" ? "LOTE" : "EQUIPO",
       matchMethod: product ? "MANUAL" : row.matchMethod,
       matchConfidence: product ? 100 : 0,
     });
@@ -611,13 +618,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     const XLSX = await import("xlsx");
     const headers = [
       "ID", "Coordinador F1", "Almacén", "Comentarios", "Componente", "Subproyecto", "Proyecto Origen",
-      "Tarea Hardware", "SKU", "Descripción", "Serie/Lote", "Solicitud de Devolución", "Largo", "Cantidad",
+      "Tarea Hardware", "SKU", "Descripción", "Serie/Lote", "Tipo de Registro", "Solicitud de Devolución", "Largo", "Cantidad",
       "Condición", "M3", "Site", "Observación", "Foto de Serie Legible Equipo", "Foto de Modelo Legible Equipo",
       "Foto Panorámica de Equipos", "Opcional Etiqueta Entel",
     ];
     const example = [
       1, "COORDINADOR F1", "RED", "DEVOLUCIÓN DE SITE", "RACK", "SUBPROYECTO", "PROYECTO ORIGEN",
-      "TAREA", "ENT960000001", "DESCRIPCIÓN DEL EQUIPO", "SERIE001", "PEDIDO-001", 20, 1,
+      "TAREA", "ENT960000001", "DESCRIPCIÓN DEL EQUIPO", "SERIE001", "EQUIPO", "PEDIDO-001", 20, 1,
       "USADO OPERATIVO", 0.32, "SITE-001", "OBSERVACIÓN", "PEGAR FOTO", "PEGAR FOTO", "PEGAR FOTO", "OPCIONAL",
     ];
     const sheet = XLSX.utils.aoa_to_sheet([headers, example]);
@@ -627,6 +634,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       ["PLANTILLA DE CARGA MASIVA DE DEVOLUCIONES"],
       ["Regla", "Detalle"],
       ["Una fila por serie", "Los equipos seriados deben ir en líneas independientes con su SKU asociado."],
+      ["Tipo de registro", "Selecciona EQUIPO para una serie individual (cantidad 1) o LOTE cuando una misma identificación representa varias unidades."],
       ["Fotos", "Pega cada foto como imagen dentro de su columna y alineada con la fila correspondiente."],
       ["Lotes", "Para lotes indica Serie/Lote y la cantidad total de esa línea."],
       ["Revisión", "La carga se mostrará primero en pantalla para corregir SKU, serie, condición y evidencias."],
@@ -656,11 +664,13 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       const draftRows = imported.rows.map((source) => {
         const product = products.find((item) => normalizeEquipmentIdentifier(item.sku) === normalizeEquipmentIdentifier(source.sku))
           ?? products.find((item) => source.description && normalizeEquipmentIdentifier(item.description) === normalizeEquipmentIdentifier(source.description));
+        const itemType = source.itemType || (product?.category.toUpperCase() === "LOTE" ? "LOTE" : "EQUIPO");
         return {
           ...newDraftRow(),
           productId: product?.id ?? null,
           productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
           serial: source.serial.toUpperCase(),
+          itemType,
           quantity: source.quantity,
           networkComponent: source.networkComponent.toUpperCase(),
           subProject: source.subProject.toUpperCase(),
@@ -746,8 +756,6 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           if (source.sku && !spreadsheetProduct) rowWarnings.push(`El SKU ${source.sku} no coincide con el maestro; confirma el equipo.`);
           if (!serial) rowWarnings.push("No se reconoció la serie/lote; debes escribirla manualmente.");
           if (!product) rowWarnings.push("No se pudo relacionar el equipo con el maestro SKU.");
-          if (source.quantity > 1 && serial) rowWarnings.push("La cantidad es mayor a 1; confirma si corresponde a un lote o separa las series en filas distintas.");
-
           const storedPhotos = await Promise.all(PHOTO_KINDS.map(async (kind) => {
             const prepared = preparedPhotos[kind];
             if (!prepared) return [kind, ""] as const;
@@ -772,6 +780,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             productId: product?.id ?? null,
             productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
             serial,
+            itemType: source.itemType || (product?.category.toUpperCase() === "LOTE" ? "LOTE" : "EQUIPO"),
             partNumber: recognized?.partNumber || "",
             sourceMovementId: recognized?.sourceMovementId ?? null,
             matchMethod: spreadsheetProduct ? "SKU_VISIBLE" : recognized?.matchMethod ?? "MANUAL",
@@ -810,6 +819,8 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     if (!coordinatorF1 || !site.trim()) return setError("Selecciona el Coordinador F1 e ingresa el site.");
     const invalidIndex = rows.findIndex((row) => !row.productId || normalizeEquipmentIdentifier(row.serial).length < 5);
     if (invalidIndex >= 0) return setError(`Fila ${invalidIndex + 1}: selecciona el SKU y completa una Serie/Lote válida.`);
+    const invalidEquipmentQuantityIndex = rows.findIndex((row) => row.itemType === "EQUIPO" && row.quantity !== 1);
+    if (invalidEquipmentQuantityIndex >= 0) return setError(`Fila ${invalidEquipmentQuantityIndex + 1}: un equipo seriado debe tener cantidad 1. Selecciona LOTE si la identificación agrupa varias unidades.`);
     const seenSerials = new Set<string>();
     const duplicateIndex = rows.findIndex((row) => {
       const serialKey = normalizeEquipmentIdentifier(row.serial);
@@ -828,6 +839,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       rows: rows.map((row) => ({
         productId: row.productId,
         serial: row.serial,
+        itemType: row.itemType,
         partNumber: row.partNumber,
         quantity: row.quantity,
         networkComponent: row.networkComponent,
@@ -972,7 +984,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
 
         <div className="table-wrap return-entry-table-wrap">
           <table className="return-entry-table">
-            <thead><tr><th>#</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
+            <thead><tr><th>#</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Tipo *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
             <tbody>{rows.map((row, index) => {
               const product = products.find((item) => item.id === row.productId);
               const rowCsv = csvPayload({ item: index + 1, coordinatorF1, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site });
@@ -984,6 +996,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
                 <td><input className="table-input" aria-label={`Tarea hardware fila ${index + 1}`} value={row.hardwareTask} onChange={(event) => updateRow(row.key, { hardwareTask: event.target.value.toUpperCase() })} /></td>
                 <td className="return-product-cell"><input className="table-input" aria-label={`SKU o descripción fila ${index + 1}`} list="return-product-options" value={row.productSearch} onChange={(event) => selectProduct(row, event.target.value)} placeholder="Buscar SKU o descripción" required /><strong>{product?.description || "Selecciona del maestro"}</strong><small>{row.productId ? `Coincidencia ${row.matchConfidence}% · ${row.matchMethod.replaceAll("_", " ").toLowerCase()}` : "Pendiente de seleccionar"}</small>{row.warnings.map((warning) => <span className="return-table-warning" key={warning}><AlertTriangle size={12} />{warning}</span>)}</td>
                 <td><input className="table-input serial-input" aria-label={`Serie o lote fila ${index + 1}`} value={row.serial} onChange={(event) => updateRow(row.key, { serial: event.target.value.toUpperCase() })} placeholder="Serie única o lote" required /></td>
+                <td className="return-item-type-cell"><select className="table-input" aria-label={`Tipo de registro fila ${index + 1}`} value={row.itemType} onChange={(event) => updateRow(row.key, { itemType: event.target.value as DraftRow["itemType"] })}><option value="EQUIPO">Equipo</option><option value="LOTE">Lote</option></select>{row.itemType === "EQUIPO" && row.quantity > 1 && <span className="return-table-warning"><AlertTriangle size={12} />Equipo requiere cantidad 1</span>}{row.itemType === "LOTE" && <small>Cantidad agrupada por lote</small>}</td>
                 <td className="return-part-cell"><input className="table-input" aria-label={`Part number fila ${index + 1}`} value={row.partNumber} onChange={(event) => updateRow(row.key, { partNumber: event.target.value.toUpperCase() })} placeholder="Editable" />{row.partNumber && <label><input type="checkbox" checked={row.rememberIdentifier} onChange={(event) => updateRow(row.key, { rememberIdentifier: event.target.checked })} />Recordar PN → SKU</label>}</td>
                 <td><input className="table-input numeric-input" aria-label={`Cantidad fila ${index + 1}`} type="number" min={1} value={row.quantity} onChange={(event) => updateRow(row.key, { quantity: Math.max(1, Number(event.target.value) || 1) })} required /></td>
                 <td><input className="table-input numeric-input" aria-label={`Largo fila ${index + 1}`} value={row.length} onChange={(event) => updateRow(row.key, { length: event.target.value })} placeholder="20" /></td>

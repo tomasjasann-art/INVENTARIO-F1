@@ -246,6 +246,7 @@ type EquipmentReturnStatusInput = {
 type EquipmentReturnBatchRowInput = {
   productId?: number;
   serial?: string;
+  itemType?: "EQUIPO" | "LOTE";
   partNumber?: string;
   quantity?: number;
   networkComponent?: string;
@@ -1011,6 +1012,7 @@ export async function POST(request: Request) {
         productId: Number(row.productId),
         serial: clean(row.serial).toUpperCase(),
         serialKey: normalizeEquipmentIdentifier(row.serial),
+        itemType: normalizeParty(row.itemType),
         partNumber: clean(row.partNumber).toUpperCase(),
         normalizedPartNumber: normalizeEquipmentIdentifier(row.partNumber),
         quantity: Math.max(1, Math.min(100_000, Math.round(Number(row.quantity) || 1))),
@@ -1026,6 +1028,10 @@ export async function POST(request: Request) {
         const reason = repeatedSerials.has(invalidRow.serialKey) ? "la serie/lote está repetida en esta carga" : "falta SKU o Serie/Lote válido";
         return Response.json({ error: `Fila ${invalidRow.item}: ${reason}.` }, { status: 400 });
       }
+      const invalidTypeRow = normalizedRows.find((row) => !["EQUIPO", "LOTE"].includes(row.itemType));
+      if (invalidTypeRow) return Response.json({ error: `Fila ${invalidTypeRow.item}: selecciona si corresponde a EQUIPO o LOTE.` }, { status: 400 });
+      const invalidEquipmentQuantity = normalizedRows.find((row) => row.itemType === "EQUIPO" && row.quantity !== 1);
+      if (invalidEquipmentQuantity) return Response.json({ error: `Fila ${invalidEquipmentQuantity.item}: un equipo seriado debe tener cantidad 1. Usa LOTE si la identificación agrupa varias unidades.` }, { status: 400 });
 
       const productIds = [...new Set(normalizedRows.map((row) => row.productId))];
       const productRows = await db.select().from(products).where(inArray(products.id, productIds));
@@ -1101,6 +1107,7 @@ export async function POST(request: Request) {
           hardwareTask: clean(input.hardwareTask),
           serial: row.serial,
           serialKey: row.serialKey,
+          itemType: row.itemType as "EQUIPO" | "LOTE",
           quantity: row.quantity,
           length: clean(input.length),
           condition: normalizeParty(input.condition) || "USADO OPERATIVO",
@@ -1213,7 +1220,7 @@ export async function POST(request: Request) {
               stockLocation,
               unitMeasure,
               unitCostCents,
-              equipmentType: product.category,
+              equipmentType: record.itemType || product.category,
               loadGr: document,
               grLink: normalizeGrLink(receipt.grLink),
               orderNumber: receiptOrderNumber,

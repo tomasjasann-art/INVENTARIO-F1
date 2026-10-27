@@ -18,6 +18,7 @@ export type ReturnExcelRow = {
   sku: string;
   description: string;
   serial: string;
+  itemType: "EQUIPO" | "LOTE" | "";
   orderNumber: string;
   length: string;
   quantity: number;
@@ -66,6 +67,7 @@ const HEADER_ALIASES = {
   sku: ["SKU"],
   description: ["DESCRIPCION", "DESCRIPCIÓN", "DESCRIPCION SKU", "DESCRIPCIÓN SKU"],
   serial: ["SERIE LOTE", "SERIE / LOTE", "SERIE/LOTE", "SERIE", "LOTE"],
+  itemType: ["TIPO", "TIPO DE REGISTRO", "TIPO DE EQUIPO", "CONTROL"],
   orderNumber: ["SOLICITUD DE DEVOLUCION", "SOLICITUD DE DEVOLUCIÓN", "N PEDIDO", "N° PEDIDO", "NUMERO DE PEDIDO"],
   length: ["LARGO"],
   quantity: ["CANT", "CANTIDAD"],
@@ -303,6 +305,8 @@ export async function parseEquipmentReturnExcel(file: File): Promise<ReturnExcel
     const id = cell(values, columns, "id");
     const sku = cell(values, columns, "sku");
     const serial = cell(values, columns, "serial");
+    const itemTypeValue = normalizeHeader(cell(values, columns, "itemType"));
+    const itemType = itemTypeValue.includes("LOTE") ? "LOTE" : itemTypeValue.includes("EQUIPO") || itemTypeValue.includes("SERIE") ? "EQUIPO" : "";
     const site = cell(values, columns, "site");
     if (!id && !sku && !serial && !site && !rowPlacements.length) continue;
     const photos = assignPhotos(rowPlacements, columns);
@@ -322,6 +326,7 @@ export async function parseEquipmentReturnExcel(file: File): Promise<ReturnExcel
       sku,
       description: cell(values, columns, "description"),
       serial,
+      itemType,
       orderNumber: cell(values, columns, "orderNumber"),
       length: cell(values, columns, "length"),
       quantity: positiveQuantity(columns.quantity === undefined ? 1 : values[columns.quantity]),

@@ -162,6 +162,13 @@
       "when": 1792789281009,
       "tag": "0022_legacy_asset_uploader",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793122895537,
+      "tag": "0023_equipment_return_item_type",
+      "breakpoints": true
     }
   ]
 }

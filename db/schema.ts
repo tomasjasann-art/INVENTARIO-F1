@@ -335,6 +335,7 @@ export const equipmentReturns = pgTable(
     hardwareTask: text("hardware_task").notNull().default(""),
     serial: text("serial").notNull(),
     serialKey: text("serial_key").notNull(),
+    itemType: text("item_type", { enum: ["EQUIPO", "LOTE"] }).notNull().default("EQUIPO"),
     quantity: integer("quantity").notNull().default(1),
     length: text("length").notNull().default(""),
     condition: text("condition").notNull().default("USADO OPERATIVO"),
