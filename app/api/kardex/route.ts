@@ -245,6 +245,7 @@ type EquipmentReturnStatusInput = {
 
 type EquipmentReturnBatchRowInput = {
   site?: string;
+  coordinatorF1?: string;
   productId?: number;
   serial?: string;
   itemType?: "EQUIPO" | "LOTE";
@@ -999,20 +1000,14 @@ export async function POST(request: Request) {
         return Response.json({ error: `La carga contiene ${requestedRows.length} filas. El máximo permitido por site es 100.` }, { status: 400 });
       }
       const batchRows = requestedRows;
-      if (!coordinatorF1 || !entryDate || !batchRows.length) {
-        return Response.json({ error: "Selecciona Coordinador F1, fecha de ingreso y agrega al menos una fila." }, { status: 400 });
+      if (!entryDate || !batchRows.length) {
+        return Response.json({ error: "Selecciona la fecha de ingreso y agrega al menos una fila." }, { status: 400 });
       }
-      const [coordinator] = await db.select().from(coordinators).where(and(
-        eq(coordinators.organization, "F1"),
-        eq(coordinators.name, coordinatorF1),
-        eq(coordinators.active, true),
-      )).limit(1);
-      if (!coordinator) return Response.json({ error: "Selecciona un Coordinador F1 activo." }, { status: 400 });
-
       const normalizedRows = batchRows.map((row, index) => ({
         input: row,
         item: index + 1,
         site: normalizeParty(row.site) || defaultSite,
+        coordinatorF1: normalizeParty(row.coordinatorF1) || coordinatorF1,
         productId: Number(row.productId),
         serial: clean(row.serial).toUpperCase(),
         serialKey: normalizeEquipmentIdentifier(row.serial),
@@ -1043,6 +1038,14 @@ export async function POST(request: Request) {
       if (invalidTypeRow) return Response.json({ error: `Fila ${invalidTypeRow.item}: selecciona si corresponde a EQUIPO o LOTE.` }, { status: 400 });
       const invalidEquipmentQuantity = normalizedRows.find((row) => row.itemType === "EQUIPO" && row.quantity !== 1);
       if (invalidEquipmentQuantity) return Response.json({ error: `Fila ${invalidEquipmentQuantity.item}: un equipo seriado debe tener cantidad 1. Usa LOTE si la identificación agrupa varias unidades.` }, { status: 400 });
+
+      const activeF1Coordinators = await db.select().from(coordinators).where(and(
+        eq(coordinators.organization, "F1"),
+        eq(coordinators.active, true),
+      ));
+      const coordinatorByName = new Map(activeF1Coordinators.map((row) => [normalizeParty(row.name), row]));
+      const invalidCoordinator = normalizedRows.find((row) => !row.coordinatorF1 || !coordinatorByName.has(row.coordinatorF1));
+      if (invalidCoordinator) return Response.json({ error: `Fila ${invalidCoordinator.item}: selecciona un Coordinador F1 activo.` }, { status: 400 });
 
       const productIds = [...new Set(normalizedRows.map((row) => row.productId))];
       const productRows = await db.select().from(products).where(inArray(products.id, productIds));
@@ -1103,6 +1106,7 @@ export async function POST(request: Request) {
       const preparedRows = await Promise.all(normalizedRows.map(async (row, index) => {
         const input = row.input;
         const product = productById.get(row.productId)!;
+        const rowCoordinator = coordinatorByName.get(row.coordinatorF1)!;
         const imageFolder = `devoluciones/${batchCode}/${String(row.item).padStart(3, "0")}`;
         const [evidenceImage, entelLabelImage, modelImage, panoramicImage] = await Promise.all([
           storeEvidenceImage(normalizeEvidenceImage(input.evidenceImage), `${imageFolder}/serie`),
@@ -1116,9 +1120,9 @@ export async function POST(request: Request) {
           batchCode,
           batchItem: row.item,
           productId: product.id,
-          coordinatorId: coordinator.id,
+          coordinatorId: rowCoordinator.id,
           sourceMovementId: historical?.id || Number(input.sourceMovementId) || null,
-          coordinatorF1: coordinator.name,
+          coordinatorF1: rowCoordinator.name,
           orderNumber: orderNumber || historical?.orderNumber || "",
           entryDate,
           site: row.site,
@@ -1176,16 +1180,16 @@ export async function POST(request: Request) {
       const batchCode = clean(statusPayload.batchCode).toUpperCase();
       const allowed: EquipmentReturnStatus[] = ["PENDIENTE_APROBACION", "OBSERVADA", "APROBADA_PENDIENTE_RECEPCION", "RECIBIDA_FISICA", "RECHAZADA"];
       const status = allowed.includes(statusPayload.status as EquipmentReturnStatus) ? statusPayload.status as EquipmentReturnStatus : undefined;
-      if (!batchCode || !status) return Response.json({ error: "Carga de sitio o estado inválido." }, { status: 400 });
+      if (!batchCode || !status) return Response.json({ error: "Carga de devolución o estado inválido." }, { status: 400 });
       const records = await db.select().from(equipmentReturns).where(eq(equipmentReturns.batchCode, batchCode)).orderBy(equipmentReturns.batchItem);
-      if (!records.length) return Response.json({ error: "La carga de sitio ya no existe." }, { status: 404 });
+      if (!records.length) return Response.json({ error: "La carga de devolución ya no existe." }, { status: 404 });
       const notes = clean(statusPayload.notes);
       if (status === "OBSERVADA" && !notes) return Response.json({ error: "Escribe la observación que debe corregirse." }, { status: 400 });
       const operator = access.displayName || user.displayName || user.email;
 
       if (status === "RECIBIDA_FISICA") {
         if (records.some((record) => record.status !== "APROBADA_PENDIENTE_RECEPCION")) {
-          return Response.json({ error: "Primero debes aprobar todas las filas de la carga del sitio." }, { status: 409 });
+          return Response.json({ error: "Primero debes marcar como enviadas todas las filas de la carga." }, { status: 409 });
         }
         const receipts = Array.isArray(statusPayload.receipts) ? statusPayload.receipts : [];
         const receiptById = new Map(receipts.map((receipt) => [Number(receipt.returnId), receipt]));
@@ -1283,7 +1287,7 @@ export async function POST(request: Request) {
       const transitionAllowed = status === "RECHAZADA"
         || status === "OBSERVADA"
         || (status === "APROBADA_PENDIENTE_RECEPCION" && records.every((record) => ["PENDIENTE_APROBACION", "OBSERVADA"].includes(record.status)));
-      if (!transitionAllowed) return Response.json({ error: "Ese cambio de estado no corresponde al flujo de la carga del sitio." }, { status: 409 });
+      if (!transitionAllowed) return Response.json({ error: "Ese cambio de estado no corresponde al flujo de la devolución." }, { status: 409 });
       await db.update(equipmentReturns).set({
         status,
         approvedAt: status === "APROBADA_PENDIENTE_RECEPCION" ? sql`CURRENT_TIMESTAMP` : records[0].approvedAt,

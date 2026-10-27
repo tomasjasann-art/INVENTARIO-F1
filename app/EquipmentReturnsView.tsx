@@ -150,6 +150,7 @@ type Props = {
 type DraftRow = {
   key: string;
   site: string;
+  coordinatorF1: string;
   productId: number | null;
   productSearch: string;
   serial: string;
@@ -214,6 +215,7 @@ function newDraftRow(key = crypto.randomUUID()): DraftRow {
   return {
     key,
     site: "",
+    coordinatorF1: "",
     productId: null,
     productSearch: "",
     serial: "",
@@ -246,21 +248,44 @@ function newDraftRow(key = crypto.randomUUID()): DraftRow {
 }
 
 function statusLabel(status: ReturnStatus) {
-  if (status === "PENDIENTE_APROBACION") return "Pendiente de aprobación";
-  if (status === "APROBADA_PENDIENTE_RECEPCION") return "Aprobada · pendiente física";
-  if (status === "RECIBIDA_FISICA") return "Recibida físicamente";
+  if (status === "PENDIENTE_APROBACION") return "Pendiente de envío";
+  if (status === "APROBADA_PENDIENTE_RECEPCION") return "En tránsito · pendiente almacén";
+  if (status === "RECIBIDA_FISICA") return "Recibida en almacén";
   if (status === "OBSERVADA") return "Observada";
   return "Rechazada";
 }
 
 function elapsedLabel(record: EquipmentReturnRecord) {
-  const start = new Date(record.logicalRegisteredAt || record.createdAt).getTime();
+  const startValue = record.status === "PENDIENTE_APROBACION" || record.status === "OBSERVADA"
+    ? record.logicalRegisteredAt || record.createdAt
+    : record.approvedAt || record.logicalRegisteredAt || record.createdAt;
+  const start = new Date(startValue).getTime();
   const end = record.physicallyReceivedAt ? new Date(record.physicallyReceivedAt).getTime() : Date.now();
   if (!Number.isFinite(start) || !Number.isFinite(end)) return "—";
   const totalHours = Math.max(0, Math.floor((end - start) / 3_600_000));
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
   return days ? `${days} d ${hours} h` : `${Math.max(1, totalHours)} h`;
+}
+
+function transitHours(record: EquipmentReturnRecord) {
+  const start = new Date(record.approvedAt || record.logicalRegisteredAt || record.createdAt).getTime();
+  const end = record.physicallyReceivedAt ? new Date(record.physicallyReceivedAt).getTime() : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(0, Math.floor((end - start) / 3_600_000));
+}
+
+function transitSlaLabel(hours: number) {
+  if (hours >= 96) {
+    const overdueHours = hours - 96;
+    const days = Math.floor(overdueHours / 24);
+    const remainder = overdueHours % 24;
+    return days ? `Vencido por ${days} d ${remainder} h` : `Vencido por ${Math.max(1, remainder)} h`;
+  }
+  const remainingHours = 96 - hours;
+  const days = Math.floor(remainingHours / 24);
+  const remainder = remainingHours % 24;
+  return days ? `Quedan ${days} d ${remainder} h` : `Quedan ${Math.max(1, remainder)} h`;
 }
 
 function displayDate(value: string) {
@@ -464,6 +489,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   const entryTableScrollRef = useRef<HTMLDivElement>(null);
   const entryTableTopScrollRef = useRef<HTMLDivElement>(null);
   const [entryTableWidth, setEntryTableWidth] = useState(0);
+  const [clockTick, setClockTick] = useState(0);
 
   useEffect(() => {
     const table = entryTableRef.current;
@@ -477,6 +503,11 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     return () => observer.disconnect();
   }, [rows.length]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick((current) => current + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const f1Coordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "F1");
   const entelCoordinators = coordinators.filter((coordinator) => coordinator.active && coordinator.organization === "ENTEL");
   const batches = useMemo<ReturnBatch[]>(() => {
@@ -487,12 +518,14 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     });
     return [...groups.entries()].map(([code, group]) => {
       const sorted = group.toSorted((left, right) => (left.batchItem || left.id) - (right.batchItem || right.id));
+      const sites = [...new Set(sorted.map((row) => row.site).filter(Boolean))];
+      const batchCoordinators = [...new Set(sorted.map((row) => row.coordinatorF1).filter(Boolean))];
       return {
         code,
         rows: sorted,
         status: sorted[0]?.status ?? "PENDIENTE_APROBACION",
-        site: sorted[0]?.site || "SIN SITE",
-        coordinatorF1: sorted[0]?.coordinatorF1 || "—",
+        site: sites.length > 2 ? `${sites[0]} +${sites.length - 1} sites` : sites.join(" · ") || "SIN SITE",
+        coordinatorF1: batchCoordinators.length > 2 ? `${batchCoordinators[0]} +${batchCoordinators.length - 1}` : batchCoordinators.join(" · ") || "—",
         warehouse: sorted[0]?.warehouse || "RED",
         orderNumber: sorted[0]?.orderNumber || "",
         entryDate: sorted[0]?.entryDate || "",
@@ -504,7 +537,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     const received = batches.filter((batch) => batch.status === "RECIBIDA_FISICA");
     const receivedRows = received.flatMap((batch) => batch.rows).filter((record) => record.physicallyReceivedAt);
     const averageHours = receivedRows.length
-      ? Math.round(receivedRows.reduce((sum, record) => sum + Math.max(0, new Date(record.physicallyReceivedAt).getTime() - new Date(record.logicalRegisteredAt).getTime()), 0) / receivedRows.length / 3_600_000)
+      ? Math.round(receivedRows.reduce((sum, record) => sum + transitHours(record), 0) / receivedRows.length)
       : 0;
     return {
       approval: batches.filter((batch) => ["PENDIENTE_APROBACION", "OBSERVADA"].includes(batch.status)).length,
@@ -513,6 +546,26 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       average: averageHours >= 24 ? `${Math.round(averageHours / 24)} días` : `${averageHours} h`,
     };
   }, [batches]);
+  const coordinatorFollowUp = useMemo(() => {
+    void clockTick;
+    const groups = new Map<string, EquipmentReturnRecord[]>();
+    returns.filter((record) => record.status === "APROBADA_PENDIENTE_RECEPCION").forEach((record) => {
+      const coordinator = record.coordinatorF1.trim().toUpperCase() || "SIN COORDINADOR";
+      groups.set(coordinator, [...(groups.get(coordinator) ?? []), record]);
+    });
+    return [...groups.entries()].map(([coordinator, records]) => {
+      const oldest = records.toSorted((left, right) => transitHours(right) - transitHours(left))[0];
+      const hours = oldest ? transitHours(oldest) : 0;
+      return {
+        coordinator,
+        rows: records.reduce((sum, record) => sum + record.quantity, 0),
+        batches: new Set(records.map((record) => record.batchCode || record.returnCode)).size,
+        sites: new Set(records.map((record) => record.site).filter(Boolean)).size,
+        hours,
+        overdue: hours >= 96,
+      };
+    }).toSorted((left, right) => Number(right.overdue) - Number(left.overdue) || right.hours - left.hours);
+  }, [clockTick, returns]);
   const conditionOptions = useMemo(() => [...new Set([
     ...DEFAULT_RETURN_CONDITIONS,
     ...returns.map((record) => record.condition),
@@ -533,10 +586,11 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       const rowSite = (row.site || site).trim().toUpperCase().replace(/\s+/g, " ");
       const controlKey = row.itemType === "LOTE" ? `LOTE:${row.productId ?? 0}:${rowSite}:${serialKey}` : `EQUIPO:${serialKey}`;
       const validQuantity = row.itemType === "LOTE" || row.quantity === 1;
-      return Boolean(row.productId) && Boolean(rowSite) && serialKey.length >= 5 && identifierCounts.get(controlKey) === 1 && validQuantity;
+      const rowCoordinator = (row.coordinatorF1 || coordinatorF1).trim();
+      return Boolean(row.productId) && Boolean(rowSite) && Boolean(rowCoordinator) && serialKey.length >= 5 && identifierCounts.get(controlKey) === 1 && validQuantity;
     }).length;
     return { total: rows.length, ready, review: rows.length - ready };
-  }, [rows, site]);
+  }, [coordinatorF1, rows, site]);
 
   function updateRow(key: string, patch: Partial<DraftRow>) {
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
@@ -581,6 +635,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         const recognized = recognizeEquipmentReturn({ text, products, identifiers: productIdentifiers, movements });
         const product = recognized.productId ? products.find((item) => item.id === recognized.productId) : undefined;
         updateRow(row.key, {
+          coordinatorF1: row.coordinatorF1 || recognized.coordinatorF1?.toUpperCase() || "",
           rawOcrText: text,
           serial: recognized.serial,
           partNumber: recognized.partNumber,
@@ -593,7 +648,6 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           warnings: recognized.warnings,
         });
         if (!orderNumber && recognized.orderNumber) setOrderNumber(recognized.orderNumber);
-        if (!coordinatorF1 && recognized.coordinatorF1) setCoordinatorF1(recognized.coordinatorF1);
       }
       const storedImage = await uploadPromise;
       const storedPatch: Partial<DraftRow> = kind === "serie" ? { evidenceImage: storedImage }
@@ -704,6 +758,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         return {
           ...newDraftRow(),
           site: source.site.toUpperCase(),
+          coordinatorF1: source.coordinatorF1.toUpperCase(),
           productId: product?.id ?? null,
           productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
           serial: source.serial.toUpperCase(),
@@ -816,6 +871,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             return true;
           });
           updateRow(draft.key, {
+            coordinatorF1: draft.coordinatorF1 || recognized?.coordinatorF1?.toUpperCase() || "",
             productId: product?.id ?? null,
             productSearch: product ? `${product.sku} — ${product.description}` : source.sku,
             serial,
@@ -855,7 +911,9 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
     event.preventDefault();
     setError("");
     if (processingKey) return setError("Espera a que termine la lectura o carga de fotografías.");
-    if (!coordinatorF1 || !entryDate) return setError("Selecciona el Coordinador F1 y la fecha de ingreso.");
+    if (!entryDate) return setError("Selecciona la fecha de ingreso.");
+    const missingCoordinatorIndex = rows.findIndex((row) => !(row.coordinatorF1 || coordinatorF1).trim());
+    if (missingCoordinatorIndex >= 0) return setError(`Fila ${missingCoordinatorIndex + 1}: selecciona el Coordinador F1 o ingresa uno predeterminado.`);
     const missingSiteIndex = rows.findIndex((row) => !(row.site || site).trim());
     if (missingSiteIndex >= 0) return setError(`Fila ${missingSiteIndex + 1}: completa el site o ingresa un site predeterminado.`);
     const invalidIndex = rows.findIndex((row) => !row.productId || normalizeEquipmentIdentifier(row.serial).length < 5);
@@ -887,6 +945,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       comments,
       rows: rows.map((row) => ({
         site: (row.site || site).trim().toUpperCase(),
+        coordinatorF1: (row.coordinatorF1 || coordinatorF1).trim().toUpperCase(),
         productId: row.productId,
         serial: row.serial,
         itemType: row.itemType,
@@ -922,8 +981,9 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
       notes = observation.trim();
       if (!notes) return setError("La observación es obligatoria.");
     }
-    if (status === "RECHAZADA" && !window.confirm(`¿Rechazar la carga ${batch.code} del site ${batch.site}?`)) return;
-    await onSave({ action: "equipmentReturnBatchStatus", batchCode: batch.code, status, notes }, "Estado de la carga del sitio actualizado.");
+    if (status === "APROBADA_PENDIENTE_RECEPCION" && !window.confirm(`¿Confirmas que la carga ${batch.code} ya fue enviada? Desde este momento inicia el seguimiento de 4 días hasta el almacén.`)) return;
+    if (status === "RECHAZADA" && !window.confirm(`¿Rechazar la carga ${batch.code}?`)) return;
+    await onSave({ action: "equipmentReturnBatchStatus", batchCode: batch.code, status, notes }, status === "APROBADA_PENDIENTE_RECEPCION" ? "Envío registrado. Se inició el seguimiento de 4 días hasta el almacén." : "Estado de la carga actualizado.");
   }
 
   function beginPhysicalReceipt(batch: ReturnBatch) {
@@ -956,7 +1016,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
   }
 
   async function confirmPhysicalReceipt(batch: ReturnBatch) {
-    if (!window.confirm(`¿Confirmas que los ${batch.rows.length} registros del site ${batch.site} llegaron físicamente? Se generarán ingresos tipo DESINSTALACIÓN.`)) return;
+    if (!window.confirm(`¿Confirmas que los ${batch.rows.length} registros llegaron físicamente al almacén? Recién ahora se generarán ingresos tipo DESINSTALACIÓN en el Kardex.`)) return;
     const ok = await onSave({ action: "equipmentReturnBatchStatus", batchCode: batch.code, status: "RECIBIDA_FISICA", receipts: receiptDrafts }, "Recepción física confirmada. Los equipos ingresaron como DESINSTALACIÓN.");
     if (ok) {
       setReceivingBatch("");
@@ -995,14 +1055,24 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
 
   return <>
     <section className="return-metrics" aria-label="Indicadores de devoluciones">
-      <article><span className="metric-icon amber"><ShieldCheck size={20} /></span><div><small>SITIOS POR APROBAR</small><strong>{metrics.approval}</strong></div></article>
-      <article><span className="metric-icon blue"><Clock3 size={20} /></span><div><small>APROBADOS SIN LLEGAR</small><strong>{metrics.physical}</strong></div></article>
-      <article><span className="metric-icon green"><PackageCheck size={20} /></span><div><small>SITIOS RECIBIDOS</small><strong>{metrics.received}</strong></div></article>
-      <article><span className="metric-icon purple"><Clock3 size={20} /></span><div><small>TIEMPO PROMEDIO</small><strong>{metrics.average}</strong></div></article>
+      <article><span className="metric-icon amber"><ShieldCheck size={20} /></span><div><small>CARGAS POR ENVIAR</small><strong>{metrics.approval}</strong></div></article>
+      <article><span className="metric-icon blue"><Clock3 size={20} /></span><div><small>ENVÍOS SIN LLEGAR</small><strong>{metrics.physical}</strong></div></article>
+      <article><span className="metric-icon green"><PackageCheck size={20} /></span><div><small>RECIBIDOS EN ALMACÉN</small><strong>{metrics.received}</strong></div></article>
+      <article><span className="metric-icon purple"><Clock3 size={20} /></span><div><small>TIEMPO PROMEDIO DE TRÁNSITO</small><strong>{metrics.average}</strong></div></article>
+    </section>
+
+    <section className="panel return-follow-up">
+      <div className="panel-title"><div><h2>Seguimiento por Coordinador F1</h2><p>Tiempo desde que se marca el envío hasta su recepción física. Plazo máximo: 4 días.</p></div><span className="logical-badge">SLA 4 DÍAS</span></div>
+      <div className="return-follow-up-grid">
+        {!coordinatorFollowUp.length ? <div className="empty"><CheckCircle2 size={22} /><p>No hay devoluciones en tránsito pendientes de llegar al almacén.</p></div> : coordinatorFollowUp.map((item) => <article className={item.overdue ? "is-overdue" : "is-on-time"} key={item.coordinator}>
+          <header><div><strong>{item.coordinator}</strong><small>{item.batches} envío(s) · {item.sites} site(s) · {item.rows} unidad(es)</small></div><span>{item.overdue ? "VENCIDO" : "EN PLAZO"}</span></header>
+          <div><Clock3 size={16} /><strong>{item.hours >= 24 ? `${Math.floor(item.hours / 24)} d ${item.hours % 24} h` : `${Math.max(1, item.hours)} h`}</strong><small>{transitSlaLabel(item.hours)}</small></div>
+        </article>)}
+      </div>
     </section>
 
     <section className="panel return-batch-builder">
-      <div className="panel-title"><div><h2>Nueva carga lógica por site</h2><p>Una carga genera un número F1 y puede incluir varias series, lotes y SKU.</p></div><span className="logical-badge">NO AFECTA STOCK</span></div>
+      <div className="panel-title"><div><h2>Nueva carga lógica de devolución</h2><p>Una carga genera un número F1 y puede incluir distintos sites, coordinadores, series, lotes y SKU.</p></div><span className="logical-badge">NO AFECTA STOCK</span></div>
       <form onSubmit={submit}>
         <div
           className={`return-excel-import ${excelDragging ? "is-dragging" : ""}`}
@@ -1023,7 +1093,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           {processingKey === "excel-import" && <div className="return-excel-progress" aria-label={`Importación ${progress}%`}><span style={{ width: `${progress}%` }} /></div>}
         </div>
         <div className="return-batch-header">
-          <label className="field"><span>Coordinador F1 *</span><input list="return-f1-coordinators" value={coordinatorF1} onChange={(event) => setCoordinatorF1(event.target.value.toUpperCase())} placeholder="Busca al coordinador" required /><datalist id="return-f1-coordinators">{f1Coordinators.map((coordinator) => <option value={coordinator.name} key={coordinator.id} />)}</datalist></label>
+          <label className="field"><span>Coordinador F1 predeterminado</span><input list="return-f1-coordinators" value={coordinatorF1} onChange={(event) => setCoordinatorF1(event.target.value.toUpperCase())} placeholder="Se usa si la fila viene vacía" /><datalist id="return-f1-coordinators">{f1Coordinators.map((coordinator) => <option value={coordinator.name} key={coordinator.id} />)}</datalist></label>
           <label className="field"><span>Site predeterminado</span><input value={site} onChange={(event) => setSite(event.target.value.toUpperCase())} placeholder="Se usa si la fila no tiene site" /></label>
           <label className="field"><span>Almacén de procedencia</span><input value={warehouse} onChange={(event) => setWarehouse(event.target.value.toUpperCase())} placeholder="RED" /></label>
           <label className="field"><span>Fecha de ingreso *</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} required /></label>
@@ -1036,14 +1106,16 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
         <div className="return-table-top-scroll" ref={entryTableTopScrollRef} onScroll={(event) => { const target = entryTableScrollRef.current; if (target && target.scrollLeft !== event.currentTarget.scrollLeft) target.scrollLeft = event.currentTarget.scrollLeft; }} aria-label="Desplazamiento horizontal superior de la tabla"><div style={{ width: `${entryTableWidth}px` }} /></div>
         <div className="table-wrap return-entry-table-wrap" ref={entryTableScrollRef} onScroll={(event) => { const target = entryTableTopScrollRef.current; if (target && target.scrollLeft !== event.currentTarget.scrollLeft) target.scrollLeft = event.currentTarget.scrollLeft; }}>
           <table className="return-entry-table" ref={entryTableRef}>
-            <thead><tr><th>#</th><th>Site *</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Tipo *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
+            <thead><tr><th>#</th><th>Site *</th><th>Coordinador F1 *</th><th>Componente</th><th>Subproyecto</th><th>Proyecto origen</th><th>Tarea hardware</th><th>SKU / descripción *</th><th>Serie / Lote *</th><th>Tipo *</th><th>Part number</th><th>Cant.</th><th>Largo</th><th>Condición</th><th>M3</th><th>Observación</th><th>CSV</th><th>Evidencias fotográficas</th><th>Control</th></tr></thead>
             <tbody>{rows.map((row, index) => {
               const product = products.find((item) => item.id === row.productId);
               const effectiveSite = (row.site || site).trim().toUpperCase();
-              const rowCsv = csvPayload({ item: index + 1, coordinatorF1, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site: effectiveSite });
+              const effectiveCoordinator = (row.coordinatorF1 || coordinatorF1).trim().toUpperCase();
+              const rowCsv = csvPayload({ item: index + 1, coordinatorF1: effectiveCoordinator, warehouse, networkComponent: row.networkComponent, subProject: row.subProject, sourceProject: row.sourceProject, hardwareTask: row.hardwareTask, sku: product?.sku || "", serial: row.serial, quantity: row.quantity, condition: row.condition, volumeM3: row.volumeM3, site: effectiveSite });
               return <tr key={row.key}>
                 <td className="return-row-number"><strong>{index + 1}</strong></td>
                 <td><input className="table-input" aria-label={`Site fila ${index + 1}`} value={row.site} onChange={(event) => updateRow(row.key, { site: event.target.value.toUpperCase() })} placeholder={site || "Código o nombre"} /></td>
+                <td><input className="table-input" aria-label={`Coordinador F1 fila ${index + 1}`} list="return-f1-coordinators" value={row.coordinatorF1} onChange={(event) => updateRow(row.key, { coordinatorF1: event.target.value.toUpperCase() })} placeholder={coordinatorF1 || "Seleccionar"} /></td>
                 <td><input className="table-input" aria-label={`Componente fila ${index + 1}`} value={row.networkComponent} onChange={(event) => updateRow(row.key, { networkComponent: event.target.value.toUpperCase() })} placeholder="Rack / antena" /></td>
                 <td><input className="table-input" aria-label={`Subproyecto fila ${index + 1}`} value={row.subProject} onChange={(event) => updateRow(row.key, { subProject: event.target.value.toUpperCase() })} /></td>
                 <td><input className="table-input" aria-label={`Proyecto origen fila ${index + 1}`} value={row.sourceProject} onChange={(event) => updateRow(row.key, { sourceProject: event.target.value.toUpperCase() })} /></td>
@@ -1069,7 +1141,7 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             })}</tbody>
           </table>
         </div>
-        <div className="return-add-row"><button className="secondary-button" type="button" onClick={() => setRows((current) => [...current, { ...newDraftRow(), site }])}><Plus size={16} />Agregar fila manual</button><small>Las filas seriadas deben mantenerse separadas con su SKU asociado. Cada fila puede tener un site diferente.</small></div>
+        <div className="return-add-row"><button className="secondary-button" type="button" onClick={() => setRows((current) => [...current, { ...newDraftRow(), site, coordinatorF1 }])}><Plus size={16} />Agregar fila manual</button><small>Las filas seriadas deben mantenerse separadas con su SKU asociado. Cada fila puede tener un site y coordinador diferentes.</small></div>
         {error && <div className="inline-error">{error}</div>}
         <div className="return-submit-row"><span><ScanLine size={16} />Revisa la tabla y las evidencias antes de registrar.</span><button className="primary-button" type="submit" disabled={saving || Boolean(processingKey)}>{saving ? "Guardando…" : "Generar N.º F1 y registrar carga lógica"}</button></div>
       </form>
@@ -1101,22 +1173,24 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
           </div>
         </article>;
       })}</div>
-      <div className="receipt-confirm"><span><AlertTriangle size={16} />Esta acción crea los movimientos y no puede repetirse.</span><button className="primary-button" disabled={saving} onClick={() => void confirmPhysicalReceipt(receivingGroup)}><PackageCheck size={16} />Confirmar llegada física de todo el site</button></div>
+      <div className="receipt-confirm"><span><AlertTriangle size={16} />Esta acción crea los movimientos del Kardex y no puede repetirse.</span><button className="primary-button" disabled={saving} onClick={() => void confirmPhysicalReceipt(receivingGroup)}><PackageCheck size={16} />Confirmar llegada física al almacén</button></div>
     </section>}
 
     <section className="panel return-history">
-      <div className="panel-title"><div><h2>Cargas por site</h2><p>Evidencias, exportables y tiempo desde la carga lógica hasta la recepción física.</p></div></div>
+      <div className="panel-title"><div><h2>Cargas de devolución</h2><p>Evidencias, exportables y seguimiento desde el envío hasta la recepción física en almacén.</p></div></div>
       <div className="return-batch-list">
         {loading ? <div className="empty"><LoaderCircle className="spin" size={22} /><p>Cargando devoluciones…</p></div> : !batches.length ? <div className="empty"><ImageIcon size={24} /><p>Aún no hay cargas lógicas de devolución.</p></div> : batches.map((batch) => <article className="return-batch-card" key={batch.code}>
-          <header><div><span className={`return-status ${batch.status.toLowerCase()}`}>{statusLabel(batch.status)}</span><h3>{batch.code}</h3><p>{batch.site} · {batch.coordinatorF1} · {batch.rows.length} fila(s)</p></div><div className="return-batch-clock"><Clock3 size={15} /><strong>{elapsedLabel(batch.rows[0])}</strong><small>{batch.status === "RECIBIDA_FISICA" ? "Proceso cerrado" : "Tiempo activo"}</small></div></header>
+          <header><div><span className={`return-status ${batch.status.toLowerCase()}`}>{statusLabel(batch.status)}</span><h3>{batch.code}</h3><p>{batch.site} · {batch.coordinatorF1} · {batch.rows.length} fila(s)</p></div><div className="return-batch-clock"><Clock3 size={15} /><strong>{elapsedLabel(batch.rows[0])}</strong><small>{batch.status === "RECIBIDA_FISICA" ? "Proceso cerrado" : batch.status === "APROBADA_PENDIENTE_RECEPCION" ? transitSlaLabel(transitHours(batch.rows[0])) : "Pendiente de envío"}</small></div></header>
           <div className="return-batch-toolbar">
             <button className="secondary-button" onClick={() => void exportExcel(batch)}><FileSpreadsheet size={15} />Excel</button>
             <button className="secondary-button" onClick={() => exportCsv(batch)}><Download size={15} />CSV</button>
             <button className="secondary-button" onClick={() => void copyCsvColumn(batch)}><Copy size={15} />Copiar columna CSV</button>
             <span>Fecha ingreso: {displayDay(batch.entryDate)} · Registro lógico: {displayDate(batch.createdAt)} · Almacén: {batch.warehouse}</span>
           </div>
-          <div className="table-wrap"><table className="return-site-table"><thead><tr><th>Ítem</th><th>SKU / Descripción</th><th>Serie / Lote</th><th>Cant.</th><th>Condición / M3</th><th>CSV</th><th>Evidencias fotográficas</th></tr></thead><tbody>{batch.rows.map((record) => <tr key={record.id}>
+          <div className="table-wrap"><table className="return-site-table"><thead><tr><th>Ítem</th><th>Site</th><th>Coordinador F1</th><th>SKU / Descripción</th><th>Serie / Lote</th><th>Cant.</th><th>Condición / M3</th><th>CSV</th><th>Evidencias fotográficas</th></tr></thead><tbody>{batch.rows.map((record) => <tr key={record.id}>
             <td><strong>{record.batchItem}</strong></td>
+            <td><strong>{record.site}</strong></td>
+            <td><strong>{record.coordinatorF1}</strong></td>
             <td><strong>{record.skuSnapshot}</strong><small>{record.descriptionSnapshot}</small></td>
             <td><strong>{record.serial}</strong><small>PN: {record.detectedPartNumber || "—"}</small></td>
             <td><strong>{record.quantity}</strong><small>{record.length ? `Largo: ${record.length}` : ""}</small></td>
@@ -1125,9 +1199,9 @@ export default function EquipmentReturnsView({ products, productIdentifiers, mov
             <td><div className="return-report-photos"><EvidenceThumb label="Serie" src={record.evidenceImage} /><EvidenceThumb label="Modelo" src={record.modelImage} /><EvidenceThumb label="Panorámica" src={record.panoramicImage} /><EvidenceThumb label="Entel" src={record.entelLabelImage} /></div></td>
           </tr>)}</tbody></table></div>
           <footer><div><strong>{batch.orderNumber || "Sin pedido asociado"}</strong><small>{batch.rows[0]?.batchComments || batch.rows[0]?.notes || "Sin observaciones"}</small></div><div className="return-actions">
-            {["PENDIENTE_APROBACION", "OBSERVADA"].includes(batch.status) && <button className="secondary-button" disabled={saving} onClick={() => void changeBatchStatus(batch, "APROBADA_PENDIENTE_RECEPCION")}><CheckCircle2 size={14} />Aprobar carga</button>}
+            {["PENDIENTE_APROBACION", "OBSERVADA"].includes(batch.status) && <button className="secondary-button" disabled={saving} onClick={() => void changeBatchStatus(batch, "APROBADA_PENDIENTE_RECEPCION")}><CheckCircle2 size={14} />Marcar enviado</button>}
             {batch.status === "PENDIENTE_APROBACION" && <button className="text-button warning-text" disabled={saving} onClick={() => void changeBatchStatus(batch, "OBSERVADA")}><AlertTriangle size={14} />Observar</button>}
-            {batch.status === "APROBADA_PENDIENTE_RECEPCION" && <button className="primary-button" disabled={saving} onClick={() => beginPhysicalReceipt(batch)}><PackageCheck size={14} />Cargar cuando llegue el físico</button>}
+            {batch.status === "APROBADA_PENDIENTE_RECEPCION" && <button className="primary-button" disabled={saving} onClick={() => beginPhysicalReceipt(batch)}><PackageCheck size={14} />Registrar llegada a almacén</button>}
             {!['RECIBIDA_FISICA', 'RECHAZADA'].includes(batch.status) && <button className="text-button danger-text" disabled={saving} onClick={() => void changeBatchStatus(batch, "RECHAZADA")}><XCircle size={14} />Rechazar</button>}
           </div></footer>
         </article>)}
