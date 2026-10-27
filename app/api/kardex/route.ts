@@ -1039,13 +1039,33 @@ export async function POST(request: Request) {
       const invalidEquipmentQuantity = normalizedRows.find((row) => row.itemType === "EQUIPO" && row.quantity !== 1);
       if (invalidEquipmentQuantity) return Response.json({ error: `Fila ${invalidEquipmentQuantity.item}: un equipo seriado debe tener cantidad 1. Usa LOTE si la identificación agrupa varias unidades.` }, { status: 400 });
 
-      const activeF1Coordinators = await db.select().from(coordinators).where(and(
+      const f1CoordinatorRows = await db.select().from(coordinators).where(
         eq(coordinators.organization, "F1"),
-        eq(coordinators.active, true),
-      ));
-      const coordinatorByName = new Map(activeF1Coordinators.map((row) => [normalizeParty(row.name), row]));
-      const invalidCoordinator = normalizedRows.find((row) => !row.coordinatorF1 || !coordinatorByName.has(row.coordinatorF1));
-      if (invalidCoordinator) return Response.json({ error: `Fila ${invalidCoordinator.item}: selecciona un Coordinador F1 activo.` }, { status: 400 });
+      );
+      const coordinatorByName = new Map(f1CoordinatorRows.map((row) => [normalizeParty(row.name), row]));
+      const coordinatorByKey = new Map(f1CoordinatorRows.map((row) => [normalizeEquipmentIdentifier(row.name), row]));
+      for (const row of normalizedRows) {
+        if (!row.coordinatorF1) return Response.json({ error: `Fila ${row.item}: completa el Coordinador F1.` }, { status: 400 });
+        const key = normalizeEquipmentIdentifier(row.coordinatorF1);
+        const existingCoordinator = coordinatorByName.get(row.coordinatorF1) ?? coordinatorByKey.get(key);
+        if (existingCoordinator && !existingCoordinator.active) {
+          return Response.json({ error: `Fila ${row.item}: el Coordinador F1 ${existingCoordinator.name} está inactivo. Actívalo en Configuración antes de continuar.` }, { status: 409 });
+        }
+        if (existingCoordinator) continue;
+        const [createdCoordinator] = await db.insert(coordinators).values({
+          organization: "F1",
+          name: row.coordinatorF1,
+          email: "",
+          active: true,
+        }).onConflictDoNothing().returning();
+        const coordinator = createdCoordinator ?? (await db.select().from(coordinators).where(and(
+          eq(coordinators.organization, "F1"),
+          eq(coordinators.name, row.coordinatorF1),
+        )).limit(1))[0];
+        if (!coordinator) return Response.json({ error: `Fila ${row.item}: no se pudo registrar el Coordinador F1 ${row.coordinatorF1}.` }, { status: 409 });
+        coordinatorByName.set(normalizeParty(coordinator.name), coordinator);
+        coordinatorByKey.set(normalizeEquipmentIdentifier(coordinator.name), coordinator);
+      }
 
       const productIds = [...new Set(normalizedRows.map((row) => row.productId))];
       const productRows = await db.select().from(products).where(inArray(products.id, productIds));
@@ -1106,7 +1126,7 @@ export async function POST(request: Request) {
       const preparedRows = await Promise.all(normalizedRows.map(async (row, index) => {
         const input = row.input;
         const product = productById.get(row.productId)!;
-        const rowCoordinator = coordinatorByName.get(row.coordinatorF1)!;
+        const rowCoordinator = coordinatorByName.get(row.coordinatorF1) ?? coordinatorByKey.get(normalizeEquipmentIdentifier(row.coordinatorF1))!;
         const imageFolder = `devoluciones/${batchCode}/${String(row.item).padStart(3, "0")}`;
         const [evidenceImage, entelLabelImage, modelImage, panoramicImage] = await Promise.all([
           storeEvidenceImage(normalizeEvidenceImage(input.evidenceImage), `${imageFolder}/serie`),
