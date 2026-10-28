@@ -1950,7 +1950,9 @@ export async function POST(request: Request) {
         const description = clean(rowValue(row, "Descripción Sku", "Descripción", "description"));
         const quantity = Math.max(1, numeric(rowValue(row, "Cantidad", "quantity")) || 1);
         const unitMeasure = clean(rowValue(row, "Unidad de Medida", "UnidadMedida", "Unidad", "unit")) || "UND";
-        const unitCost = Math.max(0, numeric(rowValue(row, "Costo Unitario", "Costo unitario", "Costo", "Cost", "unitCost")));
+        const unitCost = movementType === "maestro"
+          ? Math.max(0, numeric(rowValue(row, "Costo Unitario", "Costo unitario", "Costo", "Cost", "unitCost")))
+          : 0;
         const equipmentTypeFromFile = clean(rowValue(row, "Tipo de Equipo", "Categoría", "category"));
         const equipmentType = normalizeParty(equipmentTypeFromFile).includes("LOTE") ? "LOTE" : "EQUIPO";
         const project = clean(rowValue(row, "Proyecto", "ProyectoFinal", "project"));
@@ -2070,14 +2072,14 @@ export async function POST(request: Request) {
               category: equipmentType,
               unit: unitMeasure,
               location: stockLocation,
-              unitCostCents: fileCostCents || entelCostCents,
+              unitCostCents: entelCostCents,
               defaultProject: project,
             }).returning();
           } else if (product && movementType === "entrada") {
             [product] = await db.update(products).set({
               unit: unitMeasure || product.unit,
               location: stockLocation || product.location,
-              unitCostCents: fileCostCents || product.unitCostCents || entelCostCents,
+              unitCostCents: product.unitCostCents || entelCostCents,
               defaultProject: project || product.defaultProject,
             }).where(eq(products.id, product.id)).returning();
           }
@@ -2154,7 +2156,7 @@ export async function POST(request: Request) {
             originSite,
             stockLocation,
             unitMeasure,
-            unitCostCents: fileCostCents || product.unitCostCents || entelCostCents,
+            unitCostCents: product.unitCostCents || entelCostCents,
             equipmentType: product.category || equipmentType,
             loadGr: movementType === "entrada" ? (grLink ? "SI" : "") : clean(rowValue(row, "Cargar Gr", "Cargar GR")),
             grLink,
