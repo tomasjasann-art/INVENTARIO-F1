@@ -14,6 +14,7 @@ import {
   sourceRecords,
   suppliers,
 } from "../../../db/schema";
+import { changeAppUser, type UserChange } from "../../../lib/app-user-management";
 import { normalizeKardexDate } from "../../../lib/kardex-date";
 import { createSupabaseAdminClient, internalAuthEmail, normalizeUsername, validUsername } from "../../../lib/supabase-auth";
 import { resolveEvidenceImage, storeEvidenceImage } from "../../../lib/supabase-storage";
@@ -322,6 +323,7 @@ type UserRole = "ADMINISTRADOR" | "LOGISTICA" | "COORDINADOR" | "SOLO_LECTURA" |
 type AppUserInput = {
   action?: "appUser";
   userId?: number;
+  _version?: string;
   username?: string;
   displayName?: string;
   role?: UserRole;
@@ -781,14 +783,23 @@ export async function POST(request: Request) {
         eq(coordinators.active, true),
       )).limit(1)
       : [];
-    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | EquipmentReturnCreateInput | EquipmentReturnStatusInput | EquipmentReturnEvidenceUploadInput | EquipmentReturnBatchCreateInput | EquipmentReturnBatchStatusInput | AppUserInput | AppUserResetPasswordInput | CleanupInput;
+    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | EquipmentReturnCreateInput | EquipmentReturnStatusInput | EquipmentReturnEvidenceUploadInput | EquipmentReturnBatchCreateInput | EquipmentReturnBatchStatusInput | AppUserInput | AppUserResetPasswordInput | UserChange | CleanupInput;
     const action = clean(payload.action);
     if (!access.active) return Response.json({ error: "Tu usuario está inactivo. Comunícate con un administrador." }, { status: 403 });
     if (access.role === "COORDINADOR" && !assignedCoordinator) return Response.json({ error: "Tu cuenta no está vinculada a un Coordinador F1 activo." }, { status: 403 });
-    if ((action === "appUser" || action === "appUserResetPassword") && access.role !== "ADMINISTRADOR") return Response.json({ error: "Solo un Administrador puede cambiar permisos." }, { status: 403 });
+    if ((["appUser", "appUserResetPassword", "appUserDelete"].includes(action)) && access.role !== "ADMINISTRADOR") return Response.json({ error: "Solo un Administrador puede cambiar permisos." }, { status: 403 });
     if (action === "cleanup" && access.role !== "ADMINISTRADOR") return Response.json({ error: "Solo un Administrador puede limpiar la base." }, { status: 403 });
     if (action === "request" && !mayOperate(access.role) && access.role !== "COORDINADOR") return Response.json({ error: "Tu perfil es de solo lectura." }, { status: 403 });
-    if (action !== "request" && action !== "appUser" && action !== "appUserResetPassword" && action !== "cleanup" && !mayOperate(access.role)) return Response.json({ error: "Tu perfil no puede modificar datos operativos." }, { status: 403 });
+    if (action !== "request" && action !== "appUser" && action !== "appUserResetPassword" && action !== "appUserDelete" && action !== "cleanup" && !mayOperate(access.role)) return Response.json({ error: "Tu perfil no puede modificar datos operativos." }, { status: 403 });
+
+    if (["appUser", "appUserResetPassword", "appUserDelete"].includes(action)) {
+      const origin = request.headers.get("origin");
+      if (origin && origin !== new URL(request.url).origin) return Response.json({ error: "Origen no permitido." }, { status: 403 });
+      if (user.authProvider === "supabase" && "mustChangePassword" in access && access.mustChangePassword) return Response.json({ error: "Primero cambia tu contraseña temporal." }, { status: 403 });
+    }
+    if (action === "appUserDelete" || (action === "appUser" && "userId" in payload && payload.userId !== undefined)) {
+      return await changeAppUser(db, user, payload as UserChange);
+    }
 
     if (payload.action === "appUser") {
       const userPayload = payload as AppUserInput;
@@ -808,37 +819,13 @@ export async function POST(request: Request) {
       if (role === "COORDINADOR" && !linkedCoordinator) {
         return Response.json({ error: "Selecciona un Coordinador F1 activo para este usuario." }, { status: 400 });
       }
-      const requestedUserId = Number(userPayload.userId);
-      const isUpdate = Number.isInteger(requestedUserId) && requestedUserId > 0;
-      const [existingUser] = isUpdate
-        ? await db.select().from(appUsers).where(eq(appUsers.id, requestedUserId)).limit(1)
-        : [];
-      if (isUpdate && !existingUser) return Response.json({ error: "El usuario que intentas actualizar ya no existe." }, { status: 404 });
-      if (!existingUser && !validUsername(username)) return Response.json({ error: "El usuario debe tener entre 4 y 40 caracteres y usar solo letras, números, punto, guion o guion bajo." }, { status: 400 });
+      if (!validUsername(username)) return Response.json({ error: "El usuario debe tener entre 4 y 40 caracteres y usar solo letras, números, punto, guion o guion bajo." }, { status: 400 });
       if (!displayName) return Response.json({ error: "Ingresa el nombre del colaborador." }, { status: 400 });
-      if (!existingUser && temporaryPassword.length < 10) {
-        return Response.json({ error: "La contraseña temporal debe tener al menos 10 caracteres." }, { status: 400 });
-      }
-      if (!existingUser) {
-        const [duplicate] = await db.select({ id: appUsers.id }).from(appUsers).where(eq(appUsers.username, username)).limit(1);
-        if (duplicate) return Response.json({ error: "Ese nombre de usuario ya está registrado." }, { status: 409 });
-      }
-
+      if (temporaryPassword.length < 10) return Response.json({ error: "La contraseña temporal debe tener al menos 10 caracteres." }, { status: 400 });
+      const [duplicate] = await db.select({ id: appUsers.id }).from(appUsers).where(eq(appUsers.username, username)).limit(1);
+      if (duplicate) return Response.json({ error: "Ese nombre de usuario ya está registrado." }, { status: 409 });
       const active = userPayload.active !== false;
       const admin = createSupabaseAdminClient();
-      if (existingUser) {
-        const storedUsername = existingUser.username || username;
-        if (existingUser.authUserId) {
-          const { error } = await admin.auth.admin.updateUserById(existingUser.authUserId, {
-            app_metadata: { application: "LOGISTICA_F1", username: storedUsername, role, active, coordinator_id: coordinatorId },
-            user_metadata: { display_name: displayName },
-          });
-          if (error) return Response.json({ error: `No se pudo actualizar la cuenta: ${error.message}` }, { status: 400 });
-        }
-        const [savedUser] = await db.update(appUsers).set({ displayName, role, coordinatorId, active, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(appUsers.id, existingUser.id)).returning();
-        return Response.json({ ok: true, user: savedUser, accountStatus: active ? "ACTIVA" : "INACTIVA" });
-      }
-
       const email = internalAuthEmail(username);
       const { data: created, error: createError } = await admin.auth.admin.createUser({
         email,
@@ -877,6 +864,7 @@ export async function POST(request: Request) {
       if (!Number.isInteger(userId) || userId <= 0) return Response.json({ error: "Usuario inválido." }, { status: 400 });
       if (temporaryPassword.length < 10) return Response.json({ error: "La contraseña temporal debe tener al menos 10 caracteres." }, { status: 400 });
       const [targetUser] = await db.select().from(appUsers).where(eq(appUsers.id, userId)).limit(1);
+      if (targetUser?.invitationStatus === "ELIMINADO") return Response.json({ error: "Este acceso fue eliminado." }, { status: 404 });
       if (!targetUser?.authUserId) return Response.json({ error: "Esta cuenta todavía pertenece al acceso anterior y no tiene contraseña interna." }, { status: 400 });
       const admin = createSupabaseAdminClient();
       const { error } = await admin.auth.admin.updateUserById(targetUser.authUserId, { password: temporaryPassword });
