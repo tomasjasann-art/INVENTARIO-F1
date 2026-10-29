@@ -76,6 +76,9 @@ type AuditPreview = {
   rows: UploadRecord[];
   totalQuantity: number;
   totalCost: number;
+  sourceControlQuantity: number | null;
+  sourceControlCost: number | null;
+  excludedRowCount: number;
 };
 
 type Props = {
@@ -116,6 +119,32 @@ function numeric(value: unknown) {
     text = text.replace(",", ".");
   }
   return Number(text) || 0;
+}
+
+function sheetSubtotal(
+  sheet: import("xlsx").WorkSheet,
+  headerRow: number,
+  headerNames: string[],
+  xlsx: typeof import("xlsx"),
+) {
+  const range = xlsx.utils.decode_range(sheet["!ref"] ?? "A1");
+  const wanted = new Set(headerNames.map(normalizeHeader));
+  let columnIndex = -1;
+  for (let index = range.s.c; index <= range.e.c; index += 1) {
+    const value = clean(sheet[xlsx.utils.encode_cell({ r: headerRow, c: index })]?.v);
+    if (wanted.has(normalizeHeader(value))) {
+      columnIndex = index;
+      break;
+    }
+  }
+  if (columnIndex < 0) return null;
+  for (let rowIndex = headerRow - 1; rowIndex >= range.s.r; rowIndex -= 1) {
+    const cell = sheet[xlsx.utils.encode_cell({ r: rowIndex, c: columnIndex })];
+    if (!cell || !String(cell.f ?? "").toUpperCase().includes("SUBTOTAL")) continue;
+    const value = numeric(cell.v);
+    return Number.isFinite(value) ? value : null;
+  }
+  return null;
 }
 
 function isoDate(value: unknown, xlsx?: typeof import("xlsx")) {
@@ -246,6 +275,10 @@ async function parseEntel(file: File): Promise<AuditPreview> {
     } satisfies UploadRecord;
   }).filter((row) => row.sku && row.seriesLot);
   const rows = aggregate(records);
+  const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
+  const totalCost = rows.reduce((sum, row) => sum + row.totalCost, 0);
+  const sourceControlQuantity = sheetSubtotal(sheet, headerRow, ["Cantidad"], XLSX);
+  const sourceControlCost = sheetSubtotal(sheet, headerRow, ["Monto Total Soles", "Monto Total", "Costo Total", "Valor Total Soles", "Valor Total"], XLSX);
   const cutoff = sheetName.match(/(\d{4})_(\d{2})_(\d{2})/);
   return {
     source: "ENTEL",
@@ -255,8 +288,11 @@ async function parseEntel(file: File): Promise<AuditPreview> {
     contractor: "F1 SERVICES & SOLUTIONS S.A.C._20565431634",
     rawRowCount: f1Rows.length,
     rows,
-    totalQuantity: rows.reduce((sum, row) => sum + row.quantity, 0),
-    totalCost: rows.reduce((sum, row) => sum + row.totalCost, 0),
+    totalQuantity,
+    totalCost,
+    sourceControlQuantity,
+    sourceControlCost,
+    excludedRowCount: f1Rows.length - records.length,
   };
 }
 
@@ -305,6 +341,9 @@ async function parseOracle(file: File): Promise<AuditPreview> {
     rows,
     totalQuantity: rows.reduce((sum, row) => sum + row.quantity, 0),
     totalCost: 0,
+    sourceControlQuantity: null,
+    sourceControlCost: null,
+    excludedRowCount: f1Rows.length - records.length,
   };
 }
 
@@ -452,6 +491,9 @@ export default function AuditView({ imports, records, movements, loading, saving
       contractor: item.contractor,
       cutoffDate: item.cutoffDate,
       rawRowCount: item.rawRowCount,
+      normalizedRowCount: item.rows.length,
+      totalQuantity: item.totalQuantity,
+      totalCost: item.totalCost,
       rows: item.rows,
     }, `${source === "ENTEL" ? "Stock Contrata Entel" : "Export Oracle"} cargado correctamente.`);
     if (ok) setPreview((current) => ({ ...current, [source]: undefined }));
@@ -528,6 +570,9 @@ function AuditUploadCard({ source, title, subtitle, accept, latest, preview, par
   onDrag: (active: boolean) => void;
   onImport: () => void;
 }) {
+  const quantityDifference = preview?.sourceControlQuantity == null ? 0 : preview.totalQuantity - preview.sourceControlQuantity;
+  const costDifference = preview?.sourceControlCost == null ? 0 : preview.totalCost - preview.sourceControlCost;
+  const reconciled = !preview || (quantityDifference === 0 && Math.abs(costDifference) < 0.005 && preview.excludedRowCount === 0);
   return <article className="panel audit-source-card">
     <div className="audit-source-head"><span><FileSpreadsheet size={21} /></span><div><small>{source}</small><h2>{title}</h2><p>{subtitle}</p></div>{latest && <CheckCircle2 size={20} className="audit-source-ready" />}</div>
     <label className={`audit-drop-zone ${dragging ? "drag-active" : ""}`} onDragOver={(event) => { event.preventDefault(); onDrag(true); }} onDragLeave={() => onDrag(false)} onDrop={onDrop}>
@@ -536,6 +581,6 @@ function AuditUploadCard({ source, title, subtitle, accept, latest, preview, par
       <strong>{parsing ? "Leyendo y consolidando filas F1..." : `Arrastra ${accept} o haz clic para seleccionar`}</strong>
       <span>El archivo original no se modifica.</span>
     </label>
-    {preview ? <div className="audit-preview-box"><div><strong>{preview.fileName}</strong><small>{number.format(preview.rawRowCount)} líneas F1 → {number.format(preview.rows.length)} combinaciones únicas</small><small>{number.format(preview.totalQuantity)} unidades{source === "ENTEL" ? ` · ${money.format(preview.totalCost)}` : ""}</small></div><button className="primary-button" disabled={saving} onClick={onImport}>{saving ? "Guardando..." : "Confirmar carga"}</button></div> : latest ? <div className="audit-latest"><div><small>ÚLTIMO CORTE</small><strong>{latest.fileName}</strong><span>{displayDate(latest.cutoffDate || latest.createdAt)} · {number.format(latest.rawRowCount)} líneas F1</span></div><div><small>CONSOLIDADO</small><strong>{number.format(latest.totalQuantity)} unidades</strong><span>{number.format(latest.normalizedRowCount)} SKU + Serie/Lote{source === "ENTEL" ? ` · ${money.format(latest.totalCostCents / 100)}` : ""}</span></div></div> : <p className="audit-no-source">Todavía no hay un corte {source} cargado.</p>}
+    {preview ? <div className={`audit-preview-box ${reconciled ? "is-reconciled" : "has-difference"}`}><div><strong>{preview.fileName}</strong><small>{number.format(preview.rawRowCount)} líneas F1 → {number.format(preview.rows.length)} combinaciones únicas</small><small>{number.format(preview.totalQuantity)} unidades{source === "ENTEL" ? ` · Total a cargar: ${money.format(preview.totalCost)}` : ""}</small>{source === "ENTEL" && preview.sourceControlCost != null && <small className="audit-control-line">Control del Excel: {number.format(preview.sourceControlQuantity ?? 0)} unidades · {money.format(preview.sourceControlCost)} · Diferencia: {money.format(costDifference)}</small>}{preview.excludedRowCount > 0 && <small className="audit-difference-line">{number.format(preview.excludedRowCount)} filas F1 sin SKU o Serie/Lote no pueden cargarse.</small>}{!reconciled && preview.excludedRowCount === 0 && <small className="audit-difference-line">El total leído no coincide con el subtotal del Excel. No se cargará hasta corregirlo.</small>}</div><button className="primary-button" disabled={saving || !reconciled} onClick={onImport}>{saving ? "Guardando..." : reconciled ? "Confirmar carga" : "Revisar diferencia"}</button></div> : latest ? <div className="audit-latest"><div><small>ÚLTIMO CORTE</small><strong>{latest.fileName}</strong><span>{displayDate(latest.cutoffDate || latest.createdAt)} · {number.format(latest.rawRowCount)} líneas F1</span></div><div><small>CONSOLIDADO</small><strong>{number.format(latest.totalQuantity)} unidades</strong><span>{number.format(latest.normalizedRowCount)} SKU + Serie/Lote{source === "ENTEL" ? ` · ${money.format(latest.totalCostCents / 100)}` : ""}</span></div></div> : <p className="audit-no-source">Todavía no hay un corte {source} cargado.</p>}
   </article>;
 }

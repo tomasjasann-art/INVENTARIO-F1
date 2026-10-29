@@ -173,6 +173,9 @@ type AuditImportInput = {
   contractor?: string;
   cutoffDate?: string;
   rawRowCount?: number;
+  normalizedRowCount?: number;
+  totalQuantity?: number;
+  totalCost?: number;
   rows?: AuditRecordInput[];
 };
 
@@ -1701,9 +1704,16 @@ export async function POST(request: Request) {
       const source = auditPayload.source === "ORACLE" ? "ORACLE" : "ENTEL";
       const fileName = clean(auditPayload.fileName);
       const contractor = clean(auditPayload.contractor) || "F1 SERVICES";
-      const rows = Array.isArray(auditPayload.rows) ? auditPayload.rows.slice(0, 3000) : [];
+      const rows = Array.isArray(auditPayload.rows) ? auditPayload.rows : [];
       if (!fileName || !rows.length) {
         return Response.json({ error: "El archivo de auditoría no contiene filas F1 válidas." }, { status: 400 });
+      }
+      if (rows.length > 10000) {
+        return Response.json({ error: `El archivo contiene ${rows.length} combinaciones. No se truncó ninguna fila; divide el archivo en un máximo de 10,000 combinaciones por carga.` }, { status: 413 });
+      }
+      const expectedRowCount = Math.max(0, Math.round(Number(auditPayload.normalizedRowCount) || 0));
+      if (expectedRowCount && expectedRowCount !== rows.length) {
+        return Response.json({ error: `La vista previa tenía ${expectedRowCount} combinaciones, pero el servidor recibió ${rows.length}. La carga fue cancelada sin guardar datos.` }, { status: 400 });
       }
 
       const normalized = rows
@@ -1743,32 +1753,55 @@ export async function POST(request: Request) {
         return Response.json({ error: "No se encontraron combinaciones válidas de SKU y Serie/Lote para F1." }, { status: 400 });
       }
 
-      const totalQuantity = normalized.reduce((sum, row) => sum + row.quantity, 0);
-      const totalCostCents = normalized.reduce((sum, row) => sum + row.totalCostCents, 0);
-      const [auditImport] = await db.insert(auditImports).values({
-        source,
-        fileName,
-        sheetName: clean(auditPayload.sheetName),
-        contractor,
-        cutoffDate: normalizeKardexDate(auditPayload.cutoffDate),
-        rawRowCount: Math.max(0, Math.round(Number(auditPayload.rawRowCount) || normalized.length)),
-        normalizedRowCount: normalized.length,
-        totalQuantity,
-        totalCostCents,
-        status: "PROCESSING",
-      }).returning();
+      const computedQuantity = normalized.reduce((sum, row) => sum + row.quantity, 0);
+      const hasExpectedQuantity = auditPayload.totalQuantity !== undefined && Number.isFinite(Number(auditPayload.totalQuantity));
+      const totalQuantity = hasExpectedQuantity ? Math.max(0, Math.round(Number(auditPayload.totalQuantity))) : computedQuantity;
+      if (totalQuantity !== computedQuantity) {
+        return Response.json({ error: `El control del Excel indica ${totalQuantity} unidades, pero las filas suman ${computedQuantity}. La carga fue cancelada sin guardar datos.` }, { status: 400 });
+      }
 
-      const statementGroups: Array<typeof normalized> = [];
-      for (let index = 0; index < normalized.length; index += 3) {
-        statementGroups.push(normalized.slice(index, index + 3));
+      const computedCostCents = normalized.reduce((sum, row) => sum + row.totalCostCents, 0);
+      const hasExpectedCost = source === "ENTEL" && auditPayload.totalCost !== undefined && Number.isFinite(Number(auditPayload.totalCost));
+      const totalCostCents = hasExpectedCost ? Math.max(0, Math.round(Number(auditPayload.totalCost) * 100)) : computedCostCents;
+      const roundingDelta = totalCostCents - computedCostCents;
+      const maximumRoundingDelta = Math.ceil(normalized.length / 2) + 1;
+      if (Math.abs(roundingDelta) > maximumRoundingDelta) {
+        return Response.json({ error: `El control del Excel indica S/ ${(totalCostCents / 100).toFixed(2)}, pero las filas suman S/ ${(computedCostCents / 100).toFixed(2)}. La carga fue cancelada sin guardar datos.` }, { status: 400 });
       }
-      for (let index = 0; index < statementGroups.length; index += 80) {
-        const statements = statementGroups.slice(index, index + 80).map((group) =>
-          db.insert(auditRecords).values(group.map((row) => ({ ...row, importId: auditImport.id }))),
-        );
-        for (const statement of statements) await statement;
+      if (roundingDelta > 0) {
+        const adjustmentIndex = normalized.reduce((best, row, index, list) => row.totalCostCents > list[best].totalCostCents ? index : best, 0);
+        normalized[adjustmentIndex].totalCostCents += roundingDelta;
+      } else if (roundingDelta < 0) {
+        let remaining = -roundingDelta;
+        const adjustmentOrder = normalized.map((_, index) => index).sort((left, right) => normalized[right].totalCostCents - normalized[left].totalCostCents);
+        for (const index of adjustmentOrder) {
+          const adjustment = Math.min(remaining, normalized[index].totalCostCents);
+          normalized[index].totalCostCents -= adjustment;
+          remaining -= adjustment;
+          if (!remaining) break;
+        }
       }
-      await db.update(auditImports).set({ status: "READY" }).where(eq(auditImports.id, auditImport.id));
+
+      const auditImport = await db.transaction(async (tx) => {
+        const [created] = await tx.insert(auditImports).values({
+          source,
+          fileName,
+          sheetName: clean(auditPayload.sheetName),
+          contractor,
+          cutoffDate: normalizeKardexDate(auditPayload.cutoffDate),
+          rawRowCount: Math.max(0, Math.round(Number(auditPayload.rawRowCount) || normalized.length)),
+          normalizedRowCount: normalized.length,
+          totalQuantity,
+          totalCostCents,
+          status: "PROCESSING",
+        }).returning();
+
+        for (let index = 0; index < normalized.length; index += 200) {
+          await tx.insert(auditRecords).values(normalized.slice(index, index + 200).map((row) => ({ ...row, importId: created.id })));
+        }
+        await tx.update(auditImports).set({ status: "READY" }).where(eq(auditImports.id, created.id));
+        return created;
+      });
 
       if (source === "ENTEL") {
         const costs = auditUnitCosts(normalized);

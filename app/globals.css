@@ -287,6 +287,9 @@ button { cursor: pointer; }
 .audit-preview-box strong,.audit-preview-box small { display: block; }
 .audit-preview-box strong { overflow: hidden; color: #355847; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .audit-preview-box small { margin-top: 3px; color: #698675; font-size: 8px; }
+.audit-preview-box .audit-control-line { margin-top: 7px; color: #286344; font-weight: 700; }
+.audit-preview-box.has-difference { border-color: #efb4a8; background: #fff5f2; }
+.audit-preview-box .audit-difference-line { color: #b33b25; font-weight: 700; }
 .audit-preview-box .primary-button { flex: 0 0 auto; }
 .audit-latest { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; margin-top: 12px; }
 .audit-latest > div { min-width: 0; padding: 11px; border-radius: 9px; background: #f4f6f7; }
