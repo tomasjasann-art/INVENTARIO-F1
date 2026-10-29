@@ -147,6 +147,89 @@ function sheetSubtotal(
   return null;
 }
 
+function auditHeaderRow(sheet: import("xlsx").WorkSheet, xlsx: typeof import("xlsx"), maximumRows = 24) {
+  if (!sheet["!ref"]) return -1;
+  const range = xlsx.utils.decode_range(sheet["!ref"]);
+  for (let rowIndex = range.s.r; rowIndex <= Math.min(range.e.r, range.s.r + maximumRows); rowIndex += 1) {
+    const values: string[] = [];
+    for (let columnIndex = range.s.c; columnIndex <= range.e.c; columnIndex += 1) {
+      values.push(normalizeHeader(clean(sheet[xlsx.utils.encode_cell({ r: rowIndex, c: columnIndex })]?.v)));
+    }
+    if (values.includes("sku") && values.includes("serie/lote") && values.includes("contrata abrev.")) return rowIndex;
+  }
+  return -1;
+}
+
+function isF1Row(row: Record<string, unknown>) {
+  const abbreviated = clean(rowValue(row, "Contrata Abrev."));
+  const full = clean(rowValue(row, "Contrata"));
+  return normalizeHeader(abbreviated) === "f1 services" || normalizeHeader(full).includes("f1 services");
+}
+
+function selectEntelSheet(buffer: ArrayBuffer, xlsx: typeof import("xlsx")) {
+  const sampleBook = xlsx.read(buffer, { type: "array", sheetRows: 12, cellDates: true });
+  const candidates = sampleBook.SheetNames.flatMap((name) => {
+    const sheet = sampleBook.Sheets[name];
+    const headerRow = sheet ? auditHeaderRow(sheet, xlsx, 11) : -1;
+    if (!sheet || headerRow < 0) return [];
+    const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { range: headerRow, defval: "", raw: true });
+    let f1Rows = 0;
+    let otherContractorRows = 0;
+    rows.forEach((row) => {
+      const contractor = clean(rowValue(row, "Contrata"));
+      const abbreviated = clean(rowValue(row, "Contrata Abrev."));
+      if (!contractor && !abbreviated) return;
+      if (isF1Row(row)) f1Rows += 1;
+      else otherContractorRows += 1;
+    });
+    const fullReference = (sheet as import("xlsx").WorkSheet & { "!fullref"?: string })["!fullref"] ?? sheet["!ref"];
+    const totalRows = fullReference ? xlsx.utils.decode_range(fullReference).e.r - headerRow : rows.length;
+    return [{ name, headerRow, f1Rows, otherContractorRows, totalRows }];
+  });
+
+  const dedicatedF1Sheet = candidates
+    .filter((candidate) => candidate.headerRow === 0 && candidate.f1Rows >= 2 && candidate.otherContractorRows === 0)
+    .sort((left, right) => right.totalRows - left.totalRows)[0];
+  if (dedicatedF1Sheet) return dedicatedF1Sheet.name;
+
+  const matrixSheet = sampleBook.SheetNames.find((name) => /^Matriz_/i.test(name))
+    ?? sampleBook.SheetNames.find((name) => normalizeHeader(name).includes("matriz"));
+  if (matrixSheet) return matrixSheet;
+
+  return candidates.sort((left, right) => right.f1Rows - left.f1Rows || right.totalRows - left.totalRows)[0]?.name ?? "";
+}
+
+function sheetGrandTotal(
+  sheet: import("xlsx").WorkSheet,
+  headerRow: number,
+  headerNames: string[],
+  xlsx: typeof import("xlsx"),
+) {
+  const range = xlsx.utils.decode_range(sheet["!ref"] ?? "A1");
+  const wanted = new Set(headerNames.map(normalizeHeader));
+  let columnIndex = -1;
+  for (let index = range.s.c; index <= range.e.c; index += 1) {
+    const value = clean(sheet[xlsx.utils.encode_cell({ r: headerRow, c: index })]?.v);
+    if (wanted.has(normalizeHeader(value))) {
+      columnIndex = index;
+      break;
+    }
+  }
+  if (columnIndex < 0) return null;
+  for (let rowIndex = range.e.r; rowIndex > Math.max(headerRow, range.e.r - 10); rowIndex -= 1) {
+    const cell = sheet[xlsx.utils.encode_cell({ r: rowIndex, c: columnIndex })];
+    if (!cell || !clean(cell.v)) continue;
+    let nonEmptyCells = 0;
+    for (let index = range.s.c; index <= range.e.c; index += 1) {
+      if (clean(sheet[xlsx.utils.encode_cell({ r: rowIndex, c: index })]?.v)) nonEmptyCells += 1;
+    }
+    if (nonEmptyCells > 2) continue;
+    const value = numeric(cell.v);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  return null;
+}
+
 function isoDate(value: unknown, xlsx?: typeof import("xlsx")) {
   if (!value) return "";
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
@@ -217,34 +300,17 @@ function aggregate(rows: UploadRecord[]) {
 async function parseEntel(file: File): Promise<AuditPreview> {
   const XLSX = await import("xlsx");
   const buffer = await file.arrayBuffer();
-  const bookIndex = XLSX.read(buffer, { type: "array", bookSheets: true });
-  const sheetName = bookIndex.SheetNames.find((name) => /^Matriz_/i.test(name))
-    ?? bookIndex.SheetNames.find((name) => normalizeHeader(name).includes("matriz"));
-  if (!sheetName) throw new Error("No se encontró la hoja Matriz del Stock Contrata Entel.");
+  const sheetName = selectEntelSheet(buffer, XLSX);
+  if (!sheetName) throw new Error("No se encontró una hoja válida con SKU, Serie/Lote y Contrata F1.");
 
   const workbook = XLSX.read(buffer, { type: "array", sheets: [sheetName], cellDates: true });
   const sheet = workbook.Sheets[sheetName];
-  if (!sheet || !sheet["!ref"]) throw new Error("La hoja Matriz está vacía.");
-  const range = XLSX.utils.decode_range(sheet["!ref"]);
-  let headerRow = -1;
-  for (let rowIndex = range.s.r; rowIndex <= Math.min(range.e.r, range.s.r + 24); rowIndex += 1) {
-    const values: string[] = [];
-    for (let columnIndex = range.s.c; columnIndex <= range.e.c; columnIndex += 1) {
-      values.push(normalizeHeader(clean(sheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })]?.v)));
-    }
-    if (values.includes("sku") && values.includes("serie/lote") && values.includes("contrata abrev.")) {
-      headerRow = rowIndex;
-      break;
-    }
-  }
-  if (headerRow < 0) throw new Error("No se encontraron las cabeceras SKU, Serie/Lote y Contrata Abrev. en la Matriz.");
+  if (!sheet || !sheet["!ref"]) throw new Error(`La hoja seleccionada ${sheetName} está vacía.`);
+  const headerRow = auditHeaderRow(sheet, XLSX);
+  if (headerRow < 0) throw new Error(`No se encontraron las cabeceras SKU, Serie/Lote y Contrata Abrev. en ${sheetName}.`);
 
   const sourceRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { range: headerRow, defval: "", raw: true });
-  const f1Rows = sourceRows.filter((row) => {
-    const abbreviated = clean(rowValue(row, "Contrata Abrev."));
-    const full = clean(rowValue(row, "Contrata"));
-    return normalizeHeader(abbreviated) === "f1 services" || normalizeHeader(full).includes("f1 services");
-  });
+  const f1Rows = sourceRows.filter(isF1Row);
   const records = f1Rows.map((row) => {
     const sku = clean(rowValue(row, "SKU")).toUpperCase();
     const seriesLot = clean(rowValue(row, "Serie/Lote")).toUpperCase();
@@ -278,7 +344,9 @@ async function parseEntel(file: File): Promise<AuditPreview> {
   const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
   const totalCost = rows.reduce((sum, row) => sum + row.totalCost, 0);
   const sourceControlQuantity = sheetSubtotal(sheet, headerRow, ["Cantidad"], XLSX);
-  const sourceControlCost = sheetSubtotal(sheet, headerRow, ["Monto Total Soles", "Monto Total", "Costo Total", "Valor Total Soles", "Valor Total"], XLSX);
+  const costHeaders = ["Monto Total Soles", "Monto Total", "Costo Total", "Valor Total Soles", "Valor Total"];
+  const sourceControlCost = sheetSubtotal(sheet, headerRow, costHeaders, XLSX)
+    ?? sheetGrandTotal(sheet, headerRow, costHeaders, XLSX);
   const cutoff = sheetName.match(/(\d{4})_(\d{2})_(\d{2})/);
   return {
     source: "ENTEL",
@@ -581,6 +649,6 @@ function AuditUploadCard({ source, title, subtitle, accept, latest, preview, par
       <strong>{parsing ? "Leyendo y consolidando filas F1..." : `Arrastra ${accept} o haz clic para seleccionar`}</strong>
       <span>El archivo original no se modifica.</span>
     </label>
-    {preview ? <div className={`audit-preview-box ${reconciled ? "is-reconciled" : "has-difference"}`}><div><strong>{preview.fileName}</strong><small>{number.format(preview.rawRowCount)} líneas F1 → {number.format(preview.rows.length)} combinaciones únicas</small><small>{number.format(preview.totalQuantity)} unidades{source === "ENTEL" ? ` · Total a cargar: ${money.format(preview.totalCost)}` : ""}</small>{source === "ENTEL" && preview.sourceControlCost != null && <small className="audit-control-line">Control del Excel: {number.format(preview.sourceControlQuantity ?? 0)} unidades · {money.format(preview.sourceControlCost)} · Diferencia: {money.format(costDifference)}</small>}{preview.excludedRowCount > 0 && <small className="audit-difference-line">{number.format(preview.excludedRowCount)} filas F1 sin SKU o Serie/Lote no pueden cargarse.</small>}{!reconciled && preview.excludedRowCount === 0 && <small className="audit-difference-line">El total leído no coincide con el subtotal del Excel. No se cargará hasta corregirlo.</small>}</div><button className="primary-button" disabled={saving || !reconciled} onClick={onImport}>{saving ? "Guardando..." : reconciled ? "Confirmar carga" : "Revisar diferencia"}</button></div> : latest ? <div className="audit-latest"><div><small>ÚLTIMO CORTE</small><strong>{latest.fileName}</strong><span>{displayDate(latest.cutoffDate || latest.createdAt)} · {number.format(latest.rawRowCount)} líneas F1</span></div><div><small>CONSOLIDADO</small><strong>{number.format(latest.totalQuantity)} unidades</strong><span>{number.format(latest.normalizedRowCount)} SKU + Serie/Lote{source === "ENTEL" ? ` · ${money.format(latest.totalCostCents / 100)}` : ""}</span></div></div> : <p className="audit-no-source">Todavía no hay un corte {source} cargado.</p>}
+    {preview ? <div className={`audit-preview-box ${reconciled ? "is-reconciled" : "has-difference"}`}><div><strong>{preview.fileName}</strong><small>Hoja utilizada: {preview.sheetName}</small><small>{number.format(preview.rawRowCount)} líneas F1 → {number.format(preview.rows.length)} combinaciones únicas</small><small>{number.format(preview.totalQuantity)} unidades{source === "ENTEL" ? ` · Total a cargar: ${money.format(preview.totalCost)}` : ""}</small>{source === "ENTEL" && preview.sourceControlCost != null && <small className="audit-control-line">Control del Excel: {preview.sourceControlQuantity != null ? `${number.format(preview.sourceControlQuantity)} unidades · ` : ""}{money.format(preview.sourceControlCost)} · Diferencia: {money.format(costDifference)}</small>}{preview.excludedRowCount > 0 && <small className="audit-difference-line">{number.format(preview.excludedRowCount)} filas F1 sin SKU o Serie/Lote no pueden cargarse.</small>}{!reconciled && preview.excludedRowCount === 0 && <small className="audit-difference-line">El total leído no coincide con el subtotal del Excel. No se cargará hasta corregirlo.</small>}</div><button className="primary-button" disabled={saving || !reconciled} onClick={onImport}>{saving ? "Guardando..." : reconciled ? "Confirmar carga" : "Revisar diferencia"}</button></div> : latest ? <div className="audit-latest"><div><small>ÚLTIMO CORTE</small><strong>{latest.fileName}</strong><span>{displayDate(latest.cutoffDate || latest.createdAt)} · {number.format(latest.rawRowCount)} líneas F1</span></div><div><small>CONSOLIDADO</small><strong>{number.format(latest.totalQuantity)} unidades</strong><span>{number.format(latest.normalizedRowCount)} SKU + Serie/Lote{source === "ENTEL" ? ` · ${money.format(latest.totalCostCents / 100)}` : ""}</span></div></div> : <p className="audit-no-source">Todavía no hay un corte {source} cargado.</p>}
   </article>;
 }
