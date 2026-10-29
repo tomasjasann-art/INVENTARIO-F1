@@ -799,8 +799,8 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
           )}
 
           {view === "movimientos" && <MovementTable movements={filteredMovements} loading={loading} title="Todos los movimientos" subtitle={`${filteredMovements.length} operaciones encontradas`} />}
-          {view === "ingresos" && <OperationalMovementTable mode="entrada" movements={filteredMovements.filter((movement) => ["entrada", "devolucion", "desinstalacion", "regularizacion"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
-          {view === "salidas" && <OperationalMovementTable mode="salida" movements={filteredMovements.filter((movement) => ["salida", "baja"].includes(movement.type))} allMovements={data.movements} loading={loading} />}
+          {view === "ingresos" && <OperationalMovementTable mode="entrada" movements={filteredMovements.filter((movement) => ["entrada", "devolucion", "desinstalacion", "regularizacion"].includes(movement.type))} allMovements={data.movements} loading={loading} saving={saving} canEdit={canOperate} onSave={(payload) => save(payload, "GR de ingreso actualizada correctamente.")} />}
+          {view === "salidas" && <OperationalMovementTable mode="salida" movements={filteredMovements.filter((movement) => ["salida", "baja"].includes(movement.type))} allMovements={data.movements} loading={loading} saving={saving} canEdit={canOperate} onSave={(payload) => save(payload, "GR de salida actualizada correctamente.")} />}
           {view === "stock" && (isCoordinator
             ? <CoordinatorStockView products={filteredProducts} movements={data.stockMovements} reservations={data.stockReservations} loading={loading} />
             : <StockTable products={filteredProducts} movements={data.movements} loading={loading} />)}
@@ -955,12 +955,13 @@ function relatedTrace(selected: Movement, movements: Movement[]) {
   }).sort((a, b) => a.movementDate.localeCompare(b.movementDate) || a.id - b.id);
 }
 
-function OperationalMovementTable({ mode, movements, allMovements, loading }: { mode: "entrada" | "salida"; movements: Movement[]; allMovements: Movement[]; loading: boolean }) {
+function OperationalMovementTable({ mode, movements, allMovements, loading, saving, canEdit, onSave }: { mode: "entrada" | "salida"; movements: Movement[]; allMovements: Movement[]; loading: boolean; saving: boolean; canEdit: boolean; onSave: (payload: Record<string, unknown>) => Promise<boolean> }) {
   const [trace, setTrace] = useState<Movement | null>(null);
+  const [editingGr, setEditingGr] = useState<Movement | null>(null);
   const [filterBy, setFilterBy] = useState<"pedido" | "gr" | "site" | "serie">("pedido");
   const [filterQuery, setFilterQuery] = useState("");
   const entry = mode === "entrada";
-  const columns = entry ? 17 : 18;
+  const columns = (entry ? 17 : 18) + (canEdit ? 1 : 0);
   const filterLabel = filterBy === "pedido" ? "N° Pedido/Cod. Oracle" : filterBy === "gr" ? "GR" : filterBy === "site" ? "Site" : "Serie/Lote";
   const filterOptions = useMemo(() => [...new Set(movements.flatMap((movement) => {
     const raw = filterBy === "pedido"
@@ -1051,6 +1052,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
     XLSX.writeFile(workbook, `control_equipos_entel_${mode}s_${filterBy}_${suffix}_${today()}.xlsx`);
   }
   return <>
+    <OrderRelationshipPanel movements={allMovements} loading={loading} />
     <section className="panel table-panel operational-panel">
       <div className="panel-title"><div><h2>{entry ? "Ingresos de equipos" : "Salidas de equipos"}</h2><p>{entry ? "Recepciones en MO Company con pedido, responsables y sustento." : "Despachos con destino, responsables, GR y trazabilidad completa."}</p></div><span className="count-badge">{visibleMovements.length}</span></div>
       <div className="operational-controls">
@@ -1061,7 +1063,7 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
       <div className="table-wrap"><table className={`operational-table ${entry ? "entry-table" : "exit-table"}`}><thead><tr>
         <th>SKU</th><th>Descripción Sku</th><th>Serie / Lote</th>
         {entry ? <><th>Proceso de equipo</th><th>Estado de Equipo</th><th>Condición</th><th>Proyecto</th><th>RUC origen</th><th>Proviene</th><th>Fecha de Ingreso</th><th>GR. de Ingreso</th><th>Link de GR. de Ingreso</th><th>N° Pedido/Cod. Oracle</th><th>Coordinador Entel</th><th>Site Origen</th></> : <><th>Fecha Salida</th><th>Nro. de GR de Salida</th><th>Link de GR</th><th>Cord. Entel Final</th><th>Site Destino</th><th>Región</th><th>Provincia</th><th>Proyecto Final</th><th>Cord. F1</th><th>RUC/DNI</th><th>Contrata</th><th>Consignatario</th><th>N° Pedido/Cod. Oracle</th></>}
-        <th className="align-right">Costo</th><th>Trazabilidad</th>
+        <th className="align-right">Costo</th><th>Trazabilidad</th>{canEdit && <th>Acciones</th>}
       </tr></thead><tbody>
         {loading ? <tr><td colSpan={columns}><Empty text={`Cargando ${entry ? "ingresos" : "salidas"}...`} /></td></tr> : !visibleMovements.length ? <tr><td colSpan={columns}><Empty text={filterQuery ? "No se encontraron movimientos con este filtro." : `Aún no hay ${entry ? "ingresos" : "salidas"} registrados.`} /></td></tr> : visibleMovements.map((movement) => {
           const unitCostCents = movement.unitCostCents || movement.productUnitCostCents || 0;
@@ -1075,12 +1077,105 @@ function OperationalMovementTable({ mode, movements, allMovements, loading }: { 
             </>}
             <td className="align-right"><strong>{money.format((unitCostCents * movement.quantity) / 100)}</strong><small>{money.format(unitCostCents / 100)} c/u · {movement.costSource || "KARDEX"}</small></td>
             <td><button type="button" className="secondary-button trace-button" onClick={() => setTrace(movement)}><ClipboardList size={14} />Ver historial</button></td>
+            {canEdit && <td><button type="button" className="secondary-button trace-button edit-gr-button" onClick={() => setEditingGr(movement)}><Pencil size={14} />Editar GR</button></td>}
           </tr>;
         })}
       </tbody></table></div>
     </section>
     {trace && <TraceHistoryModal selected={trace} movements={relatedTrace(trace, allMovements)} onClose={() => setTrace(null)} />}
+    {editingGr && <EditGrModal movement={editingGr} saving={saving} onClose={() => setEditingGr(null)} onSave={async (payload) => { const saved = await onSave(payload); if (saved) setEditingGr(null); }} />}
   </>;
+}
+
+type OrderRelationship = {
+  orderNumber: string;
+  entryDates: string[];
+  exitDates: string[];
+  entelCoordinators: string[];
+  f1Coordinators: string[];
+};
+
+function OrderRelationshipPanel({ movements, loading }: { movements: Movement[]; loading: boolean }) {
+  const [entelFilter, setEntelFilter] = useState("");
+  const [f1Filter, setF1Filter] = useState("");
+  const [dateFilter, setDateFilter] = useState("");
+  const orders = useMemo(() => {
+    const grouped = new Map<string, { orderNumber: string; entryDates: Set<string>; exitDates: Set<string>; entelCoordinators: Set<string>; f1Coordinators: Set<string> }>();
+    movements.forEach((movement) => {
+      const orderNumber = movement.orderNumber.trim();
+      if (!orderNumber) return;
+      const key = orderNumber.toUpperCase();
+      const current = grouped.get(key) ?? { orderNumber, entryDates: new Set<string>(), exitDates: new Set<string>(), entelCoordinators: new Set<string>(), f1Coordinators: new Set<string>() };
+      if (movement.type === "salida" || movement.type === "baja") current.exitDates.add(movement.movementDate);
+      else current.entryDates.add(movement.movementDate);
+      if (movement.coordinator.trim()) current.entelCoordinators.add(movement.coordinator.trim());
+      if (movement.coordinatorF1.trim()) current.f1Coordinators.add(movement.coordinatorF1.trim());
+      grouped.set(key, current);
+    });
+    return [...grouped.values()].map((row): OrderRelationship => ({
+      orderNumber: row.orderNumber,
+      entryDates: [...row.entryDates].sort(),
+      exitDates: [...row.exitDates].sort(),
+      entelCoordinators: [...row.entelCoordinators].sort((a, b) => a.localeCompare(b)),
+      f1Coordinators: [...row.f1Coordinators].sort((a, b) => a.localeCompare(b)),
+    })).sort((a, b) => {
+      const aDate = [...a.entryDates, ...a.exitDates].sort().at(-1) ?? "";
+      const bDate = [...b.entryDates, ...b.exitDates].sort().at(-1) ?? "";
+      return bDate.localeCompare(aDate) || a.orderNumber.localeCompare(b.orderNumber);
+    });
+  }, [movements]);
+  const entelOptions = useMemo(() => [...new Set(orders.flatMap((row) => row.entelCoordinators))], [orders]);
+  const f1Options = useMemo(() => [...new Set(orders.flatMap((row) => row.f1Coordinators))], [orders]);
+  const visibleOrders = useMemo(() => orders.filter((row) => {
+    if (entelFilter && !row.entelCoordinators.includes(entelFilter)) return false;
+    if (f1Filter && !row.f1Coordinators.includes(f1Filter)) return false;
+    if (dateFilter && !row.entryDates.includes(dateFilter) && !row.exitDates.includes(dateFilter)) return false;
+    return true;
+  }), [dateFilter, entelFilter, f1Filter, orders]);
+
+  async function exportOrders() {
+    const XLSX = await import("xlsx");
+    const rows = visibleOrders.map((row) => ({
+      "N° Pedido/Cod. Oracle": row.orderNumber,
+      "Fecha(s) de ingreso": row.entryDates.join(", "),
+      "Fecha(s) de salida": row.exitDates.join(", "),
+      "Coordinador Entel": row.entelCoordinators.join(", "),
+      "Coordinador F1": row.f1Coordinators.join(", "),
+    }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), "Relación de pedidos");
+    XLSX.writeFile(workbook, `relacion_pedidos_coordinadores_${today()}.xlsx`);
+  }
+
+  return <section className="panel table-panel order-relation-panel">
+    <div className="panel-title"><div><h2>Relación de pedidos por coordinador</h2><p>Una fila por N.° de pedido, con sus fechas de ingreso y salida.</p></div><span className="count-badge">{visibleOrders.length}</span></div>
+    <div className="order-relation-controls">
+      <label className="field"><span>Coordinador Entel</span><select value={entelFilter} onChange={(event) => setEntelFilter(event.target.value)}><option value="">Todos</option>{entelOptions.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
+      <label className="field"><span>Coordinador F1</span><select value={f1Filter} onChange={(event) => setF1Filter(event.target.value)}><option value="">Todos</option>{f1Options.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
+      <label className="field"><span>Fecha de ingreso o salida</span><input type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} /></label>
+      <button type="button" className="secondary-button operational-export" disabled={!visibleOrders.length} onClick={() => void exportOrders()}><FileSpreadsheet size={15} />Exportar pedidos</button>
+    </div>
+    <div className="table-wrap order-relation-table-wrap"><table className="order-relation-table"><thead><tr><th>N° Pedido/Cod. Oracle</th><th>Fecha(s) de ingreso</th><th>Fecha(s) de salida</th><th>Coordinador Entel</th><th>Coordinador F1</th></tr></thead><tbody>
+      {loading ? <tr><td colSpan={5}><Empty text="Cargando relación de pedidos..." /></td></tr> : !visibleOrders.length ? <tr><td colSpan={5}><Empty text="No hay pedidos para los filtros seleccionados." /></td></tr> : visibleOrders.map((row) => <tr key={row.orderNumber}><td><strong>{row.orderNumber}</strong></td><td>{row.entryDates.length ? row.entryDates.map((date) => <span className="order-date" key={`in-${date}`}>{displayDate(date)}</span>) : <small>Sin ingreso</small>}</td><td>{row.exitDates.length ? row.exitDates.map((date) => <span className="order-date" key={`out-${date}`}>{displayDate(date)}</span>) : <small>Sin salida</small>}</td><td><strong>{row.entelCoordinators.join(", ") || "—"}</strong></td><td><strong>{row.f1Coordinators.join(", ") || "—"}</strong></td></tr>)}
+    </tbody></table></div>
+  </section>;
+}
+
+function EditGrModal({ movement, saving, onClose, onSave }: { movement: Movement; saving: boolean; onClose: () => void; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void onSave(Object.fromEntries(new FormData(event.currentTarget).entries()));
+  }
+  return <div className="modal-layer"><div className="modal-card modal-small"><div className="modal-head"><div><span className="modal-kicker">CORRECCIÓN DE SUSTENTO</span><h2>Editar GR</h2><p>{movement.orderNumber || "Sin pedido"} · {movement.coordinator || "Sin coordinador"}</p></div><button type="button" className="icon-button" onClick={onClose}><X size={19} /></button></div><form onSubmit={submit}>
+    <input type="hidden" name="action" value="movementGrUpdate" />
+    <input type="hidden" name="movementId" value={movement.id} />
+    <div className="form-grid">
+      <label className="field"><span>{movement.type === "salida" || movement.type === "baja" ? "Nro. de GR de salida" : "GR. de ingreso"} *</span><input name="document" required defaultValue={movement.document} /></label>
+      <label className="field field-wide"><span>Link de GR</span><input name="grLink" defaultValue={movement.grLink} placeholder="Vínculo SharePoint, con o sin https://" /></label>
+    </div>
+    <div className="mapping-note"><ShieldCheck size={17} /><span>La corrección se aplicará a todas las líneas de la misma GR, pedido y razón social. No cambiará stock, series, cantidades, costos ni fechas.</span></div>
+    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : "Guardar GR"}</button></div>
+  </form></div></div>;
 }
 
 function TraceHistoryModal({ selected, movements, onClose }: { selected: Movement; movements: Movement[]; onClose: () => void }) {

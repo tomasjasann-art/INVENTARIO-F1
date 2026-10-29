@@ -77,6 +77,13 @@ type MovementInput = {
   notes?: string;
 };
 
+type MovementGrUpdateInput = {
+  action?: "movementGrUpdate";
+  movementId?: number;
+  document?: string;
+  grLink?: string;
+};
+
 type BulkInput = {
   action?: "bulk";
   source?: string;
@@ -783,7 +790,7 @@ export async function POST(request: Request) {
         eq(coordinators.active, true),
       )).limit(1)
       : [];
-    const payload = (await request.json()) as ProductInput | MovementInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | EquipmentReturnCreateInput | EquipmentReturnStatusInput | EquipmentReturnEvidenceUploadInput | EquipmentReturnBatchCreateInput | EquipmentReturnBatchStatusInput | AppUserInput | AppUserResetPasswordInput | UserChange | CleanupInput;
+    const payload = (await request.json()) as ProductInput | MovementInput | MovementGrUpdateInput | BulkInput | SupplierInput | SupplierBulkInput | CoordinatorInput | CoordinatorBulkInput | CoordinatorStatusInput | ReconciliationInput | AuditImportInput | EquipmentRequestInput | RequestStatusInput | RequestLogisticsInput | EquipmentReturnCreateInput | EquipmentReturnStatusInput | EquipmentReturnEvidenceUploadInput | EquipmentReturnBatchCreateInput | EquipmentReturnBatchStatusInput | AppUserInput | AppUserResetPasswordInput | UserChange | CleanupInput;
     const action = clean(payload.action);
     if (!access.active) return Response.json({ error: "Tu usuario está inactivo. Comunícate con un administrador." }, { status: 403 });
     if (access.role === "COORDINADOR" && !assignedCoordinator) return Response.json({ error: "Tu cuenta no está vinculada a un Coordinador F1 activo." }, { status: 403 });
@@ -1923,6 +1930,46 @@ export async function POST(request: Request) {
         });
       }
       return Response.json({ ok: true, product }, { status: 201 });
+    }
+
+    if (payload.action === "movementGrUpdate") {
+      const updatePayload = payload as MovementGrUpdateInput;
+      const movementId = Number(updatePayload.movementId);
+      const document = clean(updatePayload.document);
+      const grLink = normalizeGrLink(updatePayload.grLink);
+      if (!movementId || !document) {
+        return Response.json({ error: "Selecciona el movimiento e ingresa el número de GR." }, { status: 400 });
+      }
+
+      const [target] = await db.select().from(movements).where(eq(movements.id, movementId)).limit(1);
+      if (!target) return Response.json({ error: "El movimiento ya no existe." }, { status: 404 });
+
+      const candidates = await db.select().from(movements).where(and(
+        eq(movements.type, target.type),
+        eq(movements.orderNumber, target.orderNumber),
+        eq(movements.document, target.document),
+      ));
+      const targetParty = movementParty(target);
+      const batch = candidates.filter((row) => movementParty(row) === targetParty);
+      const rowsToUpdate = batch.length ? batch : [target];
+      const rowIds = new Set(rowsToUpdate.map((row) => row.id));
+
+      const possibleDuplicates = await db.select().from(movements).where(and(
+        eq(movements.type, target.type),
+        eq(movements.orderNumber, target.orderNumber),
+        eq(movements.document, document),
+      ));
+      const duplicated = possibleDuplicates.some((row) => !rowIds.has(row.id) && movementParty(row) === targetParty);
+      if (duplicated) {
+        return Response.json({ error: `La GR ${document} ya está registrada para el pedido ${target.orderNumber} y la misma razón social.` }, { status: 409 });
+      }
+
+      const updated = await db.update(movements)
+        .set({ document, grLink, loadGr: grLink ? "SI" : "" })
+        .where(inArray(movements.id, [...rowIds]))
+        .returning({ id: movements.id });
+
+      return Response.json({ ok: true, updated: updated.length, document, grLink });
     }
 
     if (payload.action === "bulk") {
