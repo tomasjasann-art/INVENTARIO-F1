@@ -314,3 +314,65 @@ test('El histórico no crea acceso móvil ni admite Inicio y sus correcciones co
 test('El servidor histórico rechaza kilómetros vacíos y fechas actuales aunque se omita el error del parser',async()=>{
  for(const extra of [{initialKm:null},{finalKm:''},{serviceDate:domain.limaDate()}]){const state=reset();assert.equal((await post({action:'historyImport',rows:[historyRow(extra)]})).status,400);assert.equal(state.writes.length,0);}
 });
+
+const correctKm = (row, extra = {}) => post({action:'correctJourneyKm',id:row.id,_version:version('assignment',row),initialKm:row.initialKm,finalKm:row.finalKm,...extra});
+const closedJourney = state => journey(state,{
+  startedAt:'2026-10-22T13:00:00Z',endedAt:'2026-10-22T22:00:00Z',initialKm:150,finalKm:350,
+  startPhotos:domain.PHOTO_SLOTS.map(slot=>({slot,path:`original/inicio/${slot}`})),
+  endPhotos:domain.PHOTO_SLOTS.map(slot=>({slot,path:`original/final/${slot}`})),
+  startRegisteredBy:'2:Conductor',endRegisteredBy:'2:Conductor',startNotes:'Recepción',endNotes:'Entrega'
+});
+test('Solo ADMINISTRADOR puede corregir kilometrajes, incluso si se falsifica el rol en el cuerpo',async()=>{
+  for(const role of ['LOGISTICA','CONDUCTOR','SOLO_LECTURA','COORDINADOR','TECNICO']){
+    const state=reset();state.user.role=role;const row=closedJourney(state);
+    assert.equal((await correctKm(row,{initialKm:200,finalKm:300,role:'ADMINISTRADOR',manager:true})).status,403);
+    assert.equal(state.writes.length,0);assert.equal(row.initialKm,150);
+  }
+});
+test('El administrador corrige Inicio y Final cerrados; conserva identidad, fotos, autores y gastos vinculados',async()=>{
+  const state=reset();state.user.role='ADMINISTRADOR';const row=closedJourney(state),original=structuredClone(row);
+  state.rows.fleetExpenses=[{id:50,assignmentId:row.id,invoiceId:9,odometer:250,amountCents:10000}];
+  const expenses=structuredClone(state.rows.fleetExpenses);
+  assert.equal((await correctKm(row,{initialKm:200.5,finalKm:300.5,vehicleId:999,driverId:999,startPhotos:[],endedAt:''})).status,200);
+  assert.deepEqual(state.rows.fleetAssignments,[{...original,initialKm:200.5,finalKm:300.5,updatedAt:state.rows.fleetAssignments[0].updatedAt}]);
+  assert.notEqual(row.updatedAt,original.updatedAt);assert.equal(domain.distance(row),100);
+  assert.deepEqual(state.rows.fleetExpenses,expenses);assert.equal(state.storageChecks,0);
+  assert.deepEqual(Object.keys(state.writes[0].value).sort(),['finalKm','initialKm','updatedAt']);
+});
+test('Una jornada abierta permite corregir solo el Inicio y luego el conductor puede completar el Final',async()=>{
+  const state=reset();state.user.role='ADMINISTRADOR';const row=journey(state,{startedAt:'2026-10-22T13:00:00Z',initialKm:9999});
+  assert.equal((await correctKm(row,{initialKm:150,finalKm:null})).status,200);
+  assert.equal(row.initialKm,150);assert.equal(row.endedAt,'');assert.equal(row.finalKm,null);
+  state.user.id=2;state.user.role='CONDUCTOR';
+  const body=record({phase:'FINAL',odometer:200});body.photos=body.photos.map(p=>({...p,path:p.path.replace('fleet/1/','fleet/2/').replace('/INICIO/','/FINAL/')}));
+  assert.equal((await post(body)).status,200);assert.equal(row.finalKm,200);assert.equal(domain.distance(row),50);
+});
+test('Una corrección no puede registrar el Final, borrar un Final ni modificar jornadas sin Inicio, históricas o administrativas',async()=>{
+  const invalid=[{startedAt:'',initialKm:null},{trackingMode:'HISTORICO'},{trackingMode:'ADMINISTRATIVO'}];
+  for(const overrides of invalid){const state=reset();state.user.role='ADMINISTRADOR';const row=closedJourney(state);Object.assign(row,overrides);assert.equal((await correctKm(row,{initialKm:100,finalKm:200})).status,400);assert.equal(state.writes.length,0);}
+  const state=reset();state.user.role='ADMINISTRADOR';const row=closedJourney(state);
+  assert.equal((await correctKm(row,{finalKm:null})).status,400);
+  const open=state.rows.fleetAssignments[0];open.endedAt='';open.finalKm=null;assert.equal((await correctKm(open,{finalKm:200})).status,400);assert.equal(state.writes.length,0);
+});
+test('El servidor rechaza kilometrajes vacíos, negativos, no numéricos, excesivos y Final menor que Inicio',async()=>{
+  for(const extra of [{initialKm:''},{initialKm:null},{initialKm:true},{initialKm:-1},{initialKm:10000001},{finalKm:''},{finalKm:null},{finalKm:-1},{finalKm:10000001},{initialKm:400,finalKm:300}]){
+    const state=reset();state.user.role='ADMINISTRADOR';const row=closedJourney(state);
+    assert.equal((await correctKm(row,extra)).status,400,JSON.stringify(extra));assert.equal(state.writes.length,0);assert.equal(row.initialKm,150);
+  }
+  const state=reset();state.user.role='ADMINISTRADOR';const row=closedJourney(state);
+  assert.equal((await correctKm(row,{initialKm:0,finalKm:0})).status,200);assert.equal(domain.distance(row),0);
+});
+test('La versión impide sobrescribir una corrección de otro administrador o un Final registrado mientras el formulario estaba abierto',async()=>{
+  for(const change of [{initialKm:160},{endedAt:'2026-10-23T01:00:00Z',finalKm:400}]){
+    const state=reset();state.user.role='ADMINISTRADOR';const row=closedJourney(state),snapshot=structuredClone(row);Object.assign(row,change);
+    assert.equal((await correctKm(snapshot,{initialKm:200,finalKm:300})).status,409);assert.equal(state.writes.length,0);
+  }
+  const state=reset();state.user.role='ADMINISTRADOR';const row=closedJourney(state);
+  assert.equal((await correctKm(row,{id:999})).status,404);assert.equal((await correctKm(row,{_version:undefined})).status,409);assert.equal(state.writes.length,0);
+});
+test('La corrección mantiene las comprobaciones de origen y contraseña temporal',async()=>{
+  const state=reset();state.user.role='ADMINISTRADOR';const row=closedJourney(state);
+  const response=await POST(new Request('https://f1.example/api/fleet',{method:'POST',headers:{origin:'https://otro.example','Content-Type':'application/json'},body:JSON.stringify({action:'correctJourneyKm',id:row.id,initialKm:100,finalKm:200})}));
+  assert.equal(response.status,403);state.user.mustChangePassword=true;
+  assert.equal((await correctKm(row,{initialKm:100,finalKm:200})).status,403);assert.equal(state.writes.length,0);
+});

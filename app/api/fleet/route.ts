@@ -213,6 +213,26 @@ export async function POST(request: Request) {
           }
         } else await tx.insert(assignments).values({ ...a, createdBy: user.actor, updatedAt: new Date().toISOString() });
       });
+    } else if (action === "correctJourneyKm") {
+      if (user.role !== "ADMINISTRADOR") throw new FleetError("Solo los administradores pueden corregir el kilometraje de una jornada.", 403);
+      const reading = z.number().finite().min(0).max(10_000_000);
+      const correction = z.object({ id, initialKm: reading, finalKm: reading.nullable() }).parse(body);
+      await db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
+        const [snapshot] = await tx.select().from(assignments).where(eq(assignments.id, correction.id)).limit(1);
+        if (!snapshot) throw new FleetError("Jornada no encontrada.", 404);
+        // Use the same vehicle lock as Inicio/Final before locking the row.
+        await tx.execute(sql`select pg_advisory_xact_lock(7610, ${snapshot.vehicleId})`);
+        const [current] = await tx.select().from(assignments).where(eq(assignments.id, correction.id)).for("update").limit(1);
+        if (!current) throw new FleetError("Jornada no encontrada.", 404);
+        checkVersion("assignment", current);
+        if (current.trackingMode !== "OPERATIVO" || !current.startedAt || current.initialKm === null) throw new FleetError("Esta opción solo corrige kilometrajes de jornadas operativas con Inicio registrado.");
+        if (current.endedAt) {
+          if (correction.finalKm === null) throw new FleetError("Ingresa el kilometraje final de la jornada cerrada.");
+          if (correction.finalKm < correction.initialKm) throw new FleetError("El kilometraje final no puede ser menor al inicial.");
+        } else if (correction.finalKm !== null) throw new FleetError("La jornada no tiene Final. Solo puedes corregir su kilometraje inicial.");
+        await tx.update(assignments).set({ initialKm: correction.initialKm, finalKm: correction.finalKm, updatedAt: new Date().toISOString() }).where(eq(assignments.id, correction.id));
+      });
     } else if (action === "record") {
       if (!user.manager && user.role !== "CONDUCTOR") throw new FleetError("Tu perfil es de consulta.", 403);
       const aId = id.parse(body.assignmentId), phase = z.enum(["INICIO", "FINAL"]).parse(body.phase), odometer = km.parse(body.odometer);

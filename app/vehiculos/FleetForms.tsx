@@ -2,7 +2,7 @@
 "use client";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Camera, CheckCircle2, LoaderCircle, X } from "lucide-react";
-import { PHOTO_SLOTS, type Assignment, type FleetPhoto, type EditableFleetRecord } from "../../lib/fleet";
+import { fleetRecordVersion, PHOTO_SLOTS, type Assignment, type FleetPhoto, type EditableFleetRecord } from "../../lib/fleet";
 
 export type FieldSpec = { name: string; label: string; type?: string; required?: boolean; options?: { value: string; label: string }[]; hint?: string; step?: string; min?: string; operationsOnly?: boolean; administrationOnly?: boolean; disabled?: boolean };
 export type FormSpec = { title: string; action: string; fields: FieldSpec[]; values?: Record<string, unknown>; uploadPurpose?: string; vehicleCecos?: Record<string, string>; vehicleUsages?: Record<string, string> };
@@ -87,6 +87,34 @@ export function DeleteRecordForm({ entity, id, version, label, onSave, onClose }
     finally { setBusy(false); }
   }
   return <Modal title="Confirmar eliminación" onClose={onClose} busy={busy}><form onSubmit={remove}><div className="fl-pad"><p><strong>{label}</strong></p><p className="fl-muted">Se eliminará este registro. Esta acción no se puede deshacer.</p></div>{error && <p role="alert" className="fl-error">{error}</p>}<footer><button type="button" className="fl-btn" disabled={busy} onClick={onClose}>Cancelar</button><button className="fl-btn fl-delete" disabled={busy}>{busy ? "Eliminando…" : "Sí, eliminar registro"}</button></footer></form></Modal>;
+}
+
+export function MileageCorrectionForm({ assignment, plate, onSave, onClose }: { assignment: Assignment; plate: string; onSave: Save; onClose: () => void }) {
+  const [initialKm, setInitialKm] = useState(String(assignment.initialKm ?? ""));
+  const [finalKm, setFinalKm] = useState(String(assignment.finalKm ?? ""));
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const closed = Boolean(assignment.endedAt);
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setError("");
+    const initial = Number(initialKm), final = closed ? Number(finalKm) : null;
+    if (!initialKm.trim() || (closed && !finalKm.trim()) || !Number.isFinite(initial) || initial < 0 || initial > 10_000_000 || (final !== null && (!Number.isFinite(final) || final < initial || final > 10_000_000))) {
+      setError("Ingresa kilometrajes válidos. El final debe ser igual o mayor al inicial."); return;
+    }
+    setBusy(true);
+    try { if (await onSave({ action: "correctJourneyKm", id: assignment.id, _version: fleetRecordVersion("assignment", { ...assignment }), initialKm: initial, finalKm: final })) onClose(); }
+    catch (err) { setError((err as Error).message); }
+    finally { setBusy(false); }
+  }
+  return <Modal title={`Editar kilometraje · ${plate}`} onClose={onClose} busy={busy}><form onSubmit={submit}>
+    <div className="fl-pad"><p><strong>Jornada del {assignment.serviceDate}</strong></p><p className="fl-muted">Corrige la lectura del odómetro. Los kilómetros recorridos y los reportes se recalculan al guardar.</p></div>
+    <div className="fl-form-grid">
+      <label className="fl-field"><span>Kilometraje inicial *</span><input type="number" min="0" max="10000000" step="any" inputMode="decimal" required disabled={busy} value={initialKm} onChange={e => setInitialKm(e.target.value)} /><small>Registrado: {assignment.initialKm} km</small></label>
+      {closed ? <label className="fl-field"><span>Kilometraje final *</span><input type="number" min={initialKm || "0"} max="10000000" step="any" inputMode="decimal" required disabled={busy} value={finalKm} onChange={e => setFinalKm(e.target.value)} /><small>Registrado: {assignment.finalKm} km</small></label> : <p className="fl-muted">El conductor aún debe registrar el Final de esta jornada.</p>}
+    </div>
+    {closed && initialKm !== "" && finalKm !== "" && Number(finalKm) >= Number(initialKm) && <p className="fl-pad">Recorrido corregido: <strong>{new Intl.NumberFormat("es-PE", { maximumFractionDigits: 2 }).format(Number(finalKm) - Number(initialKm))} km</strong></p>}
+    {error && <p role="alert" className="fl-error">{error}</p>}
+    <footer><button type="button" className="fl-btn" onClick={onClose} disabled={busy}>Cancelar</button><button className="fl-btn fl-primary" disabled={busy}>{busy ? "Guardando…" : "Guardar kilometraje"}</button></footer>
+  </form></Modal>;
 }
 
 export function JourneyForm({ assignment, plate, phase, coordinators = [], onSave, onClose }: { assignment: Assignment; plate: string; phase: "INICIO" | "FINAL"; coordinators?: string[]; onSave: Save; onClose: () => void }) {
