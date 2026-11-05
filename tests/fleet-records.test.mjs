@@ -14,7 +14,7 @@ const schemaUrl = url(tables.map(t => `export const ${t}=new Proxy({table:${JSON
 const drizzleUrl = url('export const eq=(col,value)=>({col,value});export const and=(...args)=>({args});export const inArray=(col,values)=>({col,values});export const desc=x=>x;export const sql=(parts,...values)=>({parts,values});');
 const dbUrl = url('export function getDb(){return globalThis.fleetRecordTest.db;}');
 const authUrl = url('export async function getAuthenticatedUser(){return {email:"qa",userId:"1",authProvider:"supabase"};}export async function getKardexAccess(){return globalThis.fleetRecordTest.user;}');
-const storageUrl = url('export function createSupabaseAdminClient(){return {storage:{from(){return {async list(folder,options){globalThis.fleetRecordTest.storageChecks++;return {data:[{name:options.search,id:"uploaded"}]};}};}}};}');
+const storageUrl = url('export function createSupabaseAdminClient(){return {storage:{async getBucket(){return {data:{public:false}};},from(){return {async createSignedUploadUrl(path){globalThis.fleetRecordTest.lastUploadPath=path;return {data:{signedUrl:"https://uploads.example/test"}};},async list(folder,options){globalThis.fleetRecordTest.storageChecks++;return {data:[{name:options.search,id:"uploaded"}]};}};}}};}');
 let server = compile(await readFile(new URL('../lib/fleet-server.ts', import.meta.url), 'utf8'));
 for (const [name,value] of Object.entries({'../app/auth':authUrl,'./supabase-auth':storageUrl,'./fleet':domainUrl})) server=server.replaceAll(`"${name}"`,JSON.stringify(value));
 const serverUrl=url(server);
@@ -415,4 +415,18 @@ test('Un conductor puede descargar solo su reporte, con datos vigentes, zona fin
  assert.equal(response.status,200);assert.equal(body.assignment.finalZone,'Cochera');assert.equal(body.assignment.endNotes,'Revisar frenos');assert.equal(body.driverName,'Conductor de prueba');assert.equal(body.startPhotos.length,7);
  assert.match(response.headers.get('cache-control'),/no-store/);
  response=await GET(new Request('https://f1.example/api/fleet?journeyReport=21'));assert.equal(response.status,404);
+});
+
+
+let uploadRoute=compile(await readFile(new URL('../app/api/fleet/upload/route.ts',import.meta.url),'utf8'));
+for(const [name,value] of Object.entries({'drizzle-orm':drizzleUrl,'zod':import.meta.resolve('zod'),'../../../../db':dbUrl,'../../../../db/schema':schemaUrl,'../../../../lib/fleet-server':serverUrl,'../../../../lib/fleet':domainUrl,'../../../../lib/supabase-auth':storageUrl}))uploadRoute=uploadRoute.replaceAll('"'+name+'"',JSON.stringify(value));
+const {POST:uploadPost}=await import(url(uploadRoute));
+const uploadPhoto=extra=>uploadPost(new Request('https://f1.example/api/fleet/upload',{method:'POST',headers:{origin:'https://f1.example','Content-Type':'application/json'},body:JSON.stringify({purpose:'INICIO',assignmentId:20,contentType:'image/jpeg',size:1000,watermarkVersion:1,...extra})}));
+test('La carga obtiene placa y hora del servidor y exige actualizar versiones sin marca de agua',async()=>{
+ const state=reset();state.user={id:2,displayName:'Conductor de prueba',role:'CONDUCTOR',active:true};journey(state);state.rows.fleetVehicles[0].plate='PRU001';
+ const response=await uploadPhoto({plate:'FALSA',registeredAt:'2000-01-01T00:00:00Z'}),body=await response.json();
+ assert.equal(response.status,200);assert.equal(body.plate,'PRU001');assert.ok(Number.isFinite(Date.parse(body.registeredAt)));
+ assert.ok(body.path.includes('/fleet/2/assignment-20/INICIO/'+Date.parse(body.registeredAt)+'-'));
+ assert.equal((await uploadPhoto({watermarkVersion:undefined})).status,400);
+ state.user.id=3;assert.equal((await uploadPhoto({})).status,403);
 });

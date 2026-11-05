@@ -11,10 +11,11 @@ export async function POST(request: Request) {
   try {
     sameOrigin(request);
     const user = await fleetAccess();
-    const body = z.object({ purpose: z.enum(["INICIO", "FINAL", "document", "expense", "invoice", "payment"]), assignmentId: z.number().int().positive().optional(), contentType: z.enum(["image/jpeg", "image/png", "image/webp", "application/pdf"]), size: z.number().positive().max(8_000_000) }).parse(await request.json());
+    const body = z.object({ purpose: z.enum(["INICIO", "FINAL", "document", "expense", "invoice", "payment"]), assignmentId: z.number().int().positive().optional(), contentType: z.enum(["image/jpeg", "image/png", "image/webp", "application/pdf"]), size: z.number().positive().max(8_000_000), watermarkVersion: z.literal(1).optional() }).parse(await request.json());
     let folder = `fleet/${user.id}/${body.purpose}/`;
     let photoContext: { registeredAt: string; plate: string } | undefined;
     if (body.purpose === "INICIO" || body.purpose === "FINAL") {
+      if (body.watermarkVersion !== 1) throw new FleetError("Actualiza la app para guardar fotografías con marca de agua.");
       const [a] = await getDb().select().from(fleetAssignments).where(and(eq(fleetAssignments.id, body.assignmentId || 0), ...(user.manager ? [] : [eq(fleetAssignments.driverId, user.id)]))).limit(1);
       if (!a || !["CONDUCTOR", "LOGISTICA", "ADMINISTRADOR"].includes(user.role)) throw new FleetError("Asignación no disponible.", 403);
       if (isAdministrative(a) || a.trackingMode !== "OPERATIVO") throw new FleetError("Solo las jornadas operativas requieren estas fotografías.");

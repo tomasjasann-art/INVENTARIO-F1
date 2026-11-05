@@ -27,7 +27,7 @@ async function compressPhoto(file: File) {
 export async function uploadFleetFile(file: File, purpose: string, assignmentId?: number, slot?: string) {
   let content = file.type.startsWith("image/") ? await compressPhoto(file) : file;
   if (content.size > 8_000_000) throw new Error("El archivo debe pesar como máximo 8 MB.");
-  const res = await fetch("/api/fleet/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purpose, assignmentId, contentType: content.type, size: content.size }) });
+  const res = await fetch("/api/fleet/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purpose, assignmentId, contentType: content.type, size: content.size, watermarkVersion: slot ? 1 : undefined }) });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "No se pudo preparar la carga.");
   if (slot && (purpose === "INICIO" || purpose === "FINAL")) {
