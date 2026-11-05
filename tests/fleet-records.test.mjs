@@ -43,7 +43,7 @@ function reset(usage='OPERACIONES') {
 const post = body => POST(new Request('https://f1.example/api/fleet',{method:'POST',headers:{origin:'https://f1.example','Content-Type':'application/json'},body:JSON.stringify(body)}));
 const assignment = overrides => ({action:'assignment',vehicleId:10,serviceDate:domain.limaDate(),endDate:domain.limaDate(),expectedStart:'08:00',expectedEnd:'18:00',driverId:2,...overrides});
 function journey(state,overrides={}) {const a={id:20,vehicleId:10,driverId:2,trackingMode:'OPERATIVO',responsibleName:'',reason:'',site:'',finalZone:'',notes:'',createdBy:'original',updatedAt:'2026-10-22T12:00:00Z',startPhotos:[],endPhotos:[],planStatus:'CONFIRMADA',serviceDate:domain.limaDate(),endDate:domain.limaDate(),expectedStart:'08:00',expectedEnd:'18:00',startedAt:'',endedAt:'',coordinator:'Planificado',ceco:'7001',initialKm:null,finalKm:null,...overrides};state.rows.fleetAssignments=[a];return a;}
-const record = overrides => ({action:'record',assignmentId:20,phase:'INICIO',odometer:150,coordinator:'Coordinador real',ceco:'7002',photos:domain.PHOTO_SLOTS.map((slot,i)=>({slot,path:`supabase://kardex-evidencias/fleet/1/assignment-20/INICIO/${i}.jpg`})),...overrides});
+const record = overrides => ({action:'record',assignmentId:20,phase:'INICIO',odometer:150,finalZone:'Zona de prueba',coordinator:'Coordinador real',ceco:'7002',photos:domain.PHOTO_SLOTS.map((slot,i)=>({slot,path:`supabase://kardex-evidencias/fleet/1/assignment-20/INICIO/${i}.jpg`})),...overrides});
 
 const version = (entity, row) => domain.fleetRecordVersion(entity,row);
 const deletion = (entity, row, extra={}) => post({action:'deleteRecord',entity,id:row.id,_version:version(entity,row),confirmed:true,...extra});
@@ -375,4 +375,44 @@ test('La corrección mantiene las comprobaciones de origen y contraseña tempora
   const response=await POST(new Request('https://f1.example/api/fleet',{method:'POST',headers:{origin:'https://otro.example','Content-Type':'application/json'},body:JSON.stringify({action:'correctJourneyKm',id:row.id,initialKm:100,finalKm:200})}));
   assert.equal(response.status,403);state.user.mustChangePassword=true;
   assert.equal((await correctKm(row,{initialKm:100,finalKm:200})).status,403);assert.equal(state.writes.length,0);
+});
+
+
+test('Zona final pertenece al cierre del conductor y no puede cambiarse desde una asignación',async()=>{
+ const state=reset(),row=journey(state);
+ assert.equal((await editAssignment(row,{finalZone:'No debe asignarse'})).status,200);
+ assert.equal(state.rows.fleetAssignments[0].finalZone,'');
+ const current=state.rows.fleetAssignments[0];current.startedAt='2026-10-22T13:00:00Z';current.initialKm=100;
+ assert.equal((await editAssignment(current,{finalZone:'Tampoco después del Inicio'})).status,200);
+ assert.equal(state.rows.fleetAssignments[0].finalZone,'');
+ const body=record({phase:'FINAL',finalZone:' Cochera central ',notes:'Luz posterior no enciende'});
+ body.photos=body.photos.map(p=>({...p,path:p.path.replace('/INICIO/','/FINAL/')}));
+ assert.equal((await post(body)).status,200);
+ assert.equal(state.rows.fleetAssignments[0].finalZone,'Cochera central');assert.equal(state.rows.fleetAssignments[0].endNotes,'Luz posterior no enciende');
+});
+test('Final exige zona de entrega y conserva la jornada abierta si falta; Inicio conserva sus observaciones',async()=>{
+ const state=reset();journey(state);
+ assert.equal((await post(record({notes:'Ruido en el motor',finalZone:'No corresponde al Inicio'}))).status,200);
+ assert.equal(state.rows.fleetAssignments[0].startNotes,'Ruido en el motor');assert.equal(state.rows.fleetAssignments[0].finalZone,'');
+ for(const value of ['', '  ',null]) {
+  const body=record({phase:'FINAL',finalZone:value});body.photos=body.photos.map(p=>({...p,path:p.path.replace('/INICIO/','/FINAL/')}));
+  assert.equal((await post(body)).status,400);assert.equal(state.rows.fleetAssignments[0].endedAt,'');
+ }
+});
+test('La hora de cada foto se obtiene de la ruta de carga y no de un dato enviado por el cliente',async()=>{
+ const state=reset();journey(state);
+ const prefix='supabase://kardex-evidencias/fleet/1/assignment-20/INICIO/';
+ const photos=domain.PHOTO_SLOTS.map((slot,i)=>({slot,path:prefix+'1793887500000-00000000-0000-4000-8000-00000000000'+i+'.jpg',registeredAt:'2000-01-01T00:00:00Z'}));
+ assert.equal((await post(record({photos}))).status,200);
+ assert.equal(state.rows.fleetAssignments[0].startPhotos[0].registeredAt,new Date(1793887500000).toISOString());
+});
+test('Un conductor puede descargar solo su reporte, con datos vigentes, zona final, fallas y evidencias',async()=>{
+ const state=reset();state.user={id:2,displayName:'Conductor de prueba',role:'CONDUCTOR',active:true};
+ const row=closedJourney(state);row.finalZone='Cochera';row.endNotes='Revisar frenos';
+ state.rows.appUsers=[{id:2,displayName:'Conductor de prueba',role:'CONDUCTOR',active:true}];
+ state.rows.fleetAssignments.push({...row,id:21,driverId:3});
+ let response=await GET(new Request('https://f1.example/api/fleet?journeyReport=20'));const body=await response.json();
+ assert.equal(response.status,200);assert.equal(body.assignment.finalZone,'Cochera');assert.equal(body.assignment.endNotes,'Revisar frenos');assert.equal(body.driverName,'Conductor de prueba');assert.equal(body.startPhotos.length,7);
+ assert.match(response.headers.get('cache-control'),/no-store/);
+ response=await GET(new Request('https://f1.example/api/fleet?journeyReport=21'));assert.equal(response.status,404);
 });
