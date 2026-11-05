@@ -20,7 +20,7 @@ const amount = z.coerce.number().positive().max(10_000_000).transform(v => Math.
 const km = z.coerce.number().min(0).max(10_000_000);
 const optionalKm = z.preprocess(v => v === "" || v === undefined || v === null ? null : Number(v), km.nullable());
 const vehicleSchema = z.object({ id: optionalId, plate: z.string().transform(normalizedPlate).refine(v => /^[A-Z0-9]{5,10}$/.test(v), "Placa inválida"), ceco: text, usage: z.enum(["ADMINISTRACION", "OPERACIONES"]), tenure: z.enum(["PROPIO", "ALQUILADO"]), category: text, type: text, brand: text, model: text, engine: text, chassis: text, color: text, titleDate: z.union([date, z.literal("")]).default(""), year: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().int().min(1950).max(2100).nullable()), status: z.enum(["OPERATIVO", "MANTENIMIENTO", "FUERA_SERVICIO"]), target: positive, initialKm: km, notes: text });
-const assignmentSchema = z.object({ id: optionalId, vehicleId: id, driverId: optionalId, responsibleName: text, serviceDate: date, endDate: date.optional(), expectedStart: z.union([clock, z.literal("")]).default(""), expectedEnd: z.union([clock, z.literal("")]).default(""), coordinator: text, ceco: text, site: text, finalZone: text, notes: text, planStatus: z.enum(["CONFIRMADA", "POR_CONFIRMAR", "NO_SALIO", "CANCELADA"]).default("CONFIRMADA"), reason: text });
+const assignmentSchema = z.object({ id: optionalId, vehicleId: id, driverId: optionalId, responsibleName: text, serviceDate: date, endDate: date.optional(), expectedStart: z.union([clock, z.literal("")]).default(""), expectedEnd: z.union([clock, z.literal("")]).default(""), coordinator: text, ceco: text, site: text, notes: text, planStatus: z.enum(["CONFIRMADA", "POR_CONFIRMAR", "NO_SALIO", "CANCELADA"]).default("CONFIRMADA"), reason: text });
 const sourceSchema = z.object({ format: z.enum(["FUEL_ATIO", "TOLL_REPORT"]), transactionId: z.string().trim().max(200).default(""), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/), station: z.string().trim().min(1).max(300), lane: z.string().trim().max(100).default(""), voucher: z.string().trim().max(200).default(""), voucherDate: z.union([date, z.literal("")]).default(""), file: z.string().max(200), sheet: z.string().max(100), row: z.number().int().positive() });
 const expenseSchema = z.object({ vehicleId: id, assignmentId: optionalId, date, kind: z.enum(["COMBUSTIBLE", "PEAJE", "MANTENIMIENTO"]), amount: amount, quantity: z.coerce.number().min(0).max(1_000_000).default(0), unit: z.enum(["GAL", "L", "M3"]).default("GAL"), fuel: text, unitPrice: z.coerce.number().min(0).max(1_000_000).default(0), odometer: optionalKm, provider: text, collector: text, reference: z.string().trim().min(1, "Ingresa el número de servicio o comprobante").max(200), invoiceId: optionalId, maintenanceType: text, nextKm: optionalKm, attachment: text, notes: text, source: sourceSchema.nullable().default(null) });
 const stationSchema = z.object({ id: optionalId, name: z.string().trim().min(1).max(200), provider: text, address: z.string().trim().min(1).max(500), district: text, city: text, region: text, fuels: text, hours: text, restrictions: text, latitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-90).max(90).nullable()), longitude: z.preprocess(v => v === "" || v == null ? null : Number(v), z.number().min(-180).max(180).nullable()), verified: z.boolean(), active: z.boolean().default(true) });
@@ -47,11 +47,18 @@ export async function GET(request: Request) {
 async function readFleet(request: Request) {
   try {
     const user = await fleetAccess(), db = getDb(), params = new URL(request.url).searchParams;
-    if (params.has("evidence")) {
-      const [a] = await db.select().from(assignments).where(and(eq(assignments.id, Number(params.get("evidence")) || 0), ...(user.role === "CONDUCTOR" ? [eq(assignments.driverId, user.id)] : []))).limit(1);
+    if (params.has("evidence") || params.has("journeyReport")) {
+      const [a] = await db.select().from(assignments).where(and(eq(assignments.id, Number(params.get("evidence") || params.get("journeyReport")) || 0), ...(user.role === "CONDUCTOR" ? [eq(assignments.driverId, user.id)] : []))).limit(1);
       if (!a) throw new FleetError("Registro no disponible.", 404);
       const sign = (photos: typeof a.startPhotos) => Promise.all(photos.map(async p => ({ ...p, url: await resolveEvidenceImage(p.path) })));
-      return Response.json({ startPhotos: await sign(a.startPhotos), endPhotos: await sign(a.endPhotos) }, { headers: { "Cache-Control": "private, no-store" } });
+      const [startPhotos, endPhotos] = await Promise.all([sign(a.startPhotos), sign(a.endPhotos)]);
+      if (params.has("journeyReport")) {
+        const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, a.vehicleId)).limit(1);
+        if (!vehicle) throw new FleetError("Vehículo no encontrado.", 404);
+        const [account] = a.driverId ? await db.select({ displayName: appUsers.displayName }).from(appUsers).where(eq(appUsers.id, a.driverId)).limit(1) : [];
+        return Response.json({ assignment: a, vehicle, driverName: a.responsibleName || account?.displayName || "Conductor", startPhotos, endPhotos, generatedAt: new Date().toISOString() }, { headers: { "Cache-Control": "private, no-store" } });
+      }
+      return Response.json({ startPhotos, endPhotos }, { headers: { "Cache-Control": "private, no-store" } });
     }
     if (params.has("attachment")) {
       if (user.role === "CONDUCTOR") throw new FleetError("Acceso restringido.", 403);
@@ -203,9 +210,9 @@ export async function POST(request: Request) {
           if (!existing) throw new FleetError("Asignación no encontrada.", 404);
           if (existing.startedAt) {
             const locked = ["vehicleId", "driverId", "trackingMode", "responsibleName", "serviceDate", "endDate", "expectedStart", "expectedEnd", "planStatus", "reason"] as const;
-            if (locked.some(key => a[key] !== existing[key])) throw new FleetError("La jornada ya comenzó. Solo puedes corregir coordinador, CECO, site, zona final y observaciones.");
+            if (locked.some(key => a[key] !== existing[key])) throw new FleetError("La jornada ya comenzó. Solo puedes corregir coordinador, CECO, site e indicaciones de trabajo.");
             if (!a.coordinator || !a.ceco) throw new FleetError("Indica el coordinador y el CECO del trabajo.");
-            await tx.update(assignments).set({ coordinator: a.coordinator, ceco: a.ceco, site: a.site, finalZone: a.finalZone, notes: a.notes, updatedAt: new Date().toISOString() }).where(eq(assignments.id, assignmentId));
+            await tx.update(assignments).set({ coordinator: a.coordinator, ceco: a.ceco, site: a.site, notes: a.notes, updatedAt: new Date().toISOString() }).where(eq(assignments.id, assignmentId));
           } else {
             const linked = await tx.select().from(expenses).where(eq(expenses.assignmentId, assignmentId));
             if (linked.some(e => e.vehicleId !== a.vehicleId || e.date < a.serviceDate || e.date > a.endDate) || (linked.length && ["NO_SALIO", "CANCELADA"].includes(a.planStatus))) throw new FleetError("La corrección no es compatible con los gastos vinculados a esta asignación.");
@@ -266,7 +273,8 @@ export async function POST(request: Request) {
           if (!current.startedAt || current.initialKm === null) throw new FleetError("Primero registra el Inicio.");
           if (current.endedAt) throw new FleetError("El Final ya fue registrado.", 409);
           if (odometer < current.initialKm) throw new FleetError("El kilometraje final no puede ser menor al inicial.");
-          await tx.update(assignments).set({ ...work, finalKm: odometer, endedAt: new Date().toISOString(), endPhotos: photos, endRegisteredBy: user.actor, endNotes: text.parse(body.notes), updatedAt: new Date().toISOString() }).where(eq(assignments.id, aId));
+          const finalZone = z.string().trim().min(1, "Indica la zona final donde entregas el vehículo.").max(2000).parse(body.finalZone);
+          await tx.update(assignments).set({ ...work, finalZone, finalKm: odometer, endedAt: new Date().toISOString(), endPhotos: photos, endRegisteredBy: user.actor, endNotes: text.parse(body.notes), updatedAt: new Date().toISOString() }).where(eq(assignments.id, aId));
         }
       });
     } else if (action === "idle") {

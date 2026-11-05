@@ -1,6 +1,6 @@
 import { getAuthenticatedUser, getKardexAccess } from "../app/auth";
 import { createSupabaseAdminClient } from "./supabase-auth";
-import { canManageFleet, PHOTO_SLOTS, type FleetPhoto } from "./fleet";
+import { canManageFleet, photoRegisteredAt, PHOTO_SLOTS, type FleetPhoto } from "./fleet";
 
 export const FLEET_BUCKET = "kardex-evidencias";
 export const FLEET_PREFIX = `supabase://${FLEET_BUCKET}/`;
@@ -40,6 +40,7 @@ export async function verifyPhotos(input: unknown, prefix: string): Promise<Flee
   return Promise.all(PHOTO_SLOTS.map(async slot => {
     const p = photos.find(photo => photo.slot === slot);
     if (!p || typeof p.path !== "string" || !/\.(jpg|jpeg|png|webp)$/i.test(p.path)) throw new FleetError(`Falta la fotografía: ${slot}.`);
-    return { slot, path: await verifyAttachment(p.path, prefix, true) };
+    const path = await verifyAttachment(p.path, prefix, true), registeredAt = photoRegisteredAt(path);
+    return { slot, path, ...(registeredAt ? { registeredAt } : {}) };
   }));
 }

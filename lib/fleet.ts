@@ -1,5 +1,5 @@
 export const PHOTO_SLOTS = ["Frente", "Posterior", "Lateral izquierdo", "Lateral derecho", "Tablero / kilometraje", "Interior", "Control de recepción y entrega"] as const;
-export type FleetPhoto = { slot: string; path: string; url?: string };
+export type FleetPhoto = { slot: string; path: string; url?: string; registeredAt?: string };
 export type Vehicle = { id: number; plate: string; ceco: string; usage: string; tenure: string; category: string; type: string; brand: string; model: string; engine: string; chassis: string; color: string; titleDate: string; year: number | null; status: string; target: number; initialKm: number; notes: string };
 export type HistoricalSource = { format: "HISTORICO"; formId: string; formStarted: string; formEnded: string; monthLabel: string; collector: string; reportedKm: number | null; file: string; sheet: string; row: number };
 export type Assignment = { id: number; vehicleId: number; driverId: number | null; trackingMode: string; responsibleName: string; serviceDate: string; endDate: string; expectedStart: string; expectedEnd: string; coordinator: string; ceco: string; site: string; finalZone: string; notes: string; planStatus: string; reason: string; initialKm: number | null; finalKm: number | null; startedAt: string; endedAt: string; startPhotos: FleetPhoto[]; endPhotos: FleetPhoto[]; startNotes: string; endNotes: string; startRegisteredBy?: string; endRegisteredBy?: string; createdBy: string; updatedAt: string; importKey?: string | null; source?: HistoricalSource | null };
@@ -16,6 +16,15 @@ export type Station = { id: number; name: string; provider: string; address: str
 export type FleetUser = { id: number; displayName: string; role: string; username: string; active?: boolean };
 export type FleetData = { user: FleetUser; vehicles: Vehicle[]; assignments: Assignment[]; expenses: Expense[]; documents: FleetDocument[]; invoices: Invoice[]; payments: Payment[]; idle: Idle[]; stations: Station[]; drivers: FleetUser[]; coordinators: string[] };
 
+export type JourneyReportData = { assignment: Assignment; vehicle: Vehicle; driverName: string; startPhotos: FleetPhoto[]; endPhotos: FleetPhoto[]; generatedAt: string };
+export function fleetTimestamp(value?: string) {
+  if (!value || !Number.isFinite(Date.parse(value))) return "Sin registro";
+  return new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(value));
+}
+export function photoRegisteredAt(path: string) {
+  const match = /\/(\d{13})-[0-9a-f-]{36}\.(?:jpg|jpeg|png|webp)$/i.exec(path);
+  return match ? new Date(Number(match[1])).toISOString() : undefined;
+}
 export function limaDate(now = new Date()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(now); }
 export function normalizedPlate(value: unknown) { return String(value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, ""); }
 export function minutesFromTime(value: string) { const m = /^(\d{1,4}):([0-5]\d)$/.exec(value.trim()); if (!m) throw new Error("Ingresa el ralentí como horas:minutos (ejemplo 01:35)."); return Number(m[1]) * 60 + Number(m[2]); }
