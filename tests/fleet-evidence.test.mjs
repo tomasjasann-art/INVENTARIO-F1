@@ -57,7 +57,7 @@ test('El PDF real contiene las 14 evidencias en cinco páginas y conserva zona y
  assert.ok(rendered.every(c=>c[2]>=0&&c[2]<=290));
 });
 test('Textos largos continúan en nuevas páginas y una evidencia inaccesible impide emitir un PDF incompleto',async()=>{
- const input=report();input.assignment.startNotes='Observación extensa del vehículo. '.repeat(70);
+ const input=report();input.assignment.startNotes='Observación extensa del vehículo. '.repeat(70).slice(0,2000);input.assignment.endNotes=input.assignment.startNotes;
  const doc=await createJourneyPdf(input,SDK,async()=>picture);assert.ok(doc.getNumberOfPages()>5);
  await assert.rejects(createJourneyPdf(report(),SDK,async path=>{if(path.startsWith('https:'))throw new Error('Sin conexión');return picture;}),/No se pudo descargar/);
 });
