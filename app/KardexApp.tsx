@@ -1367,8 +1367,8 @@ function LotView({ movements, loading }: { movements: Movement[]; loading: boole
     const map = new Map<string, {
       key: string;
       orderNumber: string;
-      coordinator: string;
-      coordinatorF1: string;
+      coordinators: Set<string>;
+      coordinatorsF1: Set<string>;
       skus: Map<string, string>;
       series: Set<string>;
       projects: Set<string>;
@@ -1382,12 +1382,13 @@ function LotView({ movements, loading }: { movements: Movement[]; loading: boole
     movements.forEach((movement) => {
       const orderNumber = movement.orderNumber.trim() || "SIN PEDIDO";
       const coordinator = movement.coordinator.trim() || "SIN COORDINADOR";
-      const key = `${orderNumber.toUpperCase()}::${coordinator.toUpperCase()}`;
+      const coordinatorF1 = movement.coordinatorF1.trim() || "SIN COORDINADOR F1";
+      const key = orderNumber.toUpperCase();
       const group = map.get(key) ?? {
         key,
         orderNumber,
-        coordinator,
-        coordinatorF1: movement.coordinatorF1,
+        coordinators: new Set<string>(),
+        coordinatorsF1: new Set<string>(),
         skus: new Map<string, string>(),
         series: new Set<string>(),
         projects: new Set<string>(),
@@ -1397,6 +1398,8 @@ function LotView({ movements, loading }: { movements: Movement[]; loading: boole
         balance: 0,
         lastDate: movement.movementDate,
       };
+      group.coordinators.add(coordinator);
+      group.coordinatorsF1.add(coordinatorF1);
       const effect = movement.type === "salida" || movement.type === "baja" ? -1 : movement.type === "traslado" ? 0 : 1;
       group.skus.set(movement.sku, movement.description);
       movement.serials.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean).forEach((item) => group.series.add(item));
@@ -1406,7 +1409,6 @@ function LotView({ movements, loading }: { movements: Movement[]; loading: boole
       if (effect < 0) group.outgoing += movement.quantity;
       group.balance += movement.quantity * effect;
       if (movement.movementDate > group.lastDate) group.lastDate = movement.movementDate;
-      if (!group.coordinatorF1 && movement.coordinatorF1) group.coordinatorF1 = movement.coordinatorF1;
       map.set(key, group);
     });
 
@@ -1438,11 +1440,11 @@ function LotView({ movements, loading }: { movements: Movement[]; loading: boole
     </section>
 
     <section className="panel table-panel">
-      <div className="panel-title"><div><h2>Control conjunto de series y lotes</h2><p>Llave de control: N° Pedido + Coordinador Entel; cada pedido muestra todos sus SKU.</p></div></div>
+      <div className="panel-title"><div><h2>Control conjunto de series y lotes</h2><p>Llave de control: N° Pedido; los coordinadores se muestran solo para trazabilidad.</p></div></div>
       <div className="table-wrap"><table className="lots-table"><thead><tr><th>N° Pedido</th><th>Coordinador Entel</th><th>SKU incluidos</th><th>Series / Lotes</th><th>Proyecto / GR</th><th className="align-right">Ingresos</th><th className="align-right">Salidas</th><th className="align-right">Saldo</th></tr></thead><tbody>
         {loading ? <tr><td colSpan={8}><Empty text="Agrupando lotes..." /></td></tr> : !groups.length ? <tr><td colSpan={8}><Empty text="Los lotes aparecerán al registrar movimientos con pedido y coordinador." /></td></tr> : groups.map((group) => <tr key={group.key}>
           <td><strong>{group.orderNumber}</strong><small>Último mov. {displayDate(group.lastDate)}</small></td>
-          <td><strong>{group.coordinator}</strong><small>{group.coordinatorF1 ? `F1: ${group.coordinatorF1}` : "Sin coordinador F1"}</small></td>
+          <td><strong>{[...group.coordinators].join(", ")}</strong><small>F1: {[...group.coordinatorsF1].join(", ")}</small></td>
           <td><div className="sku-stack">{[...group.skus.entries()].map(([sku, description]) => <span key={sku}><b>{sku}</b><em>{description}</em></span>)}</div></td>
           <td><strong>{[...group.series].slice(0, 2).join(", ") || "Control por cantidad"}</strong><small>{group.series.size} series/lotes registrados</small></td>
           <td><strong>{[...group.projects].join(", ") || "—"}</strong><small>{[...group.documents].slice(0, 2).join(", ") || "Sin GR"}</small></td>
@@ -2298,8 +2300,8 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
   const [loadComplete, setLoadComplete] = useState(false);
 
   const detectedGroups = useMemo(() => {
-    const keys = new Set(rows.map((row) => `${bulkRowValue(row, "N° Pedido").toUpperCase()}::${bulkRowValue(row, "Coordinador Entel", "CordEntelFinal").toUpperCase()}`));
-    keys.delete("::");
+    const keys = new Set(rows.map((row) => bulkRowValue(row, "N° Pedido").toUpperCase()));
+    keys.delete("");
     return keys.size;
   }, [rows]);
 
@@ -2374,10 +2376,9 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
         if (!product) {
           reason = "El SKU no existe en el maestro.";
         } else {
-          const groupKey = `${product.id}::${orderNumber.trim().toUpperCase()}::${coordinator.trim().toUpperCase()}`;
+          const groupKey = `${product.id}::${orderNumber.trim().toUpperCase()}`;
           const controlled = movements.filter((movement) => movement.productId === product.id
-            && movement.orderNumber.trim().toUpperCase() === orderNumber.trim().toUpperCase()
-            && movement.coordinator.trim().toUpperCase() === coordinator.trim().toUpperCase());
+            && movement.orderNumber.trim().toUpperCase() === orderNumber.trim().toUpperCase());
           if (!availableByGroup.has(groupKey)) {
             availableByGroup.set(groupKey, controlled.reduce((balance, movement) => balance + movementEffect(movement.type) * movement.quantity, 0));
             const balances = new Map<string, number>();
@@ -2622,7 +2623,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
         <span>{fileError || (rows.length ? `${rows.length} filas listas para cargar como ${operationLabel}` : "Formatos permitidos: .xlsx, .xls y .csv")}</span>
         <div className="format-badges"><b>XLSX</b><b>XLS</b><b>CSV</b></div>
       </label>
-      {rows.length > 0 && movementType !== "maestro" && <div className="bulk-detected"><Layers3 size={18} /><div><strong>{detectedGroups} lotes/pedidos detectados</strong><span>Las filas se agruparán por N° Pedido + Coordinador Entel, aunque contengan varios SKU.</span></div></div>}
+      {rows.length > 0 && movementType !== "maestro" && <div className="bulk-detected"><Layers3 size={18} /><div><strong>{detectedGroups} lotes/pedidos detectados</strong><span>Las filas se agruparán por N° Pedido; el Coordinador Entel quedará como dato de trazabilidad.</span></div></div>}
       {loadComplete && <div className="bulk-complete"><CheckCircle2 size={19} /><div><strong>Carga completada</strong><span>Este archivo ya fue procesado. Selecciona otro archivo para una nueva carga.</span></div></div>}
       {rows.length > 0 && <section className="bulk-preview">
         <div className="bulk-preview-head"><div><strong>Previsualización antes de cargar</strong><small>{movementType === "maestro" ? "Valida SKU, descripción, tipo y costo unitario." : "Descripción, tipo y costo se relacionan con el Maestro SKU."}</small></div><div className="bulk-preview-metrics"><span className="accepted"><b>{acceptedPreviewRows.length}</b> cargarán</span><span className="rejected"><b>{rejectedPreviewRows.length}</b> no cargarán</span><span><b>{money.format(previewCostCents / 100)}</b> {movementType === "maestro" ? "costos a registrar" : "valor aprobado"}</span></div></div>
@@ -2649,7 +2650,7 @@ function BulkUpload({ products, movements, suppliers, saving, onSave }: { produc
       </>}</ul>
       {movementType !== "maestro" && <div className="mapping-note"><ShieldCheck size={17} /><span><b>Control de duplicados:</b> una GR y pedido pueden contener varias líneas dentro de la primera carga. Las series de equipos son únicas; un mismo lote sí puede repetirse en pedidos diferentes. Se bloquea volver a cargar la misma GR + pedido para la misma razón social; otra razón social sí se admite.</span></div>}
       <div className="storage-note"><Database size={18} /><div><strong>¿Dónde se almacena?</strong><span>Maestro SKU en Productos; ingresos y salidas en el Historial de movimientos.</span></div></div>
-      <div className="mapping-note"><AlertTriangle size={17} /><span>{movementType === "entrada" ? "Los ingresos suman stock y agrupan todos los SKU del mismo pedido/coordinador. Si el SKU ya existe, el Excel no reemplaza su descripción ni su tipo." : movementType === "salida" ? "Las salidas validan SKU + N° Pedido + CordEntelFinal + Serie/Lote antes de descontar." : "Usa esta plantilla como catálogo oficial. Los SKU faltantes todavía pueden crearse desde un ingreso y luego corregirse en el maestro."}</span></div>
+      <div className="mapping-note"><AlertTriangle size={17} /><span>{movementType === "entrada" ? "Los ingresos suman stock y agrupan todos los SKU del mismo pedido. El Coordinador Entel queda como trazabilidad. Si el SKU ya existe, el Excel no reemplaza su descripción ni su tipo." : movementType === "salida" ? "Las salidas validan SKU + N° Pedido + Serie/Lote antes de descontar; el Coordinador Entel no bloquea el stock." : "Usa esta plantilla como catálogo oficial. Los SKU faltantes todavía pueden crearse desde un ingreso y luego corregirse en el maestro."}</span></div>
     </aside>
   </section>;
 }
