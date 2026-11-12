@@ -15,6 +15,8 @@ import {
   ClipboardList,
   Download,
   FileSpreadsheet,
+  FileText,
+  ExternalLink,
   LayoutDashboard,
   Layers3,
   LogOut,
@@ -259,7 +261,7 @@ type KardexData = {
   coordinatorSummary?: CoordinatorSummary | null;
   currentUser?: { email: string; displayName: string; role: UserRole; active: boolean; authProvider?: "supabase" | "clerk"; mustChangePassword?: boolean; coordinatorId?: number | null; coordinatorName?: string };
 };
-type View = "activos" | "flota" | "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "devoluciones" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
+type View = "documentos" | "activos" | "flota" | "resumen" | "movimientos" | "ingresos" | "salidas" | "stock" | "lotes" | "solicitudes" | "devoluciones" | "conciliacion" | "auditoria" | "coordinadores" | "proveedores" | "reportes" | "carga" | "configuracion";
 
 const money = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" });
 const number = new Intl.NumberFormat("es-PE");
@@ -457,6 +459,8 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
   const [fleetTab, setFleetTab] = useState<FleetTab>("vehiculos");
   const [assetTab, setAssetTab] = useState<AssetTab>("Resumen");
   const [assetsModuleOpen, setAssetsModuleOpen] = useState(false);
+  const [documentsModuleOpen, setDocumentsModuleOpen] = useState(false);
+  const [documentTool, setDocumentTool] = useState<"pdf" | "separar" | "ocr">("pdf");
   const [settingsInitialRole, setSettingsInitialRole] = useState<UserRole>(technicianSetup ? "TECNICO" : driverSetup ? "CONDUCTOR" : "SOLO_LECTURA");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [focusedRequestCode, setFocusedRequestCode] = useState("");
@@ -729,6 +733,33 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
         </>}
         <button className={`module-pill ${assetsModuleOpen ? "module-expanded" : ""}`} onClick={() => { setAssetsModuleOpen(open => !open); if (!assetsModuleOpen) { setEquipmentModuleOpen(false); setFleetModuleOpen(false); setView("activos"); } }} aria-expanded={assetsModuleOpen}><Boxes size={18} /><span><small>MÓDULO</small><strong>Activos F1</strong></span><ChevronDown size={16} /></button>
         <div className={`module-nav-shell ${assetsModuleOpen ? "module-nav-open" : ""}`} inert={!assetsModuleOpen}><nav className="nav-list" aria-label="Activos F1">{assetTabs.map(name => <button key={name} className={view === "activos" && assetTab === name ? "active" : ""} onClick={() => { setAssetTab(name); setView("activos"); setSidebarOpen(false); }}><Boxes size={18} />{name}</button>)}</nav></div>
+        <button
+          className={`module-pill ${documentsModuleOpen ? "module-expanded" : ""}`}
+          type="button"
+          onClick={() => { setDocumentsModuleOpen(open => !open); if (!documentsModuleOpen) { setEquipmentModuleOpen(false); setFleetModuleOpen(false); setAssetsModuleOpen(false); setView("documentos"); } }}
+          aria-expanded={documentsModuleOpen}
+          aria-controls="documents-module-navigation"
+        >
+          <FileText size={18} />
+          <span><small>{view === "documentos" ? "MÓDULO ACTIVO" : "MÓDULO"}</small><strong>Gestores documentales</strong></span>
+          <ChevronDown size={16} />
+        </button>
+        <div className={`module-nav-shell ${documentsModuleOpen ? "module-nav-open" : ""}`} inert={!documentsModuleOpen}>
+          <nav id="documents-module-navigation" className="nav-list" aria-label="Gestores documentales">
+            {([
+              ["pdf", "Gestor de PDF"],
+              ["separar", "Separar y renombrar"],
+              ["ocr", "Imagen a texto / Excel"],
+            ] as const).map(([id, label]) => (
+              <button
+                type="button"
+                key={id}
+                className={view === "documentos" && documentTool === id ? "active" : ""}
+                onClick={() => { setDocumentTool(id); setView("documentos"); setSidebarOpen(false); }}
+              ><FileText size={18} />{label}</button>
+            ))}
+          </nav>
+        </div>
         <div className="sidebar-bottom">
           {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setSettingsInitialRole("SOLO_LECTURA"); setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
           <div className="user-card"><span>{userInitials(user.displayName)}</span><div><strong>{user.displayName}</strong><small>{role.replaceAll("_", " ")} · {user.email}</small></div><a href={signOutPath} target="_top" aria-label="Cerrar sesión" title="Cerrar sesión"><LogOut size={16} /></a></div>
@@ -748,7 +779,7 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
                 {notificationRequests.length > 0 && <button className="notification-footer" onClick={() => { setView("solicitudes"); setNotificationsOpen(false); }}>Ver todas las solicitudes</button>}
               </div>}
             </div>
-            {!isCoordinator && !(["activos", "flota", "solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
+            {!isCoordinator && !(["documentos", "activos", "flota", "solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
             {canOperate && view === "ingresos" && <button className="secondary-button quick-movement gr-read-button" onClick={() => setModal("grIngreso")}><FileSpreadsheet size={17} />Leer GR de ingreso</button>}
             {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
             {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
@@ -757,9 +788,55 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
         </header>
 
         <div className={`content ${view === "flota" ? "fleet-shell-content" : ""}`}>
+          {view === "documentos" && (
+            <section className="panel" aria-label="Gestores documentales F1" style={{ padding: 24 }}>
+              <div className="panel-title">
+                <div>
+                  <p className="eyebrow">LOGÍSTICA F1 · HERRAMIENTAS DOCUMENTALES</p>
+                  <h2>Gestores documentales</h2>
+                  <p>Separa, renombra y organiza PDF, o convierte imágenes a texto y Excel. Tus archivos se procesan en el navegador.</p>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+                {([
+                  ["pdf", "Gestor de PDF"],
+                  ["separar", "Separar y renombrar"],
+                  ["ocr", "Imagen a texto / Excel"],
+                ] as const).map(([id, title]) => (
+                  <button key={id} type="button" className={documentTool === id ? "primary-button" : "secondary-button"} onClick={() => setDocumentTool(id)}>{title}</button>
+                ))}
+              </div>
+              {(() => {
+                const toolLinks = {
+                  pdf: "https://gestor-pdf-f1.vercel.app/",
+                  separar: "https://gestor-pdf-f1.vercel.app/separar-renombrar.html",
+                  ocr: "https://gestor-pdf-f1.vercel.app/imagen-a-texto.html",
+                };
+                const url = toolLinks[documentTool];
+                return (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+                      <a className="secondary-button" href={url} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <ExternalLink size={16} /> Abrir en una pestaña nueva
+                      </a>
+                      <span style={{ fontSize: 13, color: "#64748b" }}>Si el navegador bloquea la vista integrada, utiliza el botón para abrir la herramienta.</span>
+                    </div>
+                    <iframe
+                      key={documentTool}
+                      title={documentTool === "ocr" ? "Imagen a texto y Excel" : documentTool === "separar" ? "Separar y renombrar PDF" : "Gestor de PDF"}
+                      src={url}
+                      loading="lazy"
+                      referrerPolicy="strict-origin-when-cross-origin"
+                      style={{ width: "100%", height: "min(900px, 85vh)", minHeight: 580, border: "1px solid #dbe5f0", borderRadius: 12, background: "#fff" }}
+                    />
+                  </>
+                );
+              })()}
+            </section>
+          )}
           {view === "activos" && <AssetsApp embedded activeTab={assetTab} onTabChange={setAssetTab} />}
           {view === "flota" && !isCoordinator && <FleetApp embedded activeTab={fleetTab} onTabChange={setFleetTab} onManageDrivers={() => { setSettingsInitialRole("CONDUCTOR"); setView("configuracion"); }} />}
-          {view !== "flota" && view !== "activos" && <section className="page-heading">
+          {view !== "flota" && view !== "activos" && view !== "documentos" && <section className="page-heading">
             <div><p className="eyebrow">LOGÍSTICA F1 · CONTROL DE EQUIPOS ENTEL · {new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(new Date())}</p><h1>{view === "resumen" ? (isCoordinator ? "Mi panel de coordinador" : "Resumen de equipos") : view === "ingresos" ? "Ingresos de equipos" : view === "salidas" ? "Salidas de equipos" : view === "movimientos" ? "Trazabilidad de movimientos" : view === "stock" ? (isCoordinator ? "Stock disponible para solicitar" : "Stock y trazabilidad") : view === "lotes" ? "Series, lotes y pedidos" : view === "solicitudes" ? "Solicitudes y Pedidos F1" : view === "devoluciones" ? "Devoluciones y recepción física" : view === "conciliacion" ? "Conciliación de instalación" : view === "auditoria" ? "Auditoría Entel y cruce Oracle" : view === "coordinadores" ? "Coordinadores F1 y Entel" : view === "proveedores" ? "Empresas y personas" : view === "reportes" ? "Reportes operativos" : view === "configuracion" ? "Puesta en producción" : "Carga masiva de información"}</h1><p>{view === "resumen" ? (isCoordinator ? "Consulta tus costos despachados, solicitudes y pendientes de cierre." : "Control centralizado por SKU, Serie/Lote, pedido y proyecto.") : view === "ingresos" ? "Registro de equipos recibidos en el único almacén operativo: MO Company." : view === "salidas" ? "Despachos validados contra stock, serie, pedido, RUC y razón social." : view === "movimientos" ? "Historial independiente de ingresos, salidas, devoluciones y ajustes." : view === "stock" ? (isCoordinator ? "Disponibilidad global sin costos ni movimientos de otros coordinadores." : "Consulta movimientos por GR, serie/lote, proyecto/site, pedido o SKU.") : view === "lotes" ? "Un pedido puede agrupar varias series, lotes y SKU distintos." : view === "solicitudes" ? "Cada solicitud genera un Pedido F1 y mantiene su tiempo de atención hasta el cierre." : view === "devoluciones" ? "Registra primero la carga lógica y suma el equipo al stock solo cuando llegue físicamente a MO Company." : view === "conciliacion" ? "Compara el último corte con el historial y completa la validación de cada serie despachada." : view === "auditoria" ? "Cruza Stock Contrata Entel con Oracle y el control interno, tomando únicamente F1." : view === "coordinadores" ? "Maestro manual o masivo para responsables F1 y Entel." : view === "proveedores" ? "Relaciona RUC de empresas y DNI de personas con sus nombres para autocompletar todo el módulo." : view === "reportes" ? "Exportables valorizados por pedido, GR, SKU, coordinador y razón social." : view === "configuracion" ? "Administra accesos y limpia datos de prueba de forma controlada." : "Importa maestro de SKU, ingresos o salidas desde Excel o CSV."}</p></div>
             <button className="refresh-button" onClick={() => void loadData()} disabled={loading}><RefreshCw size={17} className={loading ? "spin" : ""} />Actualizar</button>
           </section>}
