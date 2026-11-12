@@ -479,13 +479,11 @@ function splitSeries(value: string) {
     .filter(Boolean);
 }
 
-function sameControlGroup(
-  movement: { orderNumber: string; coordinator: string },
+function sameOrderGroup(
+  movement: { orderNumber: string },
   orderNumber: string,
-  coordinator: string,
 ) {
-  return clean(movement.orderNumber).toUpperCase() === orderNumber.toUpperCase()
-    && clean(movement.coordinator).toUpperCase() === coordinator.toUpperCase();
+  return clean(movement.orderNumber).toUpperCase() === orderNumber.toUpperCase();
 }
 
 function movementParty(movement: { contractorDocument?: string; contractor?: string; origin?: string }) {
@@ -2169,7 +2167,7 @@ export async function POST(request: Request) {
           }
           const existing = await db.select().from(movements).where(eq(movements.productId, product.id));
           const duplicateRow = existing.some((movement) => movement.type === movementType
-            && sameControlGroup(movement, orderNumber, coordinator)
+            && sameOrderGroup(movement, orderNumber)
             && (!document || clean(movement.document).toUpperCase() === document.toUpperCase())
             && (seriesLot
               ? clean(movement.serials).toUpperCase() === seriesLot
@@ -2197,10 +2195,10 @@ export async function POST(request: Request) {
           }
 
           if (movementType === "salida") {
-            const controlled = existing.filter((movement) => sameControlGroup(movement, orderNumber, coordinator));
+            const controlled = existing.filter((movement) => sameOrderGroup(movement, orderNumber));
             const available = controlled.reduce((total, movement) => total + stockEffect(movement.type) * movement.quantity, 0);
             if (quantity > available) {
-              rejected.push({ row: rowIndex + 2, sku, reason: `Stock insuficiente para el pedido ${orderNumber} y coordinador ${coordinator}. Disponible: ${available}.` });
+              rejected.push({ row: rowIndex + 2, sku, reason: `Stock insuficiente para el pedido ${orderNumber}. Disponible: ${available}.` });
               continue;
             }
 
@@ -2293,7 +2291,7 @@ export async function POST(request: Request) {
     const coordinatorF1 = clean(movementPayload.coordinatorF1);
     if ((type === "entrada" || type === "salida") && (!orderNumber || !coordinator)) {
       return Response.json(
-        { error: "N° Pedido y Coordinador Entel son obligatorios para controlar el lote." },
+        { error: "N° Pedido y Coordinador Entel son obligatorios; el coordinador se conserva como dato de trazabilidad." },
         { status: 400 },
       );
     }
@@ -2349,7 +2347,7 @@ export async function POST(request: Request) {
       lotAssignment = "ORIGINAL";
     }
     const duplicateMovement = productMovements.some((row) => row.type === type
-      && sameControlGroup(row, orderNumber, coordinator)
+      && sameOrderGroup(row, orderNumber)
       && (!document || clean(row.document).toUpperCase() === document.toUpperCase())
       && (serials
         ? clean(row.serials).toUpperCase() === serials
@@ -2358,7 +2356,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "Este movimiento ya fue registrado para la misma serie, pedido y GR." }, { status: 409 });
     }
 
-    const controlledMovements = productMovements.filter((row) => sameControlGroup(row, orderNumber, coordinator));
+    const controlledMovements = productMovements.filter((row) => sameOrderGroup(row, orderNumber));
     const currentStock = controlledMovements.reduce(
       (total, row) => total + stockEffect(row.type) * row.quantity,
       0,
