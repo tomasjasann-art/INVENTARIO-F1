@@ -8,6 +8,6 @@ export default async function AnalysisPage() {
   const user = await getAuthenticatedUser();
   if (!user) redirect("/");
   const access = await getKardexAccess(user.email, user.userId, user.authProvider);
-  if (!access?.active || access.mustChangePassword || access.role !== "ADMIN") redirect("/");
+  if (!access?.active || access.mustChangePassword || (access.role !== "ADMINISTRADOR" && access.role !== "LOGISTICA")) redirect("/");
   return <Analysis />;
 }
