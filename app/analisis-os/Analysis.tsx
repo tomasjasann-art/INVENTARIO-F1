@@ -53,7 +53,7 @@ export default function Analysis({saved, logistics, fields, submit}: {
         const lpu=orders ? 0 : amount(r[28]);
         if(!collector && !description) return [];
         if(!collector || text(rawCost)==="" || !Number.isFinite(cost) || !Number.isFinite(lpu)){ warnings.push(header+i+2); return []; }
-        return [{key:sheetName+":"+String(header+i+2),collector,coordinator:orders?"":text(r[14]),site:text(r[orders?9:13]),description,cost,lpu,reference:"",source:orders?"OC":"Solicitud",included:true}];
+        return [{key:sheetName+":"+String(header+i+2),collector,coordinator:orders?"":text(r[14]),site:text(r[orders?9:13]),description,cost,lpu,reference:"",details:{CECO:text(r[orders?4:6]),Cliente:text(r[orders?7:11]),Contratista:text(r[orders?13:17])},source:orders?"OC":"Solicitud",included:true}];
       });
       setLines(old=>[...old.filter(line=>line.source !== (orders?"OC":"Solicitud")),...data]);
       setValidated(false);
@@ -65,6 +65,7 @@ export default function Analysis({saved, logistics, fields, submit}: {
   const collectors=[...new Set(requests.filter(line=>!coordinator||line.coordinator===coordinator).map(line=>line.collector))].sort();
   const visible=requests.filter(line=>!coordinator || line.coordinator===coordinator);
   const detail=lines.filter(line=>line.collector===selected);
+  const metadata=detail.find(line=>line.source==="Plataforma" || line.source==="Solicitud");
   const revenue=new Map<string,number>();
   let conflict=false;
   const lp=detail.filter(line=>line.lpu>0);
@@ -123,14 +124,34 @@ export default function Analysis({saved, logistics, fields, submit}: {
     {logistics && selected && <section className="space-y-4 rounded-xl border bg-white p-5">
       <h2 className="text-xl font-semibold">{selected}</h2>
       <p className="text-sm">Las cargas de Excel, los gastos y las validaciones de esta vista son temporales. Desmarca un costo si ya está incluido en otra línea. Si hay varias filas con LPU, usa la misma referencia para el mismo ingreso y una diferente para cada adicional.</p>
-      <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-100"><tr>{["Incluir costo","Origen","Servicio / gasto","Costo F1","40% / 40% / 20%","LPU","Referencia LPU"].map(h=><th key={h} className="p-2">{h}</th>)}</tr></thead><tbody>{detail.map(line=><tr key={line.key} className="border-b">
-        <td className="p-2"><input aria-label={"Incluir "+line.description} type="checkbox" checked={line.included} onChange={e=>update(line.key,{included:e.target.checked})}/></td>
-        <td className="p-2">{line.source}</td><td className="p-2">{line.description}</td><td className="p-2">{money(line.cost)}</td><td className="p-2">{(line.source==="Solicitud" || line.source==="Plataforma") ? [0.4,0.4,0.2].map(p=>money(line.cost*p)).join(" / "):"—"}</td><td className="p-2">{line.lpu?money(line.lpu):"—"}</td><td className="p-2">{line.lpu>0 && <input className="w-28 rounded border p-1" aria-label="Referencia LPU" value={line.reference} onChange={e=>update(line.key,{reference:e.target.value})}/>}</td>
-      </tr>)}</tbody></table></div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1000px] border-collapse text-left text-sm">
+          <thead className="bg-[#062051] text-white"><tr>{["Site","CECO","CLIENTE","Colector","Empresa Contratista","Descripción Servicio","Costo F1","LPU Entel","Rentabilidad","Validación José Ortiz"].map((label,index)=><th key={label} scope="col" className={`border border-slate-300 p-2 ${index===8?"bg-[#bc4300]":index===9?"bg-[#00769a]":""}`}>{label}</th>)}</tr></thead>
+          <tbody>{detail.map(line=><tr key={line.key} className="border-b align-top">
+            <td className="p-2">{line.site || metadata?.site || "—"}</td>
+            <td className="p-2">{line.details?.CECO || metadata?.details?.CECO || "—"}</td>
+            <td className="p-2">{line.details?.Cliente || metadata?.details?.Cliente || "—"}</td>
+            <td className="p-2">{line.collector}</td>
+            <td className="p-2">{line.details?.Contratista || "—"}</td>
+            <td className="p-2">{line.description}<span className="block text-xs text-slate-600">{line.source}</span></td>
+            <td className="p-2 whitespace-nowrap"><label className="flex items-center gap-2"><input aria-label={"Incluir costo de "+line.description} type="checkbox" checked={line.included} onChange={e=>update(line.key,{included:e.target.checked})}/>{money(line.cost)}</label>
+            {(line.source==="Solicitud" || line.source==="Plataforma") && <span className="mt-1 block text-xs text-slate-600">40 / 40 / 20%<br/>{[0.4,0.4,0.2].map(p=>money(line.cost*p)).join(" / ")}</span>}</td>
+            <td className="p-2 whitespace-nowrap">{line.lpu?money(line.lpu):"—"}{line.lpu>0 && <input className="mt-1 block w-28 rounded border p-1" placeholder="Referencia" aria-label="Referencia LPU" value={line.reference} onChange={e=>update(line.key,{reference:e.target.value})}/>}</td>
+            <td/><td/>
+          </tr>)}</tbody>
+          <tfoot className="bg-emerald-50 font-semibold"><tr>
+            <th scope="row" colSpan={6} className="p-2">Total del colector</th>
+            <td className="p-2 whitespace-nowrap">{money(total)}</td>
+            <td className="p-2 whitespace-nowrap">{conflict?"Por revisar":money(income)}</td>
+            <td className="p-2">{validated&&!conflict&&income>0?((income-total)/income).toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2}):"Pendiente"}</td>
+            <td className="p-2">—</td>
+          </tr></tfoot>
+        </table>
+      </div>
       <form className="flex flex-wrap items-end gap-2" onSubmit={e=>{e.preventDefault();if(!description.trim() || !Number.isFinite(amount(cost)) || amount(cost)<=0)return;setLines(old=>[...old,{key:crypto.randomUUID(),collector:selected,coordinator:"",site:"",description:description.trim(),cost:amount(cost),lpu:0,reference:"",source:"Manual",included:true}]);setDescription("");setCost("");setValidated(false);}}>
         <label>Gasto manual <input className="block rounded border p-2" required value={description} onChange={e=>setDescription(e.target.value)}/></label><label>Monto <input className="block rounded border p-2" type="number" min="0.01" step="0.01" required value={cost} onChange={e=>setCost(e.target.value)}/></label><button className="rounded border p-2">Agregar gasto</button>
       </form>
-      <div className="flex flex-wrap items-center gap-5 border-t pt-4"><span>Costo F1 <strong>{money(total)}</strong></span><span>LPU <strong>{conflict?"Por revisar":money(income)}</strong></span><span>Rate <strong>{validated&&!conflict&&income>0?((income-total)/income).toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2}):"Pendiente"}</strong></span><button className="rounded bg-blue-800 px-4 py-2 text-white disabled:opacity-50" disabled={conflict||income<=0} onClick={()=>setValidated(true)}>Validar cálculo</button></div>
+      <div className="flex flex-wrap items-center gap-5 border-t pt-4"><button className="rounded bg-blue-800 px-4 py-2 text-white disabled:opacity-50" disabled={conflict||income<=0} onClick={()=>setValidated(true)}>Validar cálculo</button></div>
     </section>}
   </div></main>;
 }
