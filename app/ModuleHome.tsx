@@ -4,11 +4,11 @@ import {useState} from "react";
 import {ArrowUpRight,Search} from "lucide-react";
 
 const modules=[
- {name:"Control de Equipos Entel",description:"Inventario, movimientos y solicitudes de equipos.",href:"/?modulo=equipos",tag:"Equipos",position:"0% 15.3%"},
- {name:"Control de vehículos",description:"Flota, registros diarios y gastos de operación.",href:"/?modulo=vehiculos",tag:"Vehículos",position:"50% 15.3%"},
- {name:"Activos F1",description:"Herramientas, asignaciones y mantenimiento.",href:"/?modulo=activos",tag:"Activos",position:"100% 15.3%"},
- {name:"Gestores documentales",description:"Gestión de PDF y extracción de tablas y texto.",href:"/?modulo=documentos",tag:"Documentos",position:"0% 84.7%"},
- {name:"Análisis de OC y OS",description:"Solicitudes, costos y rentabilidad por coordinador.",href:"/analisis-os",tag:"Análisis",position:"50% 84.7%"}
+ {name:"Control de Equipos Entel",description:"Inventario, movimientos y solicitudes de equipos.",href:"/?modulo=equipos",tag:"Equipos",art:"equipos"},
+ {name:"Control de vehículos",description:"Flota, registros diarios y gastos de operación.",href:"/?modulo=vehiculos",tag:"Vehículos",art:"vehiculos"},
+ {name:"Activos F1",description:"Herramientas, asignaciones y mantenimiento.",href:"/?modulo=activos",tag:"Activos",art:"activos"},
+ {name:"Gestores documentales",description:"Gestión de PDF y extracción de tablas y texto.",href:"/?modulo=documentos",tag:"Documentos",art:"documentos"},
+ {name:"Análisis de OC y OS",description:"Solicitudes, costos y rentabilidad por coordinador.",href:"/analisis-os",tag:"Análisis",art:"analisis"}
 ];
 export default function ModuleHome({name,role,signOut}:{name:string;role:string;signOut:string}){
  const [search,setSearch]=useState("");
@@ -20,7 +20,7 @@ export default function ModuleHome({name,role,signOut}:{name:string;role:string;
    <h1>Plataforma de Gestión F1</h1><div className="portal-accent"/>
    <label className="portal-module-search"><Search size={19}/><input aria-label="Buscar módulo" placeholder="Buscar un módulo…" value={search} onChange={event=>setSearch(event.target.value)}/></label>
    <div className="portal-module-grid">{visible.map(module=><a key={module.href} className="module-tile" href={module.href}>
-    <div className="module-art" aria-hidden="true" style={{backgroundPosition:module.position}}/>
+    <div className={`module-art module-art--${module.art}`} aria-hidden="true"/>
     <div className="module-tile-body"><div className="module-tile-title"><h2>{module.name}</h2><span className="module-open-arrow"><ArrowUpRight size={19}/></span></div><p>{module.description}</p></div>
    </a>)}</div>
    {visible.length===0&&<p role="status">No se encontraron módulos con esa búsqueda.</p>}

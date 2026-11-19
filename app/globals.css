@@ -549,7 +549,12 @@ html,body{background:var(--f1-app-bg);color:var(--f1-text)}
 .f1-portal .module-tile{display:block;overflow:hidden;text-decoration:none;border-radius:19px;border:1px solid var(--f1-tile-border);background-color:var(--f1-tile-bg)!important;color:var(--f1-tile-text)!important;box-shadow:0 10px 24px #14233d0a;transition:transform .18s,border-color .18s,box-shadow .18s}
 .f1-portal .module-tile:hover{transform:translateY(-4px);border-color:#e67a41;box-shadow:0 15px 32px #14233d20}
 .f1-portal .module-tile:focus-visible{outline:3px solid #fa8e55;outline-offset:4px}
-.module-art{aspect-ratio:16/9;position:relative;background-color:#29374a;background-image:url("/f1-module-art.png");background-size:300% 356%;background-repeat:no-repeat;border-bottom:1px solid var(--f1-tile-border)}
+.module-art{aspect-ratio:16/9;position:relative;background-color:#29374a;background-size:cover;background-position:center;border-bottom:1px solid var(--f1-tile-border)}
+.module-art--equipos{background-image:url("/module-art/equipos.webp")}
+.module-art--vehiculos{background-image:url("/module-art/vehiculos.webp")}
+.module-art--activos{background-image:url("/module-art/activos.webp")}
+.module-art--documentos{background-image:url("/module-art/documentos.webp")}
+.module-art--analisis{background-image:url("/module-art/analisis.webp")}
 .module-art::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 70%,#10213710)}
 .module-tile-body{padding:22px 22px 24px;background-color:var(--f1-tile-bg)!important}
 .module-tile-title{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -579,3 +584,5 @@ html,body{background:var(--f1-app-bg);color:var(--f1-text)}
 @media(max-width:950px){.portal-module-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){.portal-module-grid{grid-template-columns:1fr;gap:20px}.f1-portal .module-portal-main{padding:32px 18px 50px}.module-tile-body{padding:18px}.module-tile-title h2{font-size:17px}}
 @media(prefers-reduced-motion:reduce){.f1-portal .module-tile{transition:none}.f1-portal .module-tile:hover{transform:none}}
+
+.portal-module-search:focus-within{outline:2px solid #e67a41;outline-offset:3px}

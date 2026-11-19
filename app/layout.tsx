@@ -24,7 +24,20 @@ export default function RootLayout({
     : children;
 
   return (
-    <html lang="es">
+    <html lang="es" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `
+          (() => {
+            let preference;
+            try { preference = localStorage.getItem("f1-theme"); } catch {}
+            const theme = preference === "dark" || preference === "light"
+              ? preference
+              : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+            document.documentElement.dataset.f1Theme = theme;
+            document.documentElement.style.colorScheme = theme;
+          })();
+        ` }} />
+      </head>
       <body className="antialiased">{content}</body>
     </html>
   );
