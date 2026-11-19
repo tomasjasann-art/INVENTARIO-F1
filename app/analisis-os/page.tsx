@@ -21,7 +21,7 @@ async function getAccess() {
     const rows=await getDb().execute(sql`SELECT name FROM coordinators WHERE id=${access.coordinatorId} AND active=true LIMIT 1`);
     if(rows[0])coordinator=String(rows[0].name);
   }
-  return { user, logistics, canReview, coordinator };
+  return { user, logistics, canReview, coordinator, role:access.role };
 }
 
 const fields = ["ID", "CECO", "Año", "Cliente", "Proyecto", "Tipo de comprobante", "RUC", "Contratista", "Contacto", "Cantidad", "Tipo de orden", "Comentarios"];
@@ -240,7 +240,7 @@ async function manageOrderLine(form:FormData){
 }
 
 export default async function AnalysisPage() {
-  const {user, logistics, canReview, coordinator} = await getAccess();
+  const {user, logistics, canReview, coordinator, role} = await getAccess();
   const rows = await getDb().execute<{
     key: string; collector: string; coordinator: string; site: string; description: string;
     cost: number; lpu: number; reference: string; details: Record<string,string>;
@@ -254,5 +254,5 @@ export default async function AnalysisPage() {
     (details - 'PDF') || jsonb_build_object('Número OC',order_number,'IGV',tax::text,'Total con IGV',total::text,'Origen','OC registrada') AS details
     FROM public.f1_os_purchase_expenses WHERE COALESCE(details->>'Eliminada','false')!='true' ORDER BY created_at DESC`) : [];
   const coordinatorOptions=await getDb().execute<{name:string}>(sql`SELECT name FROM coordinators WHERE active=true AND organization='F1' ORDER BY name`);
-  return <Analysis manageOrderLine={manageOrderLine} canReview={canReview} canOperate={logistics} reviewService={reviewService} coordinatorOptions={Array.from(coordinatorOptions).map(item=>item.name)} importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics || canReview} fields={fields} submit={submit} />;
+  return <Analysis currentUser={{name:user.displayName,role}} manageOrderLine={manageOrderLine} canReview={canReview} canOperate={logistics} reviewService={reviewService} coordinatorOptions={Array.from(coordinatorOptions).map(item=>item.name)} importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics || canReview} fields={fields} submit={submit} />;
 }
