@@ -131,7 +131,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const total=detail.filter(line=>line.included).reduce((sum,line)=>sum+line.cost,0);
   const summary=groups.map(group=>{
     const included=group.entries.filter(line=>line.included);
-    const oc=included.filter(line=>line.source==="OC").reduce((a,line)=>a+line.cost,0);
+    const oc=included.filter(isPurchase).reduce((a,line)=>a+line.cost,0);
     const manual=included.filter(line=>line.source.startsWith("Manual")).reduce((a,line)=>a+line.cost,0);
     return {income:group.pending?0:group.income,oc,manual,os:group.cost-oc-manual};
   }).reduce((a,b)=>({income:a.income+b.income,oc:a.oc+b.oc,os:a.os+b.os,manual:a.manual+b.manual}),{income:0,oc:0,os:0,manual:0});
