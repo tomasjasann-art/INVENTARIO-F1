@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
+import { CircleDollarSign, ShoppingCart, FileText, ChartNoAxesCombined, Layers, ArrowLeft, X, Download, Search } from "lucide-react";
 import * as XLSX from "xlsx";
 
 type Line = { key:string; collector:string; coordinator:string; site:string; description:string; cost:number; lpu:number; reference:string; source:string; included:boolean; details?: Record<string,string> };
@@ -46,6 +48,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const [trackingMessage,setTrackingMessage] = useState("");
   const [trackingBusy,setTrackingBusy] = useState(false);
   const supplier=suppliers.find(item=>item.ruc===ruc);
+  const [stateFilter,setStateFilter] = useState("");
   const [search,setSearch] = useState("");
   const [selected,setSelected] = useState("");
   const [cost,setCost] = useState("");
@@ -89,7 +92,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const requests=lines.filter(line=>line.source==="Solicitud" || line.source==="Plataforma");
   const coordinators=[...new Set(requests.map(line=>line.coordinator))].filter(Boolean).sort();
   const collectors=[...new Set(requests.filter(line=>!coordinator||line.coordinator===coordinator).map(line=>line.collector))].sort();
-  const matches=(line:Line)=>(!coordinator || line.coordinator===coordinator) && [line.collector,line.site,line.description].some(value=>norm(value).includes(norm(search.trim())));
+  const matches=(line:Line)=>(!stateFilter || (approvals[line.collector]?"Aprobada por correo":reviewed[line.collector]?"Analizada":line.details?.Status || "Pendiente")===stateFilter) && (!coordinator || line.coordinator===coordinator) && [line.collector,line.site,line.description].some(value=>norm(value).includes(norm(search.trim())));
   const visible=requests.filter(matches);
   const matchingCollectors=[...new Set(visible.map(line=>line.collector))];
   const groups=matchingCollectors.map(collector=>{
@@ -126,6 +129,18 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const expense=summary.oc+summary.os+summary.manual;
   const percent=(value:number)=>value.toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2});
   const status=(line:Line)=>approvals[line.collector]?"Aprobada por correo":reviewed[line.collector]?"Analizada":line.details?.Status || "Pendiente";
+  const statusCounts=visible.reduce<Record<string,number>>((counts,line)=>{const label=status(line);counts[label]=(counts[label]??0)+1;return counts;},{});
+  const issued=visible.filter(line=>Boolean(line.details?.["OS Contrata"])).length;
+  function exportAnalysis(){
+    const rows=groups.map(group=>({
+      Site:group.primary?.site,CECO:group.primary?.details?.CECO,Cliente:group.primary?.details?.Cliente,
+      Colector:group.collector,"Costo F1":group.cost,"LPU Entel":group.pending?"Revisar LPU":group.income,
+      Rentabilidad:!group.pending&&group.income>0?(group.income-group.cost)/group.income:"",
+      "Validación José Ortiz":approvals[group.collector]?"OK por correo":""
+    }));
+    const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet(rows),"Análisis");
+    XLSX.writeFile(book,"Analisis_OS_Compras.xlsx");
+  }
   return <main className="os-f1 min-h-screen bg-slate-50 px-5 py-10 text-slate-900"><div className="mx-auto max-w-[1500px] space-y-6">
     <style>{`
       .os-f1{background:#f4f5f7;color:#20242b}
@@ -141,18 +156,50 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       .os-f1 .report .subtotal{background:#fff0e7;color:#7c2d12;font-weight:700;border-top:2px solid #ff6819}.os-f1 .report tbody:nth-of-type(even){background:#fafafa}.os-f1 .report th,.os-f1 .report td{border-color:#e2e5e9;padding:12px 10px}.os-f1 .report thead{background:#272b31}.os-f1 .report .approval{background:#343a40}
       .os-f1 .report .rate{background:#ff6819;color:white}
       .os-f1 .report .approval{background:#00a8d9;color:white}
+
+      .os-f1{background:#f4f6fa;padding-top:0}
+      .os-f1 .os-dashboard-header{border-left:0;border-bottom:1px solid #e2e7ed;padding:16px 0;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+      .os-brand{display:flex;align-items:center;gap:18px}.os-brand img{width:150px;height:auto}.os-brand h1{font-size:20px;font-weight:750;margin:0;color:#242b36}.os-brand p{font-size:12px;color:#748094;margin:3px 0 0}
+      .os-back{width:36px;height:36px;border-radius:50%;background:white;display:grid;place-items:center;border:1px solid #e2e7ed}
+      .os-header-actions{display:flex;gap:10px}.os-primary,.os-export{border-radius:9px;padding:10px 16px;display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600}.os-primary{background:#ef5a14;color:white;border:0}.os-export{border:1px solid #dce2e9;background:white;color:#475569}
+      .os-f1 section.rounded-xl{border-color:#e4e9ef;box-shadow:0 4px 18px #8693a00c}
+      .os-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px}
+      .os-metric{display:flex;align-items:center;gap:14px;background:white;border:1px solid #e5eaf0;border-radius:15px;padding:22px 16px;box-shadow:0 5px 18px #8b98a710;min-width:0}
+      .os-metric p{font-size:12px;color:#778396;margin:0 0 6px}.os-metric strong{font-size:clamp(16px,1.5vw,23px);font-weight:750;letter-spacing:-.03em}.os-metric-icon{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;flex-shrink:0}
+      .os-metric-icon.orange{background:#fff0e6;color:#f2631c}.os-metric-icon.blue{background:#eaf1ff;color:#477be1}.os-metric-icon.cyan{background:#e8f7fb;color:#1199b1}.os-metric-icon.green{background:#e7f7ef;color:#16996a}.os-metric-icon.purple{background:#f2edff;color:#8860ce}
+      .os-analytics{display:grid;grid-template-columns:280px minmax(0,1fr) minmax(0,1fr);gap:20px}
+      .os-analytics>section{background:white;border:1px solid #e5eaf0;border-radius:15px;padding:22px}
+      .os-analytics h2,.os-analytics h3{font-size:13px;font-weight:700;color:#627188;margin:0 0 18px;padding-bottom:12px;border-bottom:1px solid #edf0f5}
+      .os-ring{height:128px;width:128px;border-radius:50%;padding:11px;margin:10px auto 20px}.os-ring>div{background:white;border-radius:50%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column}.os-ring strong{font-size:23px}.os-ring span{font-size:10px;color:#7c8797}
+      .os-status-list{display:grid;gap:8px}.os-status-list button{display:flex;justify-content:space-between;font-size:12px;color:#66778c}
+      .os-f1 table thead{background:#f5f7fa;color:#69778b}.os-f1 table th{text-transform:none;font-size:11px;font-weight:650;letter-spacing:0;white-space:nowrap}.os-f1 table td{font-size:12px;padding-top:14px;padding-bottom:14px}.os-f1 table tbody tr:hover{background:#fafbfd}
+      .os-f1 .report thead{background:#28303d;color:white}.os-f1 .report .rate{background:#ef5a14}.os-f1 .report .subtotal{background:#fff4ec;border-top:1px solid #ffd3b9}
+      .os-status{display:inline-block;border-radius:20px;padding:5px 10px;font-size:10px;font-weight:650}.os-status.waiting{background:#fff4df;color:#946315}.os-status.done{background:#e7f7ef;color:#16845c}.os-status.approved{background:#eaf1ff;color:#3768b6}
+      .os-drawer-overlay{position:fixed;inset:0;z-index:150;display:flex;justify-content:flex-end}.os-drawer-backdrop{position:absolute;inset:0;border:0;background:#15203560}.os-detail-drawer{position:relative;width:min(1080px,94vw);height:100%;overflow:auto;background:white;padding:24px;box-shadow:-10px 0 45px #15203525}.os-close{display:flex;align-items:center;gap:8px;margin-left:auto;padding:8px 12px;border-radius:8px;background:#f3f5f8;font-size:12px}
+      @media(max-width:1100px){.os-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.os-analytics{grid-template-columns:1fr 1fr}.os-progress{grid-column:1/-1}}
+      @media(max-width:700px){.os-metrics{grid-template-columns:1fr 1fr}.os-analytics{grid-template-columns:1fr}.os-brand{flex-wrap:wrap;gap:10px}.os-f1 .os-dashboard-header{padding-top:18px}.os-metric{padding:16px 10px;gap:8px}.os-metric-icon{width:32px;height:32px}.os-detail-drawer{width:100vw;padding:16px}}
     `}</style>
-    <header><a href="/" className="text-sm text-blue-700">Logística F1</a><h1 className="mt-2 text-3xl font-semibold">Análisis de OS</h1><p className="text-sm text-slate-600">Solicitudes de servicio y análisis por colector.</p></header>
+    <header className="os-dashboard-header">
+      <div className="os-brand"><a href="/" aria-label="Volver al inicio F1" className="os-back"><ArrowLeft size={20}/></a><Image src="/f1-services-logo-horizontal.png" alt="F1 Services & Solutions" width={180} height={58}/><div><h1>OS y Compras</h1><p>Seguimiento y rentabilidad</p></div></div>
+      <div className="os-header-actions"><button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{logistics&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
+    </header>
     {logistics && <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3">
       <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Solicitudes","Análisis por coordinador"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
       <label className="flex items-center gap-2 text-sm">Coordinador <select className="rounded-lg border border-slate-300 p-2" value={coordinator} onChange={e=>{setCoordinator(e.target.value);setSelected("");}}><option value="">Todos</option>{coordinators.map(name=><option key={name}>{name}</option>)}</select></label>
     </div>}
     {logistics && tab===0 && <>
       <p className="text-sm text-slate-600">La rentabilidad se actualiza al agregar gastos. Las LPU repetidas requieren una referencia para distinguir el ingreso principal y los adicionales.</p>
-      <section aria-label="Indicadores" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[[ "LPU total",money(summary.income)],["Gastos de OC",money(summary.oc)],["Gastos de OS",money(summary.os)],["Rate",summary.income>0?percent((summary.income-expense)/summary.income):"Pendiente"]].map(([label,value])=><div key={label} className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-sm font-medium text-slate-600">{label}</h2><p className="mt-2 text-2xl font-semibold text-blue-950">{value}</p></div>)}
+      <section aria-label="Indicadores" className="os-metrics">
+        {[
+          {label:"LPU total",value:money(summary.income),icon:CircleDollarSign,tone:"orange"},
+          {label:"Gastos de OC",value:money(summary.oc),icon:ShoppingCart,tone:"blue"},
+          {label:"Gastos de OS",value:money(summary.os),icon:FileText,tone:"cyan"},
+          {label:"Rate",value:summary.income>0?percent((summary.income-expense)/summary.income):"Sin LPU",icon:ChartNoAxesCombined,tone:"green"},
+          {label:"Colectores",value:String(matchingCollectors.length),icon:Layers,tone:"purple"}
+        ].map(metric=><div key={metric.label} className="os-metric"><span className={"os-metric-icon "+metric.tone}><metric.icon size={24}/></span><div><p>{metric.label}</p><strong>{metric.value}</strong></div></div>)}
       </section>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="os-analytics">
+        <section className="os-progress"><h2>Órdenes emitidas</h2><div className="os-ring" style={{background:`conic-gradient(#ff6819 ${visible.length?issued/visible.length*360:0}deg,#edf0f4 0deg)`}}><div><strong>{percent(visible.length?issued/visible.length:0)}</strong><span>de solicitudes</span></div></div><div className="os-status-list">{Object.entries(statusCounts).map(([label,count])=><button key={label} onClick={()=>{setStateFilter(label);setTab(1);}}><span>{label}</span><strong>{count}</strong></button>)}</div>{!visible.length&&<p className="text-sm text-slate-500">Sin solicitudes para estos filtros.</p>}</section>
         {[{title:"LPU y costo total F1",bars:[["LPU Entel",summary.income],["Costo total F1",expense]]},{title:"Gastos por origen",bars:[["OC",summary.oc],["OS",summary.os],["Gastos manuales",summary.manual]]}].map(({title,bars})=><section key={title} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">{title}</h2>{bars.map(([label,value],i)=><div key={label} className="space-y-1 text-sm"><div className="flex justify-between gap-2"><span>{label}</span><span>{money(Number(value))}</span></div><div className="h-3 overflow-hidden rounded bg-slate-100"><div className={`h-full ${i===0?"bg-blue-800":i===1?"bg-teal-600":"bg-amber-500"}`} style={{width:100*Math.max(0,Number(value))/Math.max(1,...bars.map(bar=>Number(bar[1])))+"%"}}/></div></div>)}</section>)}
       </div>
     </>}
@@ -192,11 +239,12 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       <label>Registro de OC <input className="block text-sm" type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0];if(f)void load(f,true);e.target.value="";}}/></label>
       <p role="status" className="text-sm text-slate-700">{errors}</p>
     </section>}
-    {logistics && (tab===1 || tab===2) && <section className="flex flex-wrap items-end gap-4 rounded-xl border border-slate-200 bg-white p-5">
+    {logistics && <section className="flex flex-wrap items-end gap-4 rounded-xl border border-slate-200 bg-white p-5">
       <label className="min-w-64 flex-1 text-sm font-medium">Buscar colector, site o servicio
         <input type="search" className="mt-2 block w-full rounded-lg border border-slate-300 p-3" placeholder="Escribe parte del código o nombre…" value={search} onChange={e=>setSearch(e.target.value)}/>
       </label>
-      {tab===2 && <button className="rounded-lg border px-4 py-3" onClick={()=>{setSelected("");setSearch("");}}>Ver todos los colectores</button>}
+      <label className="text-sm font-medium">Estado<select className="mt-2 block rounded-lg border border-slate-300 p-3" value={stateFilter} onChange={e=>setStateFilter(e.target.value)}><option value="">Todos los estados</option>{[...new Set(["Pendiente","Analizada","Observada","Aprobada por correo","OS emitida",...requests.map(line=>line.details?.Status).filter(Boolean)])].map(label=><option key={label}>{label}</option>)}</select></label>
+      {tab===2 && <button className="rounded-lg border px-4 py-3" onClick={()=>{setSelected("");setSearch("");setStateFilter("");}}>Ver todos los colectores</button>}
       <span role="status" className="text-sm text-slate-600">{matchingCollectors.length} colectores</span>
     </section>}
     {logistics && tab===2 && <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
@@ -221,16 +269,16 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
         </tbody>)}
       </table></div>}
     </section>}
-    {tab===1 && <section className="rounded-xl border bg-white p-5">
+    {(tab===1 || (logistics&&tab===0)) && <section className="os-request-table rounded-xl border bg-white p-5">
       <h2 className="mb-3 text-xl font-semibold">{logistics?"Bandeja de solicitudes":"Mis solicitudes"} <span className="text-sm font-normal text-slate-500">({visible.length})</span></h2>
       {visible.length===0 ? <p className="text-sm text-slate-600">Todavía no hay solicitudes para mostrar.</p> : <div className="max-h-96 overflow-auto"><table className="w-full text-left text-sm">
         <thead className="sticky top-0 bg-slate-100"><tr>{["Estado","Coordinador","Colector","Site","Servicio",...fields,"Monto solicitado","LPU Entel","Origen"].map(label=><th key={label} className="p-2">{label}</th>)}</tr></thead>
-        <tbody>{visible.map(line=><tr key={line.key} className="border-b"><td className="p-2 whitespace-nowrap">{status(line)}</td><td className="p-2">{line.coordinator}</td>
+        <tbody>{visible.map(line=><tr key={line.key} className="border-b"><td className="p-2 whitespace-nowrap"><span className={"os-status "+(status(line).includes("emitida")?"done":status(line).includes("Aprob")?"approved":"waiting")}>{status(line)}</span></td><td className="p-2">{line.coordinator}</td>
         <td className="p-2">{logistics?<button className="text-left text-blue-800 underline" onClick={()=>{setSelected(line.collector);setTab(2);}}>{line.collector}</button>:line.collector}</td>
         <td className="p-2">{line.site}</td><td className="p-2">{line.description}</td>{fields.map(field=><td key={field} className="p-2">{line.details?.[field] || "—"}</td>)}<td className="p-2">{money(line.cost)}</td><td className="p-2">{line.lpu?money(line.lpu):"—"}</td><td className="p-2">{line.details?.Origen || (line.source==="Solicitud"?"Excel":line.source)}</td></tr>)}</tbody>
       </table></div>}
     </section>}
-    {logistics && tab===2 && selected && <section className="space-y-4 rounded-xl border bg-white p-5">
+    {logistics && tab===2 && selected && <div className="os-drawer-overlay"><button className="os-drawer-backdrop" aria-label="Cerrar detalle" onClick={()=>setSelected("")}/><section role="dialog" aria-modal="true" aria-label={"Detalle del colector "+selected} className="os-detail-drawer space-y-4"><button autoFocus className="os-close" onClick={()=>setSelected("")}><X size={18}/>Cerrar detalle</button>
       <h2 className="text-xl font-semibold">Editar gastos · {selected}</h2>
       <p className="text-sm">Los gastos ingresados en solicitudes guardadas y los documentos de órdenes se conservan. Las exclusiones de costos y los checks de aprobación de esta vista son temporales. Desmarca un costo si ya está incluido en otra línea. Si hay varias filas con LPU, usa la misma referencia para el mismo ingreso y una diferente para cada adicional.</p>
       <div className="overflow-x-auto">
@@ -298,6 +346,6 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
         </article>)}
       </section>
       <div className="flex flex-wrap items-center gap-5 border-t pt-4"><button className="rounded bg-blue-800 px-4 py-2 text-white disabled:opacity-50" disabled={conflict||income<=0} onClick={()=>{ const included=detail.filter(line=>line.included); const sum=(source:string)=>included.filter(line=>line.source===source).reduce((n,line)=>n+line.cost,0); const oc=sum("OC"),manual=sum("Manual")+sum("Manual guardado"); setReviewed(old=>({...old,[selected]:{income,oc,manual,os:total-oc-manual}})); }}>Validar cálculo</button></div>
-    </section>}
+    </section></div>}
   </div></main>;
 }
