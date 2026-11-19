@@ -41,7 +41,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
 
   const module=typeof params.modulo==="string"?params.modulo:"";
   const adminSetup=access.role==="ADMINISTRADOR" && (params.administrar==="tecnicos" || params.administrar==="conductores");
-  if (!["equipos","vehiculos","activos","documentos"].includes(module) && !adminSetup) {
+  if(module==="configuracion" && access.role!=="ADMINISTRADOR")redirect("/");
+  if (!["equipos","vehiculos","activos","documentos","configuracion"].includes(module) && !adminSetup) {
     return <ModuleHome name={access.displayName || user.displayName} role={access.role} signOut={signOutPath()} />;
   }
 
