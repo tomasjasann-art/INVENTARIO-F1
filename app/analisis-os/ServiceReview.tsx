@@ -3,7 +3,7 @@ import {useEffect,useState} from "react";
 import {useRouter} from "next/navigation";
 
 type Request={key:string;collector:string;description:string;coordinator:string;details?:Record<string,unknown>};
-type Message={fecha:string;usuario:string;accion:string;mensaje:string};
+type Message={fecha:string;usuario:string;accion:string;mensaje:string;montoCorregido?:string;descripcionCorregida?:string};
 export default function ServiceReview({requests,canReview,canOperate,save}:{requests:Request[];canReview:boolean;canOperate:boolean;save:(data:FormData)=>Promise<string|null>}){
  const router=useRouter();
  const [open,setOpen]=useState("");
@@ -28,7 +28,7 @@ export default function ServiceReview({requests,canReview,canOperate,save}:{requ
     </button>
     {open===request.key&&<div className="space-y-3 border-t p-4">
      {messages.length===0&&<p className="text-sm text-slate-500">Esta solicitud aún no tiene comentarios de revisión.</p>}
-     {messages.map((message,index)=><div key={index} className="rounded-lg bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2 text-xs text-slate-500"><strong>{message.accion}</strong><time>{new Date(message.fecha).toLocaleString("es-PE",{timeZone:"America/Lima"})}</time></div><p className="mt-2 whitespace-pre-wrap">{message.mensaje || "Solicitud aprobada."}</p><small className="text-slate-500">{message.usuario}</small></div>)}
+     {messages.map((message,index)=><div key={index} className="rounded-lg bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2 text-xs text-slate-500"><strong>{message.accion}</strong><time>{new Date(message.fecha).toLocaleString("es-PE",{timeZone:"America/Lima"})}</time></div><p className="mt-2 whitespace-pre-wrap">{message.mensaje || "Solicitud aprobada."}</p>{message.montoCorregido&&<p className="text-xs text-slate-600">Monto corregido · S/ {message.montoCorregido}</p>}{message.descripcionCorregida&&<p className="text-xs text-slate-600">Servicio corregido · {message.descripcionCorregida}</p>}<small className="text-slate-500">{message.usuario}</small></div>)}
      {(canReview || (!canOperate&&status==="Observada"))&&status!=="OS emitida"&&<form className="space-y-3" onSubmit={async event=>{
       event.preventDefault();const form=event.currentTarget;const data=new FormData(form);const submitter=(event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement;
       data.set("id",request.key);data.set("version",String(details["Revisión versión"]??0));data.set("action",submitter.value);setBusy(true);
@@ -36,6 +36,7 @@ export default function ServiceReview({requests,canReview,canOperate,save}:{requ
       catch{setNotice("No se pudo confirmar el envío. Actualiza antes de reintentar.");}finally{setBusy(false);}
      }}>
       <label className="block text-sm">{canReview?"Comentario para el coordinador":"Sustento o explicación de la modificación"}<textarea name="message" maxLength={4000} rows={3} className="mt-1 block w-full rounded border p-2"/></label>
+      {!canReview&&<div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Monto corregido (opcional)<input name="correctedCost" type="number" min="0.01" step="0.01" className="mt-1 block w-full rounded border p-2"/></label><label className="text-sm">Servicio corregido (opcional)<input name="correctedDescription" maxLength={1000} className="mt-1 block w-full rounded border p-2"/></label></div>}
       {canReview?<div className="flex flex-wrap gap-2"><button value="observe" disabled={busy} className="rounded border border-orange-300 px-4 py-2 text-sm text-orange-800">Solicitar modificación / sustento</button><button value="approve" disabled={busy||status==="Observada"||status==="Aprobada"} className="rounded bg-emerald-700 px-4 py-2 text-sm text-white disabled:opacity-40">Aprobar solicitud</button></div>:<button value="reply" disabled={busy} className="rounded bg-orange-600 px-4 py-2 text-sm text-white">Enviar sustento a José</button>}
       {status==="Observada"&&canReview&&<p className="text-xs text-orange-800">Esperando la respuesta del coordinador para habilitar la aprobación.</p>}
      </form>}
