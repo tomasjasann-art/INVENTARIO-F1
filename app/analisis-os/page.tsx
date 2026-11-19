@@ -103,5 +103,10 @@ export default async function AnalysisPage() {
        lpu::float8 AS lpu, reference, (details - 'PDF') || jsonb_build_object('Fecha de solicitud',created_at::text) AS details FROM public.f1_os_requests
        ${logistics ? sql`` : sql`WHERE owner_email = ${user.email}`} ORDER BY created_at DESC`);
   const suppliers=await getDb().execute<{ruc:string;name:string}>(sql`SELECT document_number AS ruc,business_name AS name FROM suppliers WHERE active=true ORDER BY business_name`);
-  return <Analysis suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics} fields={fields} submit={submit} />;
+  const purchaseExpenses=logistics ? await getDb().execute<{
+    key:string;collector:string;coordinator:string;site:string;description:string;cost:number;lpu:number;reference:string;details:Record<string,string>;
+  }>(sql`SELECT id::text AS key,collector,'' AS coordinator,'' AS site,description,subtotal::float8 AS cost,0::float8 AS lpu,'' AS reference,
+    details || jsonb_build_object('Número OC',order_number,'IGV',tax::text,'Total con IGV',total::text,'Origen','OC registrada') AS details
+    FROM public.f1_os_purchase_expenses ORDER BY created_at DESC`) : [];
+  return <Analysis purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics} fields={fields} submit={submit} />;
 }
