@@ -34,7 +34,7 @@ async function submit(form: FormData) {
   const {user, coordinator: ownCoordinator, logistics} = await getAccess();
   const selectedCoordinator=String(form.get("coordinator")??"").trim();
   let coordinator=ownCoordinator;
-  if(logistics){
+  if(selectedCoordinator){
     const found=await getDb().execute(sql`SELECT name FROM coordinators WHERE active=true AND organization=\'F1\' AND name=${selectedCoordinator} LIMIT 1`);
     if(!found.length)return "Selecciona un coordinador F1 de la lista.";
     coordinator=String(found[0].name);
