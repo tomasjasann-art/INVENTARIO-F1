@@ -17,14 +17,16 @@ function storedExpenses(line:Saved):Expense[]{
   if(Array.isArray(value)) return value as Expense[];
   return [];
 }
-function initialLines(saved:Saved[]):Line[]{
-  return saved.flatMap(line=>[{...line,source:"Plataforma",included:true},...storedExpenses(line).map(expense=>({key:expense.id,collector:line.collector,coordinator:line.coordinator,site:line.site,description:expense.descripcion,cost:expense.monto,lpu:0,reference:"",source:"Manual guardado",included:true}))]);
+function initialLines(saved:Saved[],purchaseExpenses:Saved[]=[]):Line[]{
+  const requests=saved.flatMap(line=>[{...line,source:"Plataforma",included:true},...storedExpenses(line).map(expense=>({key:expense.id,collector:line.collector,coordinator:line.coordinator,site:line.site,description:expense.descripcion,cost:expense.monto,lpu:0,reference:"",source:"Manual guardado",included:true}))]);
+  return [...requests,...purchaseExpenses.map(line=>({...line,coordinator:saved.find(request=>request.collector===line.collector)?.coordinator || "Sin coordinador asignado",source:"OC",included:true}))];
+
 }
 type Saved = Omit<Line,"source"|"included">;
-export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking}: {
-  saved:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
+export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses}: {
+  saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
 }){
-  const [lines,setLines] = useState<Line[]>(() => initialLines(saved));
+  const [lines,setLines] = useState<Line[]>(() => initialLines(saved,purchaseExpenses));
   const [tab,setTab] = useState(logistics?0:1);
   const [reviewed,setReviewed] = useState<Record<string,{income:number;oc:number;os:number;manual:number}>>({});
   const [approvals,setApprovals] = useState<Record<string,boolean>>({});
@@ -36,11 +38,11 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   useEffect(()=>{
     setLines(old=>{
       const previous=new Map(old.map(line=>[line.key,line]));
-      const next=initialLines(saved).map(line=>({...line,included:previous.get(line.key)?.included??true,reference:previous.get(line.key)?.reference??line.reference}));
+      const next=initialLines(saved,purchaseExpenses).map(line=>({...line,included:previous.get(line.key)?.included??true,reference:previous.get(line.key)?.reference??line.reference}));
       const keys=new Set(next.map(line=>line.key));
-      return [...next,...old.filter(line=>!keys.has(line.key) && line.source!=="Plataforma" && line.source!=="Manual guardado")];
+      return [...next,...old.filter(line=>!keys.has(line.key) && line.source!=="Plataforma" && line.source!=="Manual guardado" && line.details?.Origen!=="OC registrada")];
     });
-  },[saved]);
+  },[saved,purchaseExpenses]);
   const [errors,setErrors] = useState("");
   const [coordinator,setCoordinator] = useState("");
   const [ruc,setRuc] = useState("");
@@ -89,7 +91,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       setErrors(data.length+" filas cargadas."+ (warnings.length?" Filas omitidas por datos incompletos o inválidos: "+warnings.join(", "):""));
     } catch(error){setErrors(error instanceof Error?error.message:"Error al leer el Excel");}
   }
-  const requests=lines.filter(line=>line.source==="Solicitud" || line.source==="Plataforma");
+  const requests=lines.filter(line=>line.source==="Solicitud" || line.source==="Plataforma" || line.details?.Origen==="OC registrada");
   const coordinators=[...new Set(requests.map(line=>line.coordinator))].filter(Boolean).sort();
   const collectors=[...new Set(requests.filter(line=>!coordinator||line.coordinator===coordinator).map(line=>line.collector))].sort();
   const matches=(line:Line)=>(!stateFilter || (approvals[line.collector]?"Aprobada por correo":reviewed[line.collector]?"Analizada":line.details?.Status || "Pendiente")===stateFilter) && (!coordinator || line.coordinator===coordinator) && [line.collector,line.site,line.description,line.coordinator,line.details?.RUC || "",line.details?.Contratista || ""].some(value=>norm(value).includes(norm(search.trim())));
@@ -97,7 +99,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const matchingCollectors=[...new Set(visible.map(line=>line.collector))];
   const groups=matchingCollectors.map(collector=>{
     const entries=lines.filter(line=>line.collector===collector);
-    const primary=entries.find(line=>line.source==="Plataforma" || line.source==="Solicitud");
+    const primary=entries.find(line=>line.source==="Plataforma" || line.source==="Solicitud") || entries[0];
     const revenues=new Map<string,number>();
     const revenueRows=entries.filter(line=>line.lpu>0);
     let pending=false;
@@ -120,11 +122,11 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   }
   const income=[...revenue.values()].reduce((sum,n)=>sum+n,0);
   const total=detail.filter(line=>line.included).reduce((sum,line)=>sum+line.cost,0);
-  const summary=groups.filter(group=>!group.pending&&group.income>0).map(group=>{
+  const summary=groups.map(group=>{
     const included=group.entries.filter(line=>line.included);
     const oc=included.filter(line=>line.source==="OC").reduce((a,line)=>a+line.cost,0);
     const manual=included.filter(line=>line.source.startsWith("Manual")).reduce((a,line)=>a+line.cost,0);
-    return {income:group.income,oc,manual,os:group.cost-oc-manual};
+    return {income:group.pending?0:group.income,oc,manual,os:group.cost-oc-manual};
   }).reduce((a,b)=>({income:a.income+b.income,oc:a.oc+b.oc,os:a.os+b.os,manual:a.manual+b.manual}),{income:0,oc:0,os:0,manual:0});
   const expense=summary.oc+summary.os+summary.manual;
   const percent=(value:number)=>value.toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2});
@@ -214,7 +216,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
           {label:"LPU total",value:money(summary.income),icon:CircleDollarSign,tone:"orange"},
           {label:"Gastos de OC",value:money(summary.oc),icon:ShoppingCart,tone:"blue"},
           {label:"Gastos de OS",value:money(summary.os),icon:FileText,tone:"cyan"},
-          {label:"Rate",value:summary.income>0?percent((summary.income-expense)/summary.income):"Sin LPU",icon:ChartNoAxesCombined,tone:"green"},
+          {label:"Rate",value:summary.income>0&&groups.every(group=>!group.pending&&group.income>0)?percent((summary.income-expense)/summary.income):"Sin LPU",icon:ChartNoAxesCombined,tone:"green"},
           {label:"Colectores",value:String(matchingCollectors.length),icon:Layers,tone:"purple"}
         ].map(metric=><div key={metric.label} className="os-metric"><span className={"os-metric-icon "+metric.tone}><metric.icon size={24}/></span><div><strong>{metric.value}</strong><p>{metric.label}</p></div></div>)}
       </section>
@@ -283,7 +285,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
               <td rowSpan={group.entries.length}>{group.primary?.details?.Cliente || "—"}</td>
               <td rowSpan={group.entries.length}><button className="text-left text-blue-800 underline" onClick={()=>setSelected(group.collector)}>{group.collector}</button></td>
             </>}
-            <td>{line.details?.Contratista || "—"}</td><td>{line.description}{!line.included && <span className="block text-slate-500">Excluido del costo</span>}</td><td className="whitespace-nowrap text-right">{money(line.cost)}</td><td className="whitespace-nowrap text-right">{line.lpu>0?money(line.lpu):"—"}</td>
+            <td>{line.details?.Contratista || "—"}</td><td>{line.description}{line.details?.["Número OC"] && <small className="block text-slate-500">OC {line.details["Número OC"]} · IGV {line.details.IGV} · Total {line.details["Total con IGV"]}</small>}{!line.included && <span className="block text-slate-500">Excluido del costo</span>}</td><td className="whitespace-nowrap text-right">{money(line.cost)}</td><td className="whitespace-nowrap text-right">{line.lpu>0?money(line.lpu):"—"}</td>
             {index===0 && <>
               <td rowSpan={group.entries.length+1} className="text-center font-bold">{!group.pending&&group.income>0?percent((group.income-group.cost)/group.income):group.pending?"Revisar LPU":"Sin LPU"}</td>
               <td rowSpan={group.entries.length+1} className="text-center"><label><input type="checkbox" disabled={!reviewed[group.collector]} checked={approvals[group.collector]??false} onChange={e=>setApprovals(old=>({...old,[group.collector]:e.target.checked}))}/> OK por correo</label></td>
