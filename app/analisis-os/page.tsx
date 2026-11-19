@@ -123,9 +123,15 @@ async function importPurchasePdf(form:FormData){
  const result=z.array(z.object({collector:z.string().trim().min(1).max(160),ceco:z.string().trim().max(30),description:z.string().trim().min(1).max(4000),cost:z.coerce.number().positive().max(999999999),tax:z.coerce.number().nonnegative().max(999999999)})).min(1).max(200).safeParse(parsed);
  if(!result.success)return "Revisa el colector, descripción, subtotal e IGV de cada línea.";
  const pdf=form.get("pdf");
- if(!(pdf instanceof File)||pdf.size===0||pdf.size>2*1024*1024)return "Selecciona un PDF de hasta 2 MB.";
- const bytes=Buffer.from(await pdf.arrayBuffer());
- if(bytes.subarray(0,5).toString()!=="%PDF-")return "El archivo no es un PDF válido.";
+ const link=String(form.get("link")??"").trim();
+ if(link&&!/^https?:\/\//i.test(link))return "El enlace debe comenzar con https:// o http://.";
+ let bytes:Buffer|null=null;
+ if(pdf instanceof File&&pdf.size){
+  if(pdf.size>2*1024*1024)return "Selecciona un PDF de hasta 2 MB.";
+  bytes=Buffer.from(await pdf.arrayBuffer());
+  if(bytes.subarray(0,5).toString()!=="%PDF-")return "El archivo no es un PDF válido.";
+ }else if(!link)return "Adjunta un PDF o registra su enlace.";
+
  const order=header.data.order.toUpperCase();
  try{
   const response=await getDb().transaction(async tx=>{
@@ -134,7 +140,7 @@ async function importPurchasePdf(form:FormData){
    if(existing.length)return "La OC "+order+" ya está registrada. No se duplicaron sus gastos.";
    for(const [index,line] of result.data.entries()){
     const subtotal=Math.round(line.cost*100)/100,tax=Math.round(line.tax*100)/100,total=Math.round((subtotal+tax)*100)/100;
-    const details={"CECO":line.ceco,"Contratista":header.data.provider,"RUC":header.data.ruc,"Fecha":header.data.date,"Moneda":"PEN","Origen":"PDF OC","PDF":bytes.toString("base64"),"PDF nombre":pdf.name.slice(0,200),"Registrado por":user.email,"Solicitado":String(form.get("coordinator")??"").trim().slice(0,200),"Tipo de orden":"Orden de Compra"};
+    const details={"CECO":line.ceco,"Contratista":header.data.provider,"RUC":header.data.ruc,"Fecha":header.data.date,"Moneda":"PEN","Origen":"PDF OC",...(bytes&&pdf instanceof File?{"PDF":bytes.toString("base64"),"PDF nombre":pdf.name.slice(0,200)}:{}),"Link de OS":link,"Registrado por":user.email,"Solicitado":String(form.get("coordinator")??"").trim().slice(0,200),"Tipo de orden":"Orden de Compra"};
     await tx.execute(sql`INSERT INTO f1_os_purchase_expenses (order_number,collector,line_number,description,subtotal,tax,total,details) VALUES (${order},${line.collector.toUpperCase()},${index+1},${line.description},${subtotal},${tax},${total},${JSON.stringify(details)}::jsonb)`);
    }
    return null;
@@ -154,7 +160,7 @@ async function reviewService(form:FormData){
  if(action!=="approve"&&!message)return "Escribe el comentario o sustento.";
  try{
   const error=await getDb().transaction(async tx=>{
-   const records=await tx.execute<{owner_email:string;coordinator:string;details:Record<string,unknown>}>(sql`SELECT owner_email,coordinator,details FROM f1_os_requests WHERE id=${id} FOR UPDATE`);
+   const records=await tx.execute<{owner_email:string;coordinator:string;details:Record<string,unknown>}>(sql`SELECT owner_email,coordinator,details FROM f1_os_requests WHERE id=${id} AND COALESCE(details->>'Eliminada','false')!='true' FOR UPDATE`);
    const record=records[0];if(!record)return "Solicitud no encontrada.";
    if(record.details["Tipo de orden"]==="Orden de Compra")return "Las OC se registran sin aprobación.";
    const current=Number(record.details["Revisión versión"]??0);
@@ -182,6 +188,47 @@ async function reviewService(form:FormData){
  }catch{return "No se pudo guardar la revisión. Intenta nuevamente.";}
 }
 
+
+async function manageOrderLine(form:FormData){
+ "use server";
+ const {user,logistics}=await getAccess();
+ if(!logistics)return "Solo Logística puede modificar órdenes.";
+ const parsed=z.object({id:z.string().uuid(),kind:z.enum(["oc","os"]),action:z.enum(["document","delete"])}).safeParse(Object.fromEntries(form));
+ if(!parsed.success)return "Selecciona una línea válida.";
+ const {id,kind,action}=parsed.data;
+ const link=String(form.get("link")??"").trim();
+ const number=String(form.get("number")??"").trim();
+ let pdfData:Record<string,string>={};
+ if(action==="document"){
+  if(link&&!/^https?:\/\//i.test(link))return "El enlace debe comenzar con https:// o http://.";
+  const pdf=form.get("pdf");
+  if(pdf instanceof File&&pdf.size){
+   if(pdf.size>2*1024*1024)return "El PDF debe pesar como máximo 2 MB.";
+   const bytes=Buffer.from(await pdf.arrayBuffer());
+   if(bytes.subarray(0,5).toString()!=="%PDF-")return "Selecciona un PDF válido.";
+   pdfData={"PDF":bytes.toString("base64"),"PDF nombre":pdf.name.slice(0,200)};
+  }
+ }
+ try{
+  const error=await getDb().transaction(async tx=>{
+   const table=kind==="oc"?sql`f1_os_purchase_expenses`:sql`f1_os_requests`;
+   const rows=await tx.execute<{details:Record<string,unknown>}>(sql`SELECT details FROM ${table} WHERE id=${id} FOR UPDATE`);
+   if(!rows[0] || rows[0].details.Eliminada===true)return "La línea ya fue retirada.";
+   const details=rows[0].details;
+   if(action==="document" && kind==="os" && details["Tipo de orden"]!=="Orden de Compra" && details.Status!=="Aprobada" && details.Status!=="OS emitida")return "La solicitud requiere aprobación de José antes de cargar su OS.";
+   if(action==="document" && !link && !pdfData.PDF && !details["PDF nombre"])return "Adjunta un PDF o registra su enlace.";
+   if(action==="document" && kind==="os" && !number)return "Ingresa el número de OS.";
+   const patch:Record<string,unknown>=action==="delete"
+    ? {Eliminada:true,"Eliminada por":user.email,"Fecha eliminación":new Date().toISOString()}
+    : {...pdfData,"Link de OS":link,...(kind==="os"?{"OS Contrata":number,Status:"OS emitida"}:{})};
+   const event={fecha:new Date().toISOString(),usuario:user.email,accion:action==="delete"?"Línea retirada":"PDF o enlace de orden actualizado"};
+   await tx.execute(sql`UPDATE ${table} SET details=(details || ${JSON.stringify(patch)}::jsonb) || jsonb_build_object('Eventos',COALESCE(details->'Eventos','[]'::jsonb) || ${JSON.stringify(event)}::jsonb) WHERE id=${id}`);
+   return null;
+  });
+  revalidatePath("/analisis-os");return error;
+ }catch{return "No se pudo guardar el cambio. Intenta nuevamente.";}
+}
+
 export default async function AnalysisPage() {
   const {user, logistics, canReview, coordinator} = await getAccess();
   const rows = await getDb().execute<{
@@ -189,13 +236,13 @@ export default async function AnalysisPage() {
     cost: number; lpu: number; reference: string; details: Record<string,string>;
   }>(sql`SELECT id::text AS key, collector, coordinator, site, description, cost::float8 AS cost,
        lpu::float8 AS lpu, reference, (details - 'PDF') || jsonb_build_object('Fecha de solicitud',created_at::text) AS details FROM public.f1_os_requests
-       ${logistics || canReview ? sql`` : sql`WHERE owner_email = ${user.email} OR coordinator = ${coordinator}`} ORDER BY created_at DESC`);
+       ${logistics || canReview ? sql`WHERE COALESCE(details->>\'Eliminada\',\'false\')!=\'true\'` : sql`WHERE (owner_email = ${user.email} OR coordinator = ${coordinator}) AND COALESCE(details->>\'Eliminada\',\'false\')!=\'true\'`} ORDER BY created_at DESC`);
   const suppliers=await getDb().execute<{ruc:string;name:string}>(sql`SELECT document_number AS ruc,business_name AS name FROM suppliers WHERE active=true ORDER BY business_name`);
   const purchaseExpenses=(logistics || canReview) ? await getDb().execute<{
     key:string;collector:string;coordinator:string;site:string;description:string;cost:number;lpu:number;reference:string;details:Record<string,string>;
   }>(sql`SELECT id::text AS key,collector,COALESCE(details->>'Solicitado',details->>'Solicitante','') AS coordinator,'' AS site,description,subtotal::float8 AS cost,0::float8 AS lpu,'' AS reference,
     (details - 'PDF') || jsonb_build_object('Número OC',order_number,'IGV',tax::text,'Total con IGV',total::text,'Origen','OC registrada') AS details
-    FROM public.f1_os_purchase_expenses ORDER BY created_at DESC`) : [];
+    FROM public.f1_os_purchase_expenses WHERE COALESCE(details->>'Eliminada','false')!='true' ORDER BY created_at DESC`) : [];
   const coordinatorOptions=await getDb().execute<{name:string}>(sql`SELECT name FROM coordinators WHERE active=true AND organization='F1' ORDER BY name`);
-  return <Analysis canReview={canReview} canOperate={logistics} reviewService={reviewService} coordinatorOptions={Array.from(coordinatorOptions).map(item=>item.name)} importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics || canReview} fields={fields} submit={submit} />;
+  return <Analysis manageOrderLine={manageOrderLine} canReview={canReview} canOperate={logistics} reviewService={reviewService} coordinatorOptions={Array.from(coordinatorOptions).map(item=>item.name)} importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics || canReview} fields={fields} submit={submit} />;
 }
