@@ -5,6 +5,8 @@ type Item={collector:string;description:string;cost:string;tax:string;ceco:strin
 type PdfItem={str:string;transform:number[]};
 function number(value:string){return Number(value.replace(/,/g,""));}
 export default function PurchasePdfImport({save,coordinators}:{coordinators:string[];save:(data:FormData)=>Promise<string|null>}){
+ const [link,setLink]=useState("");
+ const [linkMode,setLinkMode]=useState(false);
  const [file,setFile]=useState<File|null>(null);
  const [order,setOrder]=useState("");
  const [provider,setProvider]=useState("");
@@ -17,7 +19,7 @@ export default function PurchasePdfImport({save,coordinators}:{coordinators:stri
  const [raw,setRaw]=useState("");
  function patch(index:number,field:keyof Item,value:string){setItems(old=>old.map((item,i)=>i===index?{...item,[field]:value}:item));}
  async function read(pdf:File){
-  setFile(pdf);setItems([]);setRaw("");setOrder("");setProvider("");setRuc("");setDate("");setCoordinator("");setBusy(true);setMessage("Leyendo PDF…");
+  setLinkMode(false);setFile(pdf);setItems([]);setRaw("");setOrder("");setProvider("");setRuc("");setDate("");setCoordinator("");setBusy(true);setMessage("Leyendo PDF…");
   try{
    if(pdf.size>2*1024*1024)throw new Error("El PDF debe pesar como máximo 2 MB.");
    const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -79,13 +81,15 @@ export default function PurchasePdfImport({save,coordinators}:{coordinators:stri
   <h2 className="text-lg font-semibold">Registrar gastos de OC desde PDF</h2>
   <p className="text-sm text-slate-600">El gasto se asigna al colector de cada línea. Se conserva el subtotal sin IGV, el impuesto y el documento.</p>
   <input aria-label="PDF de orden de compra" type="file" accept="application/pdf" disabled={busy} onChange={e=>{const pdf=e.target.files?.[0];if(pdf)void read(pdf);e.target.value="";}}/>
+  <button type="button" className="ml-3 rounded border px-3 py-2 text-sm" onClick={()=>{setLinkMode(true);setFile(null);setItems([{collector:"",description:"",cost:"",tax:"",ceco:""}]);setMessage("Completa las líneas y registra el enlace del documento.");}}>Registrar OC por enlace</button>
   <p role="status" className="text-sm">{message}</p>
-  {file&&items.length>0&&<form className="space-y-4" onSubmit={async e=>{
+  {(file||linkMode)&&items.length>0&&<form className="space-y-4" onSubmit={async e=>{
    e.preventDefault();if(busy)return;setBusy(true);
-   try{const data=new FormData();data.set("pdf",file);data.set("order",order);data.set("provider",provider);data.set("ruc",ruc);data.set("date",date);data.set("coordinator",coordinator);data.set("items",JSON.stringify(items));const error=await save(data);setMessage(error??"OC registrada. Sus gastos ya aparecen por colector.");if(!error){setFile(null);setItems([]);}}
+   try{const data=new FormData();if(file)data.set("pdf",file);data.set("link",link);data.set("order",order);data.set("provider",provider);data.set("ruc",ruc);data.set("date",date);data.set("coordinator",coordinator);data.set("items",JSON.stringify(items));const error=await save(data);setMessage(error??"OC registrada. Sus gastos ya aparecen por colector.");if(!error){setFile(null);setLinkMode(false);setLink("");setItems([]);}}
    catch{setMessage("No se pudo confirmar el registro. Puedes reintentar la misma orden.");}
    finally{setBusy(false);}
   }}>
+   <label className="block text-sm">Enlace del PDF de OC<input type="url" value={link} required={!file} onChange={e=>setLink(e.target.value)} placeholder="https://…" className="mt-1 block w-full rounded border p-2"/></label>
    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[["Orden",order,setOrder],["Proveedor",provider,setProvider],["RUC proveedor",ruc,setRuc],["Fecha",date,setDate]].map(([label,value,setter])=><label key={label as string} className="text-sm">{label as string}<input required value={value as string} onChange={e=>(setter as (value:string)=>void)(e.target.value)} className="block w-full rounded border p-2"/></label>)}</div>
    <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Coordinador · Solicitado<input value={coordinator} onChange={e=>setCoordinator(e.target.value)} list="oc-coordinadores" required className="block w-full rounded border p-2" placeholder="Nombre extraído de Solicitado"/><datalist id="oc-coordinadores">{coordinators.map(name=><option key={name}>{name}</option>)}</datalist></label><label className="text-sm">Tipo de orden<input readOnly value="Orden de Compra" className="block w-full rounded border bg-slate-50 p-2"/></label></div>
    <div className="overflow-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead><tr>{["Colector","CECO","Descripción","Subtotal sin IGV","IGV","Total",""].map((label,i)=><th key={i} className="p-2">{label}</th>)}</tr></thead><tbody>{items.map((item,index)=><tr key={index}>{(["collector","ceco","description","cost","tax"] as const).map(field=><td key={field} className="p-1"><input aria-label={field+" "+(index+1)} required={field!=="ceco"} className="w-full min-w-24 rounded border p-2" type={field==="cost"||field==="tax"?"number":"text"} min={field==="cost"?"0.01":"0"} step="0.01" value={item[field]} onChange={e=>patch(index,field,e.target.value)}/></td>)}<td className="p-2">{((Number(item.cost)||0)+(Number(item.tax)||0)).toFixed(2)}</td><td><button type="button" disabled={items.length===1} onClick={()=>setItems(old=>old.filter((_,i)=>i!==index))}>Quitar</button></td></tr>)}</tbody></table></div>
