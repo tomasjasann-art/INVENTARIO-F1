@@ -212,7 +212,7 @@ async function manageOrderLine(form:FormData){
  try{
   const error=await getDb().transaction(async tx=>{
    const table=kind==="oc"?sql`f1_os_purchase_expenses`:sql`f1_os_requests`;
-   const rows=await tx.execute<{details:Record<string,unknown>}>(sql`SELECT details FROM ${table} WHERE id=${id} FOR UPDATE`);
+   const rows=await tx.execute<{details:Record<string,unknown>;collector:string}>(sql`SELECT details,collector FROM ${table} WHERE id=${id} FOR UPDATE`);
    if(!rows[0] || rows[0].details.Eliminada===true)return "La línea ya fue retirada.";
    const details=rows[0].details;
    if(action==="document" && kind==="os" && details["Tipo de orden"]!=="Orden de Compra" && details.Status!=="Aprobada" && details.Status!=="OS emitida")return "La solicitud requiere aprobación de José antes de cargar su OS.";
@@ -223,6 +223,10 @@ async function manageOrderLine(form:FormData){
     : {...pdfData,"Link de OS":link,...(kind==="os"?{"OS Contrata":number,Status:"OS emitida"}:{})};
    const event={fecha:new Date().toISOString(),usuario:user.email,accion:action==="delete"?"Línea retirada":"PDF o enlace de orden actualizado"};
    await tx.execute(sql`UPDATE ${table} SET details=(details || ${JSON.stringify(patch)}::jsonb) || jsonb_build_object('Eventos',COALESCE(details->'Eventos','[]'::jsonb) || ${JSON.stringify(event)}::jsonb) WHERE id=${id}`);
+   if(action==="delete"){
+    await tx.execute(sql`UPDATE f1_os_requests SET details=details || '{"Status":"Sustentada","Último mensaje":"Se retiró una línea del colector. Requiere revisar el análisis actualizado.","Mensaje para":"José Ortiz","Aprobado por":"","Fecha de aprobación":""}'::jsonb || jsonb_build_object('Revisión versión',COALESCE((details->>'Revisión versión')::int,0)+1)
+     WHERE collector=${rows[0].collector} AND details->>'Status'='Aprobada' AND COALESCE(details->>'Eliminada','false')!='true'`);
+   }
    return null;
   });
   revalidatePath("/analisis-os");return error;
