@@ -443,13 +443,13 @@ function userInitials(value: string) {
   return (parts.length > 1 ? `${parts[0][0]}${parts.at(-1)?.[0] ?? ""}` : parts[0]?.slice(0, 2) ?? "F1").toUpperCase();
 }
 
-export default function KardexApp({ user, signOutPath, technicianSetup = false, driverSetup = false }: { user: KardexUser; signOutPath: string; driverSetup?: boolean; technicianSetup?: boolean }) {
+export default function KardexApp({ user, signOutPath, technicianSetup = false, driverSetup = false, initialModule = "equipos" }: { initialModule?: string; user: KardexUser; signOutPath: string; driverSetup?: boolean; technicianSetup?: boolean }) {
   const [data, setData] = useState<KardexData>({ products: [], movements: [], stockMovements: [], stockReservations: [], sourceRecords: [], coordinators: [], suppliers: [], installationValidations: [], auditImports: [], auditRecords: [], auditHistoryRecords: [], equipmentRequests: [], equipmentReturns: [], productIdentifiers: [], appUsers: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [view, setView] = useState<View>((driverSetup || technicianSetup) ? "configuracion" : "resumen");
+  const [view, setView] = useState<View>((driverSetup || technicianSetup) ? "configuracion" : initialModule === "vehiculos" ? "flota" : initialModule === "activos" ? "activos" : initialModule === "documentos" ? "documentos" : "resumen");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<"movement" | "product" | "grIngreso" | null>(null);
   const [movementType, setMovementType] = useState<Movement["type"]>("entrada");
