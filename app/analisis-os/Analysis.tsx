@@ -9,11 +9,20 @@ const text = (n:unknown) => String(n ?? "").trim();
 const amount = (n:unknown) => Number(text(n).replace(/S\/|[\s,]/g,""));
 const norm = (s:string) => s.toUpperCase();
 
+type Expense={id:string;descripcion:string;monto:number;fecha:string;usuario:string;accion:string};
+function storedExpenses(line:Saved):Expense[]{
+  const value=line.details?.Gastos;
+  if(Array.isArray(value)) return value as Expense[];
+  return [];
+}
+function initialLines(saved:Saved[]):Line[]{
+  return saved.flatMap(line=>[{...line,source:"Plataforma",included:true},...storedExpenses(line).map(expense=>({key:expense.id,collector:line.collector,coordinator:line.coordinator,site:line.site,description:expense.descripcion,cost:expense.monto,lpu:0,reference:"",source:"Manual guardado",included:true}))]);
+}
 type Saved = Omit<Line,"source"|"included">;
-export default function Analysis({saved, logistics, fields, submit}: {
-  saved:Saved[]; logistics:boolean; fields:string[]; submit:(data:FormData)=>Promise<string|null>;
+export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking}: {
+  saved:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
 }){
-  const [lines,setLines] = useState<Line[]>(() => saved.map(line=>({...line,source:"Plataforma",included:true})));
+  const [lines,setLines] = useState<Line[]>(() => initialLines(saved));
   const [tab,setTab] = useState(logistics?0:1);
   const [reviewed,setReviewed] = useState<Record<string,{income:number;oc:number;os:number;manual:number}>>({});
   const [approvals,setApprovals] = useState<Record<string,boolean>>({});
@@ -24,12 +33,19 @@ export default function Analysis({saved, logistics, fields, submit}: {
   const [requestId,setRequestId] = useState("");
   useEffect(()=>{
     setLines(old=>{
-      const known = new Map(old.map(line=>[line.key,line]));
-      return [...saved.map(line=>known.get(line.key) ?? {...line,source:"Plataforma",included:true}), ...old.filter(line=>line.source!=="Plataforma")];
+      const previous=new Map(old.map(line=>[line.key,line]));
+      const next=initialLines(saved).map(line=>({...line,included:previous.get(line.key)?.included??true,reference:previous.get(line.key)?.reference??line.reference}));
+      const keys=new Set(next.map(line=>line.key));
+      return [...next,...old.filter(line=>!keys.has(line.key) && line.source!=="Plataforma" && line.source!=="Manual guardado")];
     });
   },[saved]);
   const [errors,setErrors] = useState("");
   const [coordinator,setCoordinator] = useState("");
+  const [ruc,setRuc] = useState("");
+  const [requestedCost,setRequestedCost] = useState("");
+  const [trackingMessage,setTrackingMessage] = useState("");
+  const [trackingBusy,setTrackingBusy] = useState(false);
+  const supplier=suppliers.find(item=>item.ruc===ruc);
   const [search,setSearch] = useState("");
   const [selected,setSelected] = useState("");
   const [cost,setCost] = useState("");
@@ -101,7 +117,12 @@ export default function Analysis({saved, logistics, fields, submit}: {
   }
   const income=[...revenue.values()].reduce((sum,n)=>sum+n,0);
   const total=detail.filter(line=>line.included).reduce((sum,line)=>sum+line.cost,0);
-  const summary=collectors.flatMap(key=>reviewed[key]?[reviewed[key]]:[]).reduce((a,b)=>({income:a.income+b.income,oc:a.oc+b.oc,os:a.os+b.os,manual:a.manual+b.manual}),{income:0,oc:0,os:0,manual:0});
+  const summary=groups.filter(group=>!group.pending&&group.income>0).map(group=>{
+    const included=group.entries.filter(line=>line.included);
+    const oc=included.filter(line=>line.source==="OC").reduce((a,line)=>a+line.cost,0);
+    const manual=included.filter(line=>line.source.startsWith("Manual")).reduce((a,line)=>a+line.cost,0);
+    return {income:group.income,oc,manual,os:group.cost-oc-manual};
+  }).reduce((a,b)=>({income:a.income+b.income,oc:a.oc+b.oc,os:a.os+b.os,manual:a.manual+b.manual}),{income:0,oc:0,os:0,manual:0});
   const expense=summary.oc+summary.os+summary.manual;
   const percent=(value:number)=>value.toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2});
   const status=(line:Line)=>approvals[line.collector]?"Aprobada por correo":reviewed[line.collector]?"Analizada":line.details?.Status || "Pendiente";
@@ -117,7 +138,7 @@ export default function Analysis({saved, logistics, fields, submit}: {
       .os-f1 .report{width:100%;min-width:1200px;border-collapse:collapse;font-size:12px}
       .os-f1 .report th,.os-f1 .report td{border:1px solid #b9c0c9;padding:8px}
       .os-f1 .report thead{background:#062051;color:white}
-      .os-f1 .report .subtotal{background:#00e99a;color:#06352b;font-weight:700}
+      .os-f1 .report .subtotal{background:#fff0e7;color:#7c2d12;font-weight:700;border-top:2px solid #ff6819}.os-f1 .report tbody:nth-of-type(even){background:#fafafa}.os-f1 .report th,.os-f1 .report td{border-color:#e2e5e9;padding:12px 10px}.os-f1 .report thead{background:#272b31}.os-f1 .report .approval{background:#343a40}
       .os-f1 .report .rate{background:#ff6819;color:white}
       .os-f1 .report .approval{background:#00a8d9;color:white}
     `}</style>
@@ -127,7 +148,7 @@ export default function Analysis({saved, logistics, fields, submit}: {
       <label className="flex items-center gap-2 text-sm">Coordinador <select className="rounded-lg border border-slate-300 p-2" value={coordinator} onChange={e=>{setCoordinator(e.target.value);setSelected("");}}><option value="">Todos</option>{coordinators.map(name=><option key={name}>{name}</option>)}</select></label>
     </div>}
     {logistics && tab===0 && <>
-      <p className="text-sm text-slate-600">Cifras de los colectores validados en esta sesión. Abre Análisis por coordinador para revisar un colector.</p>
+      <p className="text-sm text-slate-600">La rentabilidad se actualiza al agregar gastos. Las LPU repetidas requieren una referencia para distinguir el ingreso principal y los adicionales.</p>
       <section aria-label="Indicadores" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[[ "LPU total",money(summary.income)],["Gastos de OC",money(summary.oc)],["Gastos de OS",money(summary.os)],["Rate",summary.income>0?percent((summary.income-expense)/summary.income):"Pendiente"]].map(([label,value])=><div key={label} className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-sm font-medium text-slate-600">{label}</h2><p className="mt-2 text-2xl font-semibold text-blue-950">{value}</p></div>)}
       </section>
@@ -150,14 +171,20 @@ export default function Analysis({saved, logistics, fields, submit}: {
       try {
         const error=await submit(data);
         setSubmission(error ?? "Solicitud registrada.");
-        if(!error){form.reset();setRequestId("");}
+        if(!error){form.reset();setRequestId("");setRuc("");setRequestedCost("");}
       } catch {setSubmission("No se pudo confirmar el guardado. Puedes reintentar.");}
       finally {setSending(false);}
     }}>
-      {fields.map(field=><label key={field} className="text-sm">{field}<input name={field} maxLength={500} className="block w-full rounded border p-2"/></label>)}
+      {fields.filter(field=>field!=="Comentarios").map(field=><label key={field} className="text-sm">{field}
+        {field==="Tipo de comprobante" || field==="Tipo de orden" ? <select name={field} required className="block w-full rounded border p-2"><option value="">Seleccionar</option>{(field==="Tipo de comprobante"?["Factura","Recibo RXH"]:["Orden de Servicio","Orden de Compra"]).map(option=><option key={option}>{option}</option>)}</select>
+        :field==="RUC"?<><input name={field} list="os-proveedores" required value={ruc} onChange={e=>setRuc(e.target.value)} className="block w-full rounded border p-2" placeholder="Buscar RUC de proveedor"/><datalist id="os-proveedores">{suppliers.map(item=><option key={item.ruc} value={item.ruc}>{item.name}</option>)}</datalist>{ruc&&!supplier&&<span className="text-xs text-red-700">Selecciona un proveedor registrado.</span>}</>
+        :field==="Contratista"?<input name={field} readOnly value={supplier?.name??""} className="block w-full rounded border bg-slate-50 p-2"/>
+        :<input name={field} maxLength={500} className="block w-full rounded border p-2"/>}</label>)}
       {[["collector","Colector"],["site","Site"],["description","Servicio"],["reference","Referencia LPU si corresponde a un adicional"]].map(([name,label])=><label key={name} className="text-sm">{label}<input name={name} required={name!=="reference"} className="block w-full rounded border p-2"/></label>)}
-      <label className="text-sm">Monto solicitado<input name="cost" type="number" min="0.01" step="0.01" required className="block w-full rounded border p-2"/></label>
+      <label className="text-sm">Monto solicitado<input name="cost" value={requestedCost} onChange={e=>setRequestedCost(e.target.value)} type="number" min="0.01" step="0.01" required className="block w-full rounded border p-2"/></label>
       <label className="text-sm">LPU validada<input name="lpu" type="number" min="0" step="0.01" className="block w-full rounded border p-2"/></label>
+      <div className="flex flex-wrap gap-4 sm:col-span-2 lg:col-span-3">{[0.4,0.4,0.2].map((share,index)=><div key={index} className="rounded-lg bg-orange-50 p-3"><span className="block text-xs">{["Primer 40%","Segundo 40%","Saldo 20%"][index]}</span><strong>{money((Number(requestedCost)||0)*share)}</strong></div>)}</div>
+      <label className="text-sm sm:col-span-2 lg:col-span-3">Comentarios<textarea name="Comentarios" maxLength={500} className="block w-full rounded border p-2"/></label>
       <div className="sm:col-span-2"><button disabled={sending} className="rounded bg-blue-800 px-4 py-2 text-white disabled:opacity-50">{sending?"Guardando…":"Registrar solicitud"}</button> <span role="status">{submission}</span></div>
     </form>}
     {logistics && tab===1 && showImports && <section className="grid gap-4 rounded-xl border bg-white p-5 md:grid-cols-2">
@@ -186,7 +213,7 @@ export default function Analysis({saved, logistics, fields, submit}: {
             </>}
             <td>{line.details?.Contratista || "—"}</td><td>{line.description}{!line.included && <span className="block text-slate-500">Excluido del costo</span>}</td><td className="whitespace-nowrap text-right">{money(line.cost)}</td><td className="whitespace-nowrap text-right">{line.lpu>0?money(line.lpu):"—"}</td>
             {index===0 && <>
-              <td rowSpan={group.entries.length+1} className="text-center font-bold">{reviewed[group.collector]&&!group.pending&&group.income>0?percent((group.income-group.cost)/group.income):"Pendiente"}</td>
+              <td rowSpan={group.entries.length+1} className="text-center font-bold">{!group.pending&&group.income>0?percent((group.income-group.cost)/group.income):group.pending?"Revisar LPU":"Sin LPU"}</td>
               <td rowSpan={group.entries.length+1} className="text-center"><label><input type="checkbox" disabled={!reviewed[group.collector]} checked={approvals[group.collector]??false} onChange={e=>setApprovals(old=>({...old,[group.collector]:e.target.checked}))}/> OK por correo</label></td>
             </>}
           </tr>)}
@@ -205,7 +232,7 @@ export default function Analysis({saved, logistics, fields, submit}: {
     </section>}
     {logistics && tab===2 && selected && <section className="space-y-4 rounded-xl border bg-white p-5">
       <h2 className="text-xl font-semibold">Editar gastos · {selected}</h2>
-      <p className="text-sm">Las cargas de Excel, los gastos y las validaciones de esta vista son temporales. Desmarca un costo si ya está incluido en otra línea. Si hay varias filas con LPU, usa la misma referencia para el mismo ingreso y una diferente para cada adicional.</p>
+      <p className="text-sm">Los gastos ingresados en solicitudes guardadas y los documentos de órdenes se conservan. Las exclusiones de costos y los checks de aprobación de esta vista son temporales. Desmarca un costo si ya está incluido en otra línea. Si hay varias filas con LPU, usa la misma referencia para el mismo ingreso y una diferente para cada adicional.</p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1000px] border-collapse text-left text-sm">
           <thead className="bg-[#062051] text-white"><tr>{["Site","CECO","CLIENTE","Colector","Empresa Contratista","Descripción Servicio","Costo F1","LPU Entel","Rentabilidad","Validación José Ortiz"].map((label,index)=><th key={label} scope="col" className={`border border-slate-300 p-2 ${index===8?"bg-[#bc4300]":index===9?"bg-[#00769a]":""}`}>{label}</th>)}</tr></thead>
@@ -225,15 +252,52 @@ export default function Analysis({saved, logistics, fields, submit}: {
             <th scope="row" colSpan={6} className="p-2">Total del colector</th>
             <td className="p-2 whitespace-nowrap">{money(total)}</td>
             <td className="p-2 whitespace-nowrap">{conflict?"Por revisar":money(income)}</td>
-            <td className="p-2">{reviewed[selected]&&!conflict&&income>0?((income-total)/income).toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2}):"Pendiente"}</td>
+            <td className="p-2">{!conflict&&income>0?((income-total)/income).toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2}):"Pendiente"}</td>
             <td className="p-2"><label className="flex gap-2"><input type="checkbox" disabled={!reviewed[selected]} checked={approvals[selected]??false} onChange={e=>setApprovals(old=>({...old,[selected]:e.target.checked}))}/>OK por correo</label></td>
           </tr></tfoot>
         </table>
       </div>
-      <form className="flex flex-wrap items-end gap-2" onSubmit={e=>{e.preventDefault();if(!description.trim() || !Number.isFinite(amount(cost)) || amount(cost)<=0)return;setLines(old=>[...old,{key:crypto.randomUUID(),collector:selected,coordinator:"",site:"",description:description.trim(),cost:amount(cost),lpu:0,reference:"",source:"Manual",included:true}]);setDescription("");setCost("");invalidate(selected);}}>
-        <label>Gasto manual <input className="block rounded border p-2" required value={description} onChange={e=>setDescription(e.target.value)}/></label><label>Monto <input className="block rounded border p-2" type="number" min="0.01" step="0.01" required value={cost} onChange={e=>setCost(e.target.value)}/></label><button className="rounded border p-2">Agregar gasto</button>
-      </form>
-      <div className="flex flex-wrap items-center gap-5 border-t pt-4"><button className="rounded bg-blue-800 px-4 py-2 text-white disabled:opacity-50" disabled={conflict||income<=0} onClick={()=>{ const included=detail.filter(line=>line.included); const sum=(source:string)=>included.filter(line=>line.source===source).reduce((n,line)=>n+line.cost,0); const oc=sum("OC"),manual=sum("Manual"); setReviewed(old=>({...old,[selected]:{income,oc,manual,os:total-oc-manual}})); }}>Validar cálculo</button></div>
+      <section className="grid gap-5 lg:grid-cols-2">
+        <form className="space-y-3 rounded-xl border bg-orange-50/40 p-4" onSubmit={async e=>{
+          e.preventDefault(); const form=e.currentTarget; const data=new FormData(form);
+          data.set("kind","expense");data.set("expenseId",crypto.randomUUID());
+          setTrackingBusy(true);
+          try{const error=await saveTracking(data);setTrackingMessage(error??"Gasto guardado.");if(!error)form.reset();}
+          catch{setTrackingMessage("No se pudo guardar el gasto.");}
+          finally{setTrackingBusy(false);}
+        }}>
+          <h3 className="font-semibold">Agregar gasto al colector</h3>
+          <label className="block text-sm">Solicitud<select name="request" required className="block w-full rounded border p-2"><option value="">Seleccionar solicitud</option>{saved.filter(line=>line.collector===selected).map(line=><option key={line.key} value={line.key}>{line.description}</option>)}</select></label>
+          <label className="block text-sm">Descripción<input name="description" required className="block w-full rounded border p-2"/></label>
+          <label className="block text-sm">Importe<input name="cost" type="number" min="0.01" step="0.01" required className="block w-full rounded border p-2"/></label>
+          <button disabled={trackingBusy} className="rounded bg-blue-800 px-4 py-2 text-white">Guardar gasto</button>
+        </form>
+        <form className="space-y-3 rounded-xl border p-4" onSubmit={async e=>{
+          e.preventDefault();const form=e.currentTarget;const data=new FormData(form);data.set("kind","order");setTrackingBusy(true);
+          try{const error=await saveTracking(data);setTrackingMessage(error??"Orden emitida guardada.");if(!error)form.reset();}
+          catch{setTrackingMessage("No se pudo guardar la orden.");}
+          finally{setTrackingBusy(false);}
+        }}>
+          <h3 className="font-semibold">Orden generada en Odoo</h3>
+          <label className="block text-sm">Solicitud<select name="request" required className="block w-full rounded border p-2"><option value="">Seleccionar solicitud</option>{saved.filter(line=>line.collector===selected).map(line=><option key={line.key} value={line.key}>{line.description}</option>)}</select></label>
+          <label className="block text-sm">Número de OC / OS<input name="number" required className="block w-full rounded border p-2"/></label>
+          <label className="block text-sm">Enlace de Odoo o del documento<input name="link" type="url" className="block w-full rounded border p-2"/></label>
+          <label className="block text-sm">PDF de la orden (máximo 2 MB)<input name="pdf" type="file" accept="application/pdf" className="block w-full"/></label>
+          <button disabled={trackingBusy} className="rounded bg-blue-800 px-4 py-2 text-white">Guardar orden</button>
+        </form>
+      </section>
+      <p role="status" className="text-sm">{trackingMessage}</p>
+      <section className="rounded-xl border p-4"><h3 className="mb-3 font-semibold">Historial de solicitudes · {selected}</h3>
+        {saved.filter(line=>line.collector===selected).map(line=><article key={line.key} className="space-y-2 border-b py-3 text-sm">
+          <p><strong>{line.description}</strong> · {line.coordinator} · {line.details?.["Fecha de solicitud"]}</p>
+          <p>{line.details?.Status || "Pendiente"} · {money(line.cost)} · {line.details?.["OS Contrata"] || "Orden por registrar"}</p>
+          {line.details?.["Link de OS"] && /^https?:\/\//i.test(line.details["Link de OS"]) && <a className="mr-4 underline" href={line.details["Link de OS"]} target="_blank" rel="noreferrer">Abrir enlace de orden</a>}
+          {line.details?.["PDF nombre"] && <a className="underline" href={"/analisis-os/documento?id="+line.key} target="_blank" rel="noreferrer">Ver PDF</a>}
+          {Array.isArray(line.details?.Eventos) && (line.details.Eventos as unknown as {fecha:string;accion:string}[]).map((event,index)=><p key={index} className="text-slate-600">{event.fecha} · {event.accion}</p>)}
+          {storedExpenses(line).map(expense=><p key={expense.id} className="text-slate-600">{expense.fecha} · {expense.descripcion} · {money(expense.monto)}</p>)}
+        </article>)}
+      </section>
+      <div className="flex flex-wrap items-center gap-5 border-t pt-4"><button className="rounded bg-blue-800 px-4 py-2 text-white disabled:opacity-50" disabled={conflict||income<=0} onClick={()=>{ const included=detail.filter(line=>line.included); const sum=(source:string)=>included.filter(line=>line.source===source).reduce((n,line)=>n+line.cost,0); const oc=sum("OC"),manual=sum("Manual")+sum("Manual guardado"); setReviewed(old=>({...old,[selected]:{income,oc,manual,os:total-oc-manual}})); }}>Validar cálculo</button></div>
     </section>}
   </div></main>;
 }
