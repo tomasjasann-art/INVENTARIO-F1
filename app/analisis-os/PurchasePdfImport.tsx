@@ -21,7 +21,8 @@ export default function PurchasePdfImport({save}:{save:(data:FormData)=>Promise<
    if(pdf.size>2*1024*1024)throw new Error("El PDF debe pesar como máximo 2 MB.");
    const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
    pdfjs.GlobalWorkerOptions.workerSrc=new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs",import.meta.url).toString();
-   const document=await pdfjs.getDocument({data:new Uint8Array(await pdf.arrayBuffer()),isEvalSupported:false}).promise;
+   const task=pdfjs.getDocument({data:new Uint8Array(await pdf.arrayBuffer())});
+   const document=await task.promise;
    const lines:string[]=[];
    for(let p=1;p<=document.numPages;p++){
     const page=await document.getPage(p);
@@ -35,7 +36,7 @@ export default function PurchasePdfImport({save}:{save:(data:FormData)=>Promise<
     }
     lines.push(...rows.map(row=>row.items.sort((a,b)=>a.transform[4]-b.transform[4]).map(item=>item.str).join(" ")));
    }
-   await document.destroy();
+   await task.destroy();
    const text=lines.join("\n");setRaw(text);
    setOrder(text.match(/\bP\d{4,}\b/)?.[0]??"");
    setDate(text.match(/\b\d{2}\/\d{2}\/\d{4}\b/)?.[0]??"");
