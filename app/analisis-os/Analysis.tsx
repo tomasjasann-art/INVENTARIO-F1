@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import OrderLineActions from "./OrderLineActions";
 import ServiceReview from "./ServiceReview";
 import PurchasePdfImport from "./PurchasePdfImport";
 import Image from "next/image";
@@ -26,8 +27,8 @@ function initialLines(saved:Saved[],purchaseExpenses:Saved[]=[]):Line[]{
 
 }
 type Saved = Omit<Line,"source"|"included">;
-export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf, coordinatorOptions, canReview, canOperate, reviewService}: {
-  canReview:boolean;canOperate:boolean;reviewService:(data:FormData)=>Promise<string|null>;coordinatorOptions:string[]; importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
+export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf, coordinatorOptions, canReview, canOperate, reviewService, manageOrderLine}: {
+  manageOrderLine:(data:FormData)=>Promise<string|null>;canReview:boolean;canOperate:boolean;reviewService:(data:FormData)=>Promise<string|null>;coordinatorOptions:string[]; importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
 }){
   const [lines,setLines] = useState<Line[]>(() => initialLines(saved,purchaseExpenses));
   const [tab,setTab] = useState(logistics?0:1);
@@ -101,7 +102,8 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const status=(line:Line)=>isPurchase(line)?"Registrada":line.details?.Status || (reviewed[line.collector]?"Analizada":"Pendiente");
   const matches=(line:Line)=>(!stateFilter || status(line)===stateFilter) && (!coordinator || line.coordinator===coordinator) && [line.collector,line.site,line.description,line.coordinator,line.details?.RUC || "",line.details?.Contratista || ""].some(value=>norm(value).includes(norm(search.trim())));
   const visible=requests.filter(matches);
-  const matchingCollectors=[...new Set(visible.map(line=>line.collector))];
+  const requestedCollectors=new Set(requests.filter(line=>!isPurchase(line)).map(line=>line.collector));
+  const matchingCollectors=[...new Set(visible.filter(line=>requestedCollectors.has(line.collector) || (tab===2 && search.trim() && norm(line.collector).includes(norm(search.trim())))).map(line=>line.collector))];
   const groups=matchingCollectors.map(collector=>{
     const entries=lines.filter(line=>line.collector===collector);
     const primary=entries.find(line=>line.source==="Plataforma" || line.source==="Solicitud") || entries[0];
@@ -328,12 +330,13 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
           <td><span className="os-order-tag">{isPurchase(line)?"Orden de Compra":line.details?.["Tipo de orden"] || "Orden de Servicio"}</span></td>
           <td className="whitespace-nowrap"><strong>{money(line.cost)}</strong><small>{line.details?.["Tipo de comprobante"] || ""}</small></td>
           {tab!==3 && [0.4,0.4,0.2].map((share,index)=><td key={index}><span className={"os-installment installment-"+index}>{money(line.cost*share)}</span></td>)}
-          <td>{logistics&&<button className="os-row-detail" aria-label={"Abrir detalle de "+line.collector} onClick={()=>{setSelected(line.collector);setTab(2);}}>Ver detalle</button>}</td>
+          <td className="min-w-48">{logistics&&<button className="os-row-detail" aria-label={"Abrir detalle de "+line.collector} onClick={()=>{setSelected(line.collector);setTab(2);}}>Ver análisis</button>}{canOperate&&(line.source==="Plataforma" || line.details?.Origen==="OC registrada")&&<OrderLineActions line={line} save={manageOrderLine}/>}</td>
         </tr>)}</tbody>
       </table></div>}
     </section>}
     {logistics && tab===2 && selected && <div className="os-drawer-overlay"><button className="os-drawer-backdrop" aria-label="Cerrar detalle" onClick={()=>setSelected("")}/><section role="dialog" aria-modal="true" aria-label={"Detalle del colector "+selected} className="os-detail-drawer space-y-4"><button autoFocus className="os-close" onClick={()=>setSelected("")}><X size={18}/>Cerrar detalle</button>
-      <h2 className="text-xl font-semibold">Editar gastos · {selected}</h2>
+      <h2 className="text-xl font-semibold">Análisis · {selected}</h2>
+      <p className="text-sm text-slate-600">En cada línea de OS aprobada o de OC encontrarás PDF / enlace y Borrar línea.</p>
       <p className="text-sm">Los gastos ingresados en solicitudes guardadas y los documentos de órdenes se conservan. Las exclusiones de costos de esta vista son temporales. Las revisiones y mensajes se conservan. Desmarca un costo si ya está incluido en otra línea. Si hay varias filas con LPU, usa la misma referencia para el mismo ingreso y una diferente para cada adicional.</p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1000px] border-collapse text-left text-sm">
@@ -344,7 +347,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
             <td className="p-2">{line.details?.Cliente || metadata?.details?.Cliente || "—"}</td>
             <td className="p-2">{line.collector}</td>
             <td className="p-2">{line.details?.Contratista || "—"}</td>
-            <td className="p-2">{line.description}<span className="block text-xs text-slate-600">{line.source}</span></td>
+            <td className="p-2">{line.description}<span className="block text-xs text-slate-600">{line.source}</span>{canOperate&&(line.source==="Plataforma" || line.details?.Origen==="OC registrada")&&<OrderLineActions line={line} save={manageOrderLine}/>}</td>
             <td className="p-2 whitespace-nowrap"><label className="flex items-center gap-2"><input aria-label={"Incluir costo de "+line.description} type="checkbox" checked={line.included} onChange={e=>update(line.key,{included:e.target.checked})}/>{money(line.cost)}</label></td>
             <td className="p-2 whitespace-nowrap">{line.lpu?money(line.lpu):"—"}{line.lpu>0 && <input className="mt-1 block w-28 rounded border p-1" placeholder="Referencia" aria-label="Referencia LPU" value={line.reference} onChange={e=>update(line.key,{reference:e.target.value})}/>}</td>
             <td/><td/>
