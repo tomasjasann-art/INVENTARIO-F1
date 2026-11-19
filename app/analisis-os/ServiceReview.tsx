@@ -23,13 +23,13 @@ export default function ServiceReview({requests,canReview,canOperate,save}:{requ
    const messages=Array.isArray(details.Conversación)?details.Conversación as Message[]:[];
    return <article key={request.key} className="rounded-lg border border-slate-200">
     <button onClick={()=>setOpen(open===request.key?"":request.key)} className="flex w-full flex-wrap items-center justify-between gap-2 p-3 text-left text-sm">
-     <span><strong>{request.collector}</strong><span className="block text-slate-600">{request.description} · {request.coordinator}</span>{Boolean(details["Último mensaje"])&&<span className="mt-1 block text-orange-800">{String(details["Último mensaje"]).slice(0,180)}</span>}</span>
+     <span><strong>{request.collector}</strong><span className="block text-slate-600">{request.description} · {request.coordinator}</span>{canReview&&<span className="mt-1 block text-xs text-slate-600">Monto solicitado · {Number(request.details?.["Monto solicitado"]??0)>0?String(request.details?.["Monto solicitado"]):"Ver análisis del colector"}</span>}{Boolean(details["Último mensaje"])&&<span className="mt-1 block text-orange-800">{String(details["Último mensaje"]).slice(0,180)}</span>}</span>
      <span className={"rounded-full px-3 py-1 text-xs "+(status==="Aprobada"?"bg-emerald-100 text-emerald-800":status==="Observada"?"bg-orange-100 text-orange-800":"bg-slate-100 text-slate-600")}>{status}</span>
     </button>
-    {open===request.key&&<div className="space-y-3 border-t p-4">
+    {(canReview || open===request.key)&&<div className="space-y-3 border-t p-4">
      {messages.length===0&&<p className="text-sm text-slate-500">Esta solicitud aún no tiene comentarios de revisión.</p>}
      {messages.map((message,index)=><div key={index} className="rounded-lg bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2 text-xs text-slate-500"><strong>{message.accion}</strong><time>{new Date(message.fecha).toLocaleString("es-PE",{timeZone:"America/Lima"})}</time></div><p className="mt-2 whitespace-pre-wrap">{message.mensaje || "Solicitud aprobada."}</p>{message.montoCorregido&&<p className="text-xs text-slate-600">Monto corregido · S/ {message.montoCorregido}</p>}{message.descripcionCorregida&&<p className="text-xs text-slate-600">Servicio corregido · {message.descripcionCorregida}</p>}<small className="text-slate-500">{message.usuario}</small></div>)}
-     {(canReview || (!canOperate&&status==="Observada"))&&status!=="OS emitida"&&<form className="space-y-3" onSubmit={async event=>{
+     {(canReview || (!canOperate&&status==="Observada"))&&!["OS emitida","Finalizada"].includes(status)&&<form className="space-y-3" onSubmit={async event=>{
       event.preventDefault();const form=event.currentTarget;const data=new FormData(form);const submitter=(event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement;
       data.set("id",request.key);data.set("version",String(details["Revisión versión"]??0));data.set("action",submitter.value);setBusy(true);
       try{const error=await save(data);setNotice(error??"Revisión guardada y mensaje actualizado.");if(!error){form.reset();router.refresh();}}
