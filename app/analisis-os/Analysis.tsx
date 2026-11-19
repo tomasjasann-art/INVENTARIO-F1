@@ -1,6 +1,5 @@
 "use client";
 import F1Header from "../F1Header";
-import { f1Background } from "../f1-brand";
 
 import { useEffect, useState } from "react";
 import OrderLineActions from "./OrderLineActions";
@@ -163,7 +162,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet(rows),"Análisis");
     XLSX.writeFile(book,"Analisis_OS_Compras.xlsx");
   }
-  return <main style={{backgroundImage:`url("${f1Background}")`}} className="os-f1 f1-os-branded min-h-screen bg-slate-50 px-5 py-10 text-slate-900"><div className="mx-auto max-w-[1500px] space-y-6">
+  return <main className="os-f1 min-h-screen bg-slate-50 px-5 py-10 text-slate-900"><div className="mx-auto max-w-[1500px] space-y-6">
     <style>{`
       .os-f1{background:#f4f5f7;color:#20242b}
       .os-f1 a,.os-f1 button.text-blue-800{color:#c7480c}
