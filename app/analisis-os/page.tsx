@@ -26,12 +26,19 @@ const input = z.object({
   description: z.string().trim().min(1).max(1000),
   cost: z.coerce.number().positive().max(999999999999),
   lpu: z.coerce.number().nonnegative().max(999999999999),
-  reference: z.string().trim().max(150),
+  reference: z.string().trim().max(150).default(""),
 });
 
 async function submit(form: FormData) {
   "use server";
-  const {user, coordinator} = await getAccess();
+  const {user, coordinator: ownCoordinator, logistics} = await getAccess();
+  const selectedCoordinator=String(form.get("coordinator")??"").trim();
+  let coordinator=ownCoordinator;
+  if(logistics){
+    const found=await getDb().execute(sql`SELECT name FROM coordinators WHERE active=true AND organization=\'F1\' AND name=${selectedCoordinator} LIMIT 1`);
+    if(!found.length)return "Selecciona un coordinador F1 de la lista.";
+    coordinator=String(found[0].name);
+  }
   const result = input.safeParse(Object.fromEntries(form));
   if (!result.success) return "Revisa colector, site, servicio y montos.";
   const {id, collector, site, description, cost, lpu, reference} = result.data;
@@ -68,7 +75,7 @@ async function saveTracking(form: FormData) {
     const link=String(form.get("link")??"").trim();
     if(!number) return "Ingresa el número de orden.";
     if(link && !/^https?:\/\//i.test(link)) return "El enlace debe comenzar con https:// o http://.";
-    patch={"OS Contrata":number,"Link de OS":link,Status:"OS emitida"};
+    patch={"OS Contrata":number,"Link de OS":link,Status:"OS emitida","Solicitud":String(form.get("solicitud")??"").trim().slice(0,500)};
     const pdf=form.get("pdf");
     if(pdf instanceof File && pdf.size){
       if(pdf.size>2*1024*1024) return "El PDF debe pesar como máximo 2 MB. Para archivos mayores registra el enlace.";
@@ -83,7 +90,7 @@ async function saveTracking(form: FormData) {
     const cost=Number(form.get("cost"));
     if(!description || !Number.isFinite(cost) || cost<=0 || cost>999999999) return "Revisa la descripción y el importe.";
     patch={};
-    const event=JSON.stringify({fecha:new Date().toISOString(),usuario:user.email,accion:"Gasto agregado",descripcion:description,monto:cost,id:z.string().uuid().parse(form.get("expenseId"))});
+    const event=JSON.stringify({fecha:new Date().toISOString(),usuario:user.email,accion:"Gasto agregado",solicitud:String(form.get("solicitud")??"").trim().slice(0,500),descripcion:description,monto:cost,id:z.string().uuid().parse(form.get("expenseId"))});
     await getDb().execute(sql`UPDATE public.f1_os_requests SET details=jsonb_set(details,'{Gastos}', COALESCE(details->'Gastos','[]'::jsonb) || ${event}::jsonb) WHERE id=${id.data} AND NOT COALESCE(details->'Gastos','[]'::jsonb) @> ${JSON.stringify([{id:String(form.get("expenseId"))}])}::jsonb`);
     revalidatePath("/analisis-os");
     return null;
@@ -117,7 +124,7 @@ async function importPurchasePdf(form:FormData){
    if(existing.length)return "La OC "+order+" ya está registrada. No se duplicaron sus gastos.";
    for(const [index,line] of result.data.entries()){
     const subtotal=Math.round(line.cost*100)/100,tax=Math.round(line.tax*100)/100,total=Math.round((subtotal+tax)*100)/100;
-    const details={"CECO":line.ceco,"Contratista":header.data.provider,"RUC":header.data.ruc,"Fecha":header.data.date,"Moneda":"PEN","Origen":"PDF OC","PDF":bytes.toString("base64"),"PDF nombre":pdf.name.slice(0,200),"Registrado por":user.email};
+    const details={"CECO":line.ceco,"Contratista":header.data.provider,"RUC":header.data.ruc,"Fecha":header.data.date,"Moneda":"PEN","Origen":"PDF OC","PDF":bytes.toString("base64"),"PDF nombre":pdf.name.slice(0,200),"Registrado por":user.email,"Solicitado":String(form.get("coordinator")??"").trim().slice(0,200),"Tipo de orden":"Orden de Compra"};
     await tx.execute(sql`INSERT INTO f1_os_purchase_expenses (order_number,collector,line_number,description,subtotal,tax,total,details) VALUES (${order},${line.collector.toUpperCase()},${index+1},${line.description},${subtotal},${tax},${total},${JSON.stringify(details)}::jsonb)`);
    }
    return null;
@@ -137,8 +144,9 @@ export default async function AnalysisPage() {
   const suppliers=await getDb().execute<{ruc:string;name:string}>(sql`SELECT document_number AS ruc,business_name AS name FROM suppliers WHERE active=true ORDER BY business_name`);
   const purchaseExpenses=logistics ? await getDb().execute<{
     key:string;collector:string;coordinator:string;site:string;description:string;cost:number;lpu:number;reference:string;details:Record<string,string>;
-  }>(sql`SELECT id::text AS key,collector,'' AS coordinator,'' AS site,description,subtotal::float8 AS cost,0::float8 AS lpu,'' AS reference,
+  }>(sql`SELECT id::text AS key,collector,COALESCE(details->>'Solicitado',details->>'Solicitante','') AS coordinator,'' AS site,description,subtotal::float8 AS cost,0::float8 AS lpu,'' AS reference,
     (details - 'PDF') || jsonb_build_object('Número OC',order_number,'IGV',tax::text,'Total con IGV',total::text,'Origen','OC registrada') AS details
     FROM public.f1_os_purchase_expenses ORDER BY created_at DESC`) : [];
-  return <Analysis importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics} fields={fields} submit={submit} />;
+  const coordinatorOptions=await getDb().execute<{name:string}>(sql`SELECT name FROM coordinators WHERE active=true AND organization='F1' ORDER BY name`);
+  return <Analysis coordinatorOptions={Array.from(coordinatorOptions).map(item=>item.name)} importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics} fields={fields} submit={submit} />;
 }
