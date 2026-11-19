@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import ServiceReview from "./ServiceReview";
 import PurchasePdfImport from "./PurchasePdfImport";
 import Image from "next/image";
 import { CircleDollarSign, ShoppingCart, FileText, ChartNoAxesCombined, Layers, ArrowLeft, X, Download, Search } from "lucide-react";
@@ -25,13 +26,13 @@ function initialLines(saved:Saved[],purchaseExpenses:Saved[]=[]):Line[]{
 
 }
 type Saved = Omit<Line,"source"|"included">;
-export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf, coordinatorOptions}: {
-  coordinatorOptions:string[]; importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
+export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf, coordinatorOptions, canReview, canOperate, reviewService}: {
+  canReview:boolean;canOperate:boolean;reviewService:(data:FormData)=>Promise<string|null>;coordinatorOptions:string[]; importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
 }){
   const [lines,setLines] = useState<Line[]>(() => initialLines(saved,purchaseExpenses));
   const [tab,setTab] = useState(logistics?0:1);
   const [reviewed,setReviewed] = useState<Record<string,{income:number;oc:number;os:number;manual:number}>>({});
-  const [approvals,setApprovals] = useState<Record<string,boolean>>({});
+  
   const [showForm,setShowForm] = useState(!logistics);
   const [showImports,setShowImports] = useState(false);
   const [showPurchasePdf,setShowPurchasePdf] = useState(false);
@@ -61,7 +62,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   function invalidate(collector:string) {
     
     setReviewed(old=>Object.fromEntries(Object.entries(old).filter(([key])=>key!==collector)));
-    setApprovals(old=>({...old,[collector]:false}));
+
   }
   function update(key:string, change:Partial<Line>){
     invalidate(selected);
@@ -90,14 +91,14 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       setLines(old=>[...old.filter(line=>line.source !== (orders?"OC":"Solicitud")),...data]);
       
       setReviewed({});
-      setApprovals({});
+
       setErrors(data.length+" filas cargadas."+ (warnings.length?" Filas omitidas por datos incompletos o inválidos: "+warnings.join(", "):""));
     } catch(error){setErrors(error instanceof Error?error.message:"Error al leer el Excel");}
   }
   const requests=lines.filter(line=>line.source==="Solicitud" || line.source==="Plataforma" || line.details?.Origen==="OC registrada");
   const coordinators=[...new Set(requests.map(line=>line.coordinator))].filter(Boolean).sort();
   const collectors=[...new Set(requests.filter(line=>!coordinator||line.coordinator===coordinator).map(line=>line.collector))].sort();
-  const status=(line:Line)=>isPurchase(line)?"Registrada":approvals[line.collector]?"Aprobada por correo":reviewed[line.collector]?"Analizada":line.details?.Status || "Pendiente";
+  const status=(line:Line)=>isPurchase(line)?"Registrada":line.details?.Status || (reviewed[line.collector]?"Analizada":"Pendiente");
   const matches=(line:Line)=>(!stateFilter || status(line)===stateFilter) && (!coordinator || line.coordinator===coordinator) && [line.collector,line.site,line.description,line.coordinator,line.details?.RUC || "",line.details?.Contratista || ""].some(value=>norm(value).includes(norm(search.trim())));
   const visible=requests.filter(matches);
   const matchingCollectors=[...new Set(visible.map(line=>line.collector))];
@@ -147,7 +148,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       Site:group.primary?.site,CECO:group.primary?.details?.CECO,Cliente:group.primary?.details?.Cliente,
       Colector:group.collector,"Costo F1":group.cost,"LPU Entel":group.pending?"Revisar LPU":group.income,
       Rentabilidad:!group.pending&&group.income>0?(group.income-group.cost)/group.income:"",
-      "Validación José Ortiz":group.entries.some(line=>!isPurchase(line)&&(line.source==="Plataforma"||line.source==="Solicitud")) && approvals[group.collector]?"OK por correo":""
+      "Validación José Ortiz":group.entries.filter(line=>!isPurchase(line)&&(line.source==="Plataforma"||line.source==="Solicitud")).length>0 && group.entries.filter(line=>!isPurchase(line)&&(line.source==="Plataforma"||line.source==="Solicitud")).every(line=>line.details?.Status==="Aprobada"||line.details?.Status==="OS emitida")?"Aprobada":""
     }));
     const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet(rows),"Análisis");
     XLSX.writeFile(book,"Analisis_OS_Compras.xlsx");
@@ -218,9 +219,9 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     `}</style>
     <header className="os-dashboard-header">
       <div className="os-brand"><a href="/" aria-label="Volver al inicio F1" className="os-back"><ArrowLeft size={20}/></a><Image src="/f1-services-logo-horizontal.png" alt="F1 Services & Solutions" width={180} height={58}/><div><h1>OS y Compras</h1><p>Seguimiento y rentabilidad</p></div></div>
-      <div className="os-header-actions">{logistics&&<button className="os-export" onClick={()=>{setTab(3);setShowPurchasePdf(true);}}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{logistics&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
+      <div className="os-header-actions">{canOperate&&<button className="os-export" onClick={()=>{setTab(3);setShowPurchasePdf(true);}}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{canOperate&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
     </header>
-    {logistics && tab===3 && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf} coordinators={coordinatorOptions}/>}
+    {canOperate && tab===3 && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf} coordinators={coordinatorOptions}/>}
     {logistics && <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3">
       <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Servicios / OS","Análisis por coordinador","Compras / OC"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
 
@@ -242,12 +243,12 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
         <section><h2>Tipo de orden y gastos</h2><div className="os-bar-list">{typeBars.map((item,index)=><div key={item.label} className="os-distribution-row"><span><b>{item.label}</b><small>{percent(visible.length?item.count/visible.length:0)}</small></span><div className="os-track"><div style={{width:(visible.length?item.count/visible.length*100:0)+"%",background:index?"#925bff":"#397ff8"}}/></div></div>)}</div><div className="os-expense-chips"><span>OC <strong>{money(summary.oc)}</strong></span><span>OS <strong>{money(summary.os)}</strong></span></div><p className="os-manual-total">Gastos manuales <strong>{money(summary.manual)}</strong></p></section>
       </div>
     </>}
-    {logistics && tab===3 && <section className="rounded-xl border bg-white p-5"><h2 className="font-semibold">Compras / OC</h2><p className="mt-2 text-sm text-slate-600">Registra las órdenes de compra emitidas y sus gastos por colector.</p><button className="os-primary mt-3" onClick={()=>setShowPurchasePdf(value=>!value)}>Cargar OC en PDF</button></section>}
-    {tab===1 && <div className="flex flex-wrap gap-3">
+    {canOperate && tab===3 && <section className="rounded-xl border bg-white p-5"><h2 className="font-semibold">Compras / OC</h2><p className="mt-2 text-sm text-slate-600">Registra las órdenes de compra emitidas y sus gastos por colector.</p><button className="os-primary mt-3" onClick={()=>setShowPurchasePdf(value=>!value)}>Cargar OC en PDF</button></section>}
+    {tab===1 && (canOperate || !logistics) && <div className="flex flex-wrap gap-3">
       <button className="rounded bg-blue-800 px-4 py-2 text-white" onClick={()=>setShowForm(v=>!v)}>{showForm?"Cerrar formulario":"Nueva solicitud"}</button>
       {logistics && <button className="rounded border px-4 py-2" onClick={()=>setShowImports(v=>!v)}>{showImports?"Ocultar Excel":"Importar Excel"}</button>}
     </div>}
-    {tab===1 && showForm && <form className="grid gap-4 rounded-xl border bg-white p-5 sm:grid-cols-2 lg:grid-cols-3" onSubmit={async e=>{
+    {tab===1 && (canOperate || !logistics) && showForm && <form className="grid gap-4 rounded-xl border bg-white p-5 sm:grid-cols-2 lg:grid-cols-3" onSubmit={async e=>{
       e.preventDefault();
       const form=e.currentTarget;
       const id=requestId || crypto.randomUUID();
@@ -275,7 +276,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       <label className="text-sm sm:col-span-2 lg:col-span-3">Comentarios<textarea name="Comentarios" maxLength={500} className="block w-full rounded border p-2"/></label>
       <div className="sm:col-span-2"><button disabled={sending} className="rounded bg-blue-800 px-4 py-2 text-white disabled:opacity-50">{sending?"Guardando…":"Registrar solicitud"}</button> <span role="status">{submission}</span></div>
     </form>}
-    {logistics && tab===1 && showImports && <section className="grid gap-4 rounded-xl border bg-white p-5 md:grid-cols-2">
+    {canOperate && tab===1 && showImports && <section className="grid gap-4 rounded-xl border bg-white p-5 md:grid-cols-2">
       <label>Matriz de solicitudes <input className="block text-sm" type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0];if(f)void load(f,false);e.target.value="";}}/></label>
       <label>Registro de OC <input className="block text-sm" type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0];if(f)void load(f,true);e.target.value="";}}/></label>
       <p role="status" className="text-sm text-slate-700">{errors}</p>
@@ -288,7 +289,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       <label className="text-sm font-medium">Estado<select className="mt-2 block rounded-lg border border-slate-300 p-3" value={stateFilter} onChange={e=>setStateFilter(e.target.value)}><option value="">Todos los estados</option>{[...new Set(["Registrada","Pendiente","Analizada","Observada","Aprobada por correo","OS emitida",...requests.map(line=>line.details?.Status).filter(Boolean)])].map(label=><option key={label}>{label}</option>)}</select></label>
       {tab===2 && <button className="rounded-lg border px-4 py-3" onClick={()=>{setSelected("");setSearch("");setStateFilter("");}}>Ver todos los colectores</button>}
       <button className="os-reset" onClick={()=>{setSearch("");setCoordinator("");setStateFilter("");setSelected("");}}>Limpiar filtros</button>
-      <button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>+ Nueva solicitud</button>
+      {canOperate && <button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>+ Nueva solicitud</button>}
       <button className="os-export" onClick={exportAnalysis}><Download size={15}/>Exportar</button>
     </section>}
     {logistics && tab===2 && <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
@@ -306,13 +307,14 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
             <td>{line.details?.Contratista || "—"}</td><td>{line.description}{line.details?.["Número OC"] && <small className="block text-slate-500">OC {line.details["Número OC"]} · IGV {line.details.IGV} · Total {line.details["Total con IGV"]}</small>}{line.details?.["PDF nombre"] && line.source==="OC" && <a className="block text-xs underline" href={"/analisis-os/documento?id="+line.key+"&tipo=oc"} target="_blank" rel="noreferrer">Ver PDF OC</a>}{!line.included && <span className="block text-slate-500">Excluido del costo</span>}</td><td className="whitespace-nowrap text-right">{money(line.cost)}</td><td className="whitespace-nowrap text-right">{line.lpu>0?money(line.lpu):"—"}</td>
             {index===0 && <>
               <td rowSpan={group.entries.length+1} className="text-center font-bold">{!group.pending&&group.income>0?percent((group.income-group.cost)/group.income):group.pending?"Revisar LPU":"Sin LPU"}</td>
-              <td rowSpan={group.entries.length+1} className="text-center">{group.entries.some(line=>!isPurchase(line) && (line.source==="Plataforma" || line.source==="Solicitud"))?<label><input type="checkbox" disabled={!reviewed[group.collector]} checked={approvals[group.collector]??false} onChange={e=>setApprovals(old=>({...old,[group.collector]:e.target.checked}))}/> OK por correo</label>:<span className="text-slate-500">OC registrada</span>}</td>
+              <td rowSpan={group.entries.length+1} className="text-center">{group.entries.some(line=>!isPurchase(line)&&(line.source==="Plataforma"||line.source==="Solicitud"))?<button className="text-sm underline" onClick={()=>{setTab(1);setSearch(group.collector);}}>Ver revisión de solicitudes</button>:<span className="text-slate-500">OC registrada</span>}</td>
             </>}
           </tr>)}
           <tr className="subtotal"><th scope="row" colSpan={6} className="text-right">Total {group.primary?.site || group.collector}</th><td className="whitespace-nowrap text-right">{money(group.cost)}</td><td className="whitespace-nowrap text-right">{group.pending?"Por revisar":money(group.income)}</td></tr>
         </tbody>)}
       </table></div>}
     </section>}
+    {tab===1 && <ServiceReview requests={saved.filter(line=>(!coordinator || line.coordinator===coordinator) && (!search || [line.collector,line.description,line.coordinator].some(value=>norm(value).includes(norm(search)))))} canReview={canReview} canOperate={canOperate} save={reviewService}/>}
     {(tab===1 || tab===3 || (logistics&&tab===0)) && <section className="os-request-table rounded-xl border bg-white p-5">
       <h2 className="mb-3 text-xl font-semibold">{tab===3?"Órdenes de compra registradas":logistics?"Solicitudes de servicios":"Mis solicitudes"} <span className="text-sm font-normal text-slate-500">({tableRows.length})</span></h2>
       {tableRows.length===0 ? <p className="text-sm text-slate-600">Todavía no hay solicitudes para mostrar.</p> : <div className="max-h-96 overflow-auto"><table className="w-full text-left text-sm">
@@ -332,7 +334,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     </section>}
     {logistics && tab===2 && selected && <div className="os-drawer-overlay"><button className="os-drawer-backdrop" aria-label="Cerrar detalle" onClick={()=>setSelected("")}/><section role="dialog" aria-modal="true" aria-label={"Detalle del colector "+selected} className="os-detail-drawer space-y-4"><button autoFocus className="os-close" onClick={()=>setSelected("")}><X size={18}/>Cerrar detalle</button>
       <h2 className="text-xl font-semibold">Editar gastos · {selected}</h2>
-      <p className="text-sm">Los gastos ingresados en solicitudes guardadas y los documentos de órdenes se conservan. Las exclusiones de costos y los checks de aprobación de esta vista son temporales. Desmarca un costo si ya está incluido en otra línea. Si hay varias filas con LPU, usa la misma referencia para el mismo ingreso y una diferente para cada adicional.</p>
+      <p className="text-sm">Los gastos ingresados en solicitudes guardadas y los documentos de órdenes se conservan. Las exclusiones de costos de esta vista son temporales. Las revisiones y mensajes se conservan. Desmarca un costo si ya está incluido en otra línea. Si hay varias filas con LPU, usa la misma referencia para el mismo ingreso y una diferente para cada adicional.</p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1000px] border-collapse text-left text-sm">
           <thead className="bg-[#062051] text-white"><tr>{["Site","CECO","CLIENTE","Colector","Empresa Contratista","Descripción Servicio","Costo F1","LPU Entel","Rentabilidad","Validación José Ortiz"].map((label,index)=><th key={label} scope="col" className={`border border-slate-300 p-2 ${index===8?"bg-[#bc4300]":index===9?"bg-[#00769a]":""}`}>{label}</th>)}</tr></thead>
@@ -352,12 +354,12 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
             <td className="p-2 whitespace-nowrap">{money(total)}</td>
             <td className="p-2 whitespace-nowrap">{conflict?"Por revisar":money(income)}</td>
             <td className="p-2">{!conflict&&income>0?((income-total)/income).toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2}):"Pendiente"}</td>
-            <td className="p-2">{detail.some(line=>!isPurchase(line)&&(line.source==="Plataforma" || line.source==="Solicitud"))?<label className="flex gap-2"><input type="checkbox" disabled={!reviewed[selected]} checked={approvals[selected]??false} onChange={e=>setApprovals(old=>({...old,[selected]:e.target.checked}))}/>OK por correo</label>:<span className="text-slate-500">OC registrada</span>}</td>
+            <td className="p-2"><span className="text-sm">Consulta el historial de revisión por solicitud</span></td>
           </tr></tfoot>
         </table>
       </div>
       <datalist id="solicitudes-colector">{saved.filter(line=>line.collector===selected).map(line=><option key={line.key} value={line.description}/>)}</datalist>
-      <section className="grid gap-5 lg:grid-cols-2">
+      {canOperate && <section className="grid gap-5 lg:grid-cols-2">
         <form className="space-y-3 rounded-xl border bg-orange-50/40 p-4" onSubmit={async e=>{
           e.preventDefault(); const form=e.currentTarget; const data=new FormData(form);
           data.set("request",saved.find(line=>line.collector===selected && line.description===data.get("solicitud"))?.key || String(data.get("request")??""));
@@ -386,7 +388,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
           <label className="block text-sm">PDF de la orden (máximo 2 MB)<input name="pdf" type="file" accept="application/pdf" className="block w-full"/></label>
           <button disabled={trackingBusy} className="rounded bg-blue-800 px-4 py-2 text-white">Guardar orden</button>
         </form>
-      </section>
+      </section>}
       <p role="status" className="text-sm">{trackingMessage}</p>
       <section className="rounded-xl border p-4"><h3 className="mb-3 font-semibold">Historial de solicitudes · {selected}</h3>
         {saved.filter(line=>line.collector===selected).map(line=><article key={line.key} className="space-y-2 border-b py-3 text-sm">
