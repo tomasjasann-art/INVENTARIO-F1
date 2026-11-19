@@ -262,7 +262,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       } catch {setSubmission("No se pudo confirmar el guardado. Puedes reintentar.");}
       finally {setSending(false);}
     }}>
-      {logistics && <label className="text-sm">Coordinador F1<select name="coordinator" required className="block w-full rounded border p-2"><option value="">Seleccionar coordinador</option>{coordinatorOptions.map(name=><option key={name}>{name}</option>)}</select></label>}
+      <label className="text-sm">Coordinador F1<select name="coordinator" required className="block w-full rounded border p-2"><option value="">Seleccionar coordinador</option>{coordinatorOptions.map(name=><option key={name}>{name}</option>)}</select></label>
       {fields.filter(field=>field!=="Comentarios").map(field=><label key={field} className="text-sm">{field}
         {field==="Tipo de comprobante" || field==="Tipo de orden" ? <select name={field} required className="block w-full rounded border p-2"><option value="">Seleccionar</option>{(field==="Tipo de comprobante"?["Factura","Recibo RXH"]:["Orden de Servicio","Orden de Compra"]).map(option=><option key={option}>{option}</option>)}</select>
         :field==="RUC"?<><input name={field} list="os-proveedores" required value={ruc} onChange={e=>setRuc(e.target.value)} className="block w-full rounded border p-2" placeholder="Buscar RUC de proveedor"/><datalist id="os-proveedores">{suppliers.map(item=><option key={item.ruc} value={item.ruc}>{item.name}</option>)}</datalist>{ruc&&!supplier&&<span className="text-xs text-red-700">Selecciona un proveedor registrado.</span>}</>
