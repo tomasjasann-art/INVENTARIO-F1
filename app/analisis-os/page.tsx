@@ -14,8 +14,14 @@ async function getAccess() {
   const access = await getKardexAccess(user.email, user.userId, user.authProvider);
   if (!access?.active || access.mustChangePassword) redirect("/");
   const logistics = access.role === "ADMINISTRADOR" || access.role === "LOGISTICA";
-  if (!logistics && access.role !== "COORDINADOR") redirect("/");
-  return { user, logistics, coordinator: access.displayName || user.displayName };
+  const canReview=access.id===3;
+  if (!logistics && !canReview && access.role !== "COORDINADOR") redirect("/");
+  let coordinator=access.displayName || user.displayName;
+  if(access.coordinatorId){
+    const rows=await getDb().execute(sql`SELECT name FROM coordinators WHERE id=${access.coordinatorId} AND active=true LIMIT 1`);
+    if(rows[0])coordinator=String(rows[0].name);
+  }
+  return { user, logistics, canReview, coordinator };
 }
 
 const fields = ["ID", "CECO", "Año", "Cliente", "Proyecto", "Tipo de comprobante", "RUC", "Contratista", "Contacto", "Cantidad", "Tipo de orden", "Comentarios"];
@@ -133,20 +139,53 @@ async function importPurchasePdf(form:FormData){
  }catch{return "No se pudo registrar la OC. Sus líneas se guardan juntas. Puedes reintentar.";}
 }
 
+
+async function reviewService(form:FormData){
+ "use server";
+ const {user,canReview,coordinator}=await getAccess();
+ const parsed=z.object({id:z.string().uuid(),action:z.enum(["observe","reply","approve"]),version:z.coerce.number().int().nonnegative(),message:z.string().trim().max(4000).default("")}).safeParse(Object.fromEntries(form));
+ if(!parsed.success)return "Revisa la solicitud y el mensaje.";
+ const {id,action,version,message}=parsed.data;
+ if((action==="observe"||action==="approve")&&!canReview)return "La revisión corresponde a José Ortiz.";
+ if(action!=="approve"&&!message)return "Escribe el comentario o sustento.";
+ try{
+  const error=await getDb().transaction(async tx=>{
+   const records=await tx.execute<{owner_email:string;coordinator:string;details:Record<string,unknown>}>(sql`SELECT owner_email,coordinator,details FROM f1_os_requests WHERE id=${id} FOR UPDATE`);
+   const record=records[0];if(!record)return "Solicitud no encontrada.";
+   if(record.details["Tipo de orden"]==="Orden de Compra")return "Las OC se registran sin aprobación.";
+   const current=Number(record.details["Revisión versión"]??0);
+   if(current!==version)return "La solicitud cambió. Actualiza la página antes de continuar.";
+   const state=String(record.details.Status??"Pendiente");
+   if(state==="OS emitida")return "Esta solicitud ya tiene una OS emitida.";
+   if(action==="reply" && record.owner_email!==user.email && record.coordinator!==coordinator)return "Solo el coordinador responsable puede enviar el sustento.";
+   if(action==="reply"&&state!=="Observada")return "La solicitud no tiene una observación pendiente.";
+   if(action==="approve"&&state==="Observada")return "Falta el sustento del coordinador para aprobar.";
+   if(action==="approve"&&state==="Aprobada")return "La solicitud ya está aprobada.";
+   const newState=action==="observe"?"Observada":action==="reply"?"Sustentada":"Aprobada";
+   const now=new Date().toISOString();
+   const event={fecha:now,usuario:user.email,accion:newState,mensaje:message};
+   const patch={"Status":newState,"Revisión versión":current+1,"Último mensaje":message,"Mensaje para":action==="observe"?"Coordinador":"José Ortiz","Aprobado por":action==="approve"?user.email:"","Fecha de aprobación":action==="approve"?now:""};
+   await tx.execute(sql`UPDATE f1_os_requests SET details=(details || ${JSON.stringify(patch)}::jsonb) || jsonb_build_object('Conversación',COALESCE(details->'Conversación','[]'::jsonb) || ${JSON.stringify(event)}::jsonb) WHERE id=${id}`);
+   return null;
+  });
+  revalidatePath("/analisis-os");return error;
+ }catch{return "No se pudo guardar la revisión. Intenta nuevamente.";}
+}
+
 export default async function AnalysisPage() {
-  const {user, logistics} = await getAccess();
+  const {user, logistics, canReview, coordinator} = await getAccess();
   const rows = await getDb().execute<{
     key: string; collector: string; coordinator: string; site: string; description: string;
     cost: number; lpu: number; reference: string; details: Record<string,string>;
   }>(sql`SELECT id::text AS key, collector, coordinator, site, description, cost::float8 AS cost,
        lpu::float8 AS lpu, reference, (details - 'PDF') || jsonb_build_object('Fecha de solicitud',created_at::text) AS details FROM public.f1_os_requests
-       ${logistics ? sql`` : sql`WHERE owner_email = ${user.email}`} ORDER BY created_at DESC`);
+       ${logistics || canReview ? sql`` : sql`WHERE owner_email = ${user.email} OR coordinator = ${coordinator}`} ORDER BY created_at DESC`);
   const suppliers=await getDb().execute<{ruc:string;name:string}>(sql`SELECT document_number AS ruc,business_name AS name FROM suppliers WHERE active=true ORDER BY business_name`);
-  const purchaseExpenses=logistics ? await getDb().execute<{
+  const purchaseExpenses=(logistics || canReview) ? await getDb().execute<{
     key:string;collector:string;coordinator:string;site:string;description:string;cost:number;lpu:number;reference:string;details:Record<string,string>;
   }>(sql`SELECT id::text AS key,collector,COALESCE(details->>'Solicitado',details->>'Solicitante','') AS coordinator,'' AS site,description,subtotal::float8 AS cost,0::float8 AS lpu,'' AS reference,
     (details - 'PDF') || jsonb_build_object('Número OC',order_number,'IGV',tax::text,'Total con IGV',total::text,'Origen','OC registrada') AS details
     FROM public.f1_os_purchase_expenses ORDER BY created_at DESC`) : [];
   const coordinatorOptions=await getDb().execute<{name:string}>(sql`SELECT name FROM coordinators WHERE active=true AND organization='F1' ORDER BY name`);
-  return <Analysis coordinatorOptions={Array.from(coordinatorOptions).map(item=>item.name)} importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics} fields={fields} submit={submit} />;
+  return <Analysis canReview={canReview} canOperate={logistics} reviewService={reviewService} coordinatorOptions={Array.from(coordinatorOptions).map(item=>item.name)} importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics || canReview} fields={fields} submit={submit} />;
 }
