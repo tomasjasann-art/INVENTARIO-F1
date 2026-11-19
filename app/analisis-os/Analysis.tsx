@@ -1,4 +1,6 @@
 "use client";
+import F1Header from "../F1Header";
+import { f1Background } from "../f1-brand";
 
 import { useEffect, useState } from "react";
 import OrderLineActions from "./OrderLineActions";
@@ -27,8 +29,8 @@ function initialLines(saved:Saved[],purchaseExpenses:Saved[]=[]):Line[]{
 
 }
 type Saved = Omit<Line,"source"|"included">;
-export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf, coordinatorOptions, canReview, canOperate, reviewService, manageOrderLine}: {
-  manageOrderLine:(data:FormData)=>Promise<string|null>;canReview:boolean;canOperate:boolean;reviewService:(data:FormData)=>Promise<string|null>;coordinatorOptions:string[]; importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
+export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf, coordinatorOptions, canReview, canOperate, reviewService, manageOrderLine, currentUser}: {
+  currentUser:{name:string;role:string};manageOrderLine:(data:FormData)=>Promise<string|null>;canReview:boolean;canOperate:boolean;reviewService:(data:FormData)=>Promise<string|null>;coordinatorOptions:string[]; importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
 }){
   const [lines,setLines] = useState<Line[]>(() => initialLines(saved,purchaseExpenses));
   const [tab,setTab] = useState(canReview?4:logistics?0:1);
@@ -161,7 +163,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet(rows),"Análisis");
     XLSX.writeFile(book,"Analisis_OS_Compras.xlsx");
   }
-  return <main className="os-f1 min-h-screen bg-slate-50 px-5 py-10 text-slate-900"><div className="mx-auto max-w-[1500px] space-y-6">
+  return <main style={{backgroundImage:`url("${f1Background}")`}} className="os-f1 f1-os-branded min-h-screen bg-slate-50 px-5 py-10 text-slate-900"><div className="mx-auto max-w-[1500px] space-y-6">
     <style>{`
       .os-f1{background:#f4f5f7;color:#20242b}
       .os-f1 a,.os-f1 button.text-blue-800{color:#c7480c}
@@ -225,10 +227,8 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       .os-f1 .report .subtotal{background:#fff7f1;color:#8a431b;border-top:0}.os-f1 .report td.font-bold{font-size:16px;color:#263f60}
       .os-f1 .report button.underline{background:#eef3fa;color:#577191!important;padding:4px 7px;border-radius:5px;text-decoration:none;font-size:11px}
     `}</style>
-    <header className="os-dashboard-header">
-      <div className="os-brand"><a href="/" aria-label="Volver al inicio F1" className="os-back"><ArrowLeft size={20}/></a><Image src="/f1-services-logo-horizontal.png" alt="F1 Services & Solutions" width={180} height={58}/><div><h1>OS y Compras</h1><p>Seguimiento y rentabilidad</p></div></div>
-      <div className="os-header-actions">{canOperate&&<button className="os-export" onClick={()=>{setTab(3);setShowPurchasePdf(true);}}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button></div>
-    </header>
+    <F1Header title="OS y Compras" name={currentUser.name} role={currentUser.role}/>
+    <div className="flex flex-wrap justify-end gap-3"><div className="os-header-actions">{canOperate&&<button className="os-export" onClick={()=>{setTab(3);setShowPurchasePdf(true);}}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button></div></div>
     {canOperate && tab===3 && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf} coordinators={coordinatorOptions}/>}
     {logistics && <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3">
       <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Solicitudes OS","Análisis por coordinador","Compras / OC","Validación de José","Emisión · Logística"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} hidden={(index===5&&!canOperate)||(canReview&&index===1)} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
