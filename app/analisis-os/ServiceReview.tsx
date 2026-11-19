@@ -2,7 +2,7 @@
 import {useEffect,useState} from "react";
 import {useRouter} from "next/navigation";
 
-type Request={key:string;collector:string;description:string;coordinator:string;details?:Record<string,unknown>};
+type Request={key:string;collector:string;description:string;coordinator:string;cost?:number;lpu?:number;details?:Record<string,unknown>};
 type Message={fecha:string;usuario:string;accion:string;mensaje:string;montoCorregido?:string;descripcionCorregida?:string};
 export default function ServiceReview({requests,canReview,canOperate,save}:{requests:Request[];canReview:boolean;canOperate:boolean;save:(data:FormData)=>Promise<string|null>}){
  const router=useRouter();
@@ -23,7 +23,7 @@ export default function ServiceReview({requests,canReview,canOperate,save}:{requ
    const messages=Array.isArray(details.Conversación)?details.Conversación as Message[]:[];
    return <article key={request.key} className="rounded-lg border border-slate-200">
     <button onClick={()=>setOpen(open===request.key?"":request.key)} className="flex w-full flex-wrap items-center justify-between gap-2 p-3 text-left text-sm">
-     <span><strong>{request.collector}</strong><span className="block text-slate-600">{request.description} · {request.coordinator}</span>{canReview&&<span className="mt-1 block text-xs text-slate-600">Monto solicitado · {Number(request.details?.["Monto solicitado"]??0)>0?String(request.details?.["Monto solicitado"]):"Ver análisis del colector"}</span>}{Boolean(details["Último mensaje"])&&<span className="mt-1 block text-orange-800">{String(details["Último mensaje"]).slice(0,180)}</span>}</span>
+     <span><strong>{request.collector}</strong><span className="block text-slate-600">{request.description} · {request.coordinator}</span>{canReview&&<span className="mt-1 block text-xs text-slate-600">Monto solicitado · {(request.cost??0).toLocaleString("es-PE",{style:"currency",currency:"PEN"})} · LPU · {(request.lpu??0).toLocaleString("es-PE",{style:"currency",currency:"PEN"})}</span>}{Boolean(details["Último mensaje"])&&<span className="mt-1 block text-orange-800">{String(details["Último mensaje"]).slice(0,180)}</span>}</span>
      <span className={"rounded-full px-3 py-1 text-xs "+(status==="Aprobada"?"bg-emerald-100 text-emerald-800":status==="Observada"?"bg-orange-100 text-orange-800":"bg-slate-100 text-slate-600")}>{status}</span>
     </button>
     {(canReview || open===request.key)&&<div className="space-y-3 border-t p-4">
