@@ -10,7 +10,7 @@ export default function F1ThemeToggle(){
   try{preference=valid(localStorage.getItem("f1-theme"));}catch{}
   setMode(preference);
   const media=window.matchMedia("(prefers-color-scheme: dark)");
-  const apply=(choice:Mode)=>{document.documentElement.dataset.f1Theme=choice==="system"?(media.matches?"dark":"light"):choice;document.documentElement.style.colorScheme=document.documentElement.dataset.f1Theme;};
+  const apply=(choice:Mode)=>{const theme=choice==="system"?(media.matches?"dark":"light"):choice;document.documentElement.dataset.f1Theme=theme;document.documentElement.style.colorScheme=theme;};
   apply(preference);
   const changed=()=>{let choice:Mode="system";try{choice=valid(localStorage.getItem("f1-theme"));}catch{}apply(choice);};
   const storage=(event:StorageEvent)=>{if(event.key==="f1-theme"){const choice=valid(event.newValue);setMode(choice);apply(choice);}};
