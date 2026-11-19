@@ -1,4 +1,6 @@
 "use client";
+import F1Header, { F1Mark } from "./F1Header";
+import { f1Background } from "./f1-brand";
 
 import {
   AlertTriangle,
@@ -449,17 +451,17 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [view, setView] = useState<View>((driverSetup || technicianSetup) ? "configuracion" : initialModule === "vehiculos" ? "flota" : initialModule === "activos" ? "activos" : initialModule === "documentos" ? "documentos" : "resumen");
+  const [view, setView] = useState<View>((driverSetup || technicianSetup) ? "configuracion" : initialModule === "vehiculos" ? "flota" : initialModule === "activos" ? "activos" : initialModule === "documentos" ? "documentos" : initialModule === "configuracion" ? "configuracion" : "resumen");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<"movement" | "product" | "grIngreso" | null>(null);
   const [movementType, setMovementType] = useState<Movement["type"]>("entrada");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [equipmentModuleOpen, setEquipmentModuleOpen] = useState(false);
-  const [fleetModuleOpen, setFleetModuleOpen] = useState(false);
+  const [equipmentModuleOpen, setEquipmentModuleOpen] = useState(initialModule==="equipos");
+  const [fleetModuleOpen, setFleetModuleOpen] = useState(initialModule==="vehiculos");
   const [fleetTab, setFleetTab] = useState<FleetTab>("vehiculos");
   const [assetTab, setAssetTab] = useState<AssetTab>("Resumen");
-  const [assetsModuleOpen, setAssetsModuleOpen] = useState(false);
-  const [documentsModuleOpen, setDocumentsModuleOpen] = useState(false);
+  const [assetsModuleOpen, setAssetsModuleOpen] = useState(initialModule==="activos");
+  const [documentsModuleOpen, setDocumentsModuleOpen] = useState(initialModule==="documentos");
   const [documentTool, setDocumentTool] = useState<"pdf" | "separar" | "ocr">("pdf");
   const [settingsInitialRole, setSettingsInitialRole] = useState<UserRole>(technicianSetup ? "TECNICO" : driverSetup ? "CONDUCTOR" : "SOLO_LECTURA");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -674,13 +676,14 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell f1-module-shell" style={{backgroundColor:"#706c69",backgroundImage:`url("${f1Background}")`,backgroundSize:"100% auto",backgroundPosition:"center bottom",backgroundRepeat:"no-repeat",backgroundAttachment:"fixed"}}>
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
-          <div className="brand-mark"><span>F1</span></div>
+          <F1Mark/>
           <div><strong>LOGÍSTICA F1</strong><small>PLATAFORMA OPERATIVA</small></div>
           <button className="icon-button sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="Cerrar menú"><X size={18} /></button>
         </div>
+        {initialModule==="equipos" && <>
         <button
           className="module-pill"
           type="button"
@@ -710,7 +713,8 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
             {!isCoordinator && <button className={view === "reportes" ? "active" : ""} onClick={() => { setView("reportes"); setSidebarOpen(false); }}><BarChart3 size={19} />Reportes</button>}
           </nav>
         </div>
-        {!isCoordinator && <>
+        </>}
+        {initialModule==="vehiculos" && !isCoordinator && <>
           <button
             className="module-pill"
             type="button"
@@ -731,8 +735,11 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
             </nav>
           </div>
         </>}
+        {initialModule==="activos" && <>
         <button className={`module-pill ${assetsModuleOpen ? "module-expanded" : ""}`} onClick={() => { setAssetsModuleOpen(open => !open); if (!assetsModuleOpen) { setEquipmentModuleOpen(false); setFleetModuleOpen(false); setView("activos"); } }} aria-expanded={assetsModuleOpen}><Boxes size={18} /><span><small>MÓDULO</small><strong>Activos F1</strong></span><ChevronDown size={16} /></button>
         <div className={`module-nav-shell ${assetsModuleOpen ? "module-nav-open" : ""}`} inert={!assetsModuleOpen}><nav className="nav-list" aria-label="Activos F1">{assetTabs.map(name => <button key={name} className={view === "activos" && assetTab === name ? "active" : ""} onClick={() => { setAssetTab(name); setView("activos"); setSidebarOpen(false); }}><Boxes size={18} />{name}</button>)}</nav></div>
+        </>}
+        {initialModule==="documentos" && <>
         <button
           className={`module-pill ${documentsModuleOpen ? "module-expanded" : ""}`}
           type="button"
@@ -760,13 +767,12 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
             ))}
           </nav>
         </div>
-        <div className="sidebar-bottom">
-          {role === "ADMINISTRADOR" && <button className={view === "configuracion" ? "active" : ""} onClick={() => { setSettingsInitialRole("SOLO_LECTURA"); setView("configuracion"); setSidebarOpen(false); }}><Settings size={18} />Configuración</button>}
-          <div className="user-card"><span>{userInitials(user.displayName)}</span><div><strong>{user.displayName}</strong><small>{role.replaceAll("_", " ")} · {user.email}</small></div><a href={signOutPath} target="_top" aria-label="Cerrar sesión" title="Cerrar sesión"><LogOut size={16} /></a></div>
-        </div>
+        </>}
+        <a className="f1-sidebar-home" href="/">← Volver al inicio</a>
       </aside>
 
       <main className="main-area">
+        <F1Header title={view==="configuracion"?"Configuración y usuarios":initialModule==="vehiculos"?"Control de vehículos":initialModule==="activos"?"Activos F1":initialModule==="documentos"?"Gestores documentales":"Control de Equipos Entel"} name={user.displayName} role={role} signOut={signOutPath} onSettings={()=>{setSettingsInitialRole("SOLO_LECTURA");setView("configuracion");setSidebarOpen(false);}}/>
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Abrir menú"><Menu size={21} /></button>
           {view === "activos" ? <strong className="fleet-shell-title">Activos F1</strong> : view === "flota" ? <strong className="fleet-shell-title">Control de vehículos</strong> : <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>}
