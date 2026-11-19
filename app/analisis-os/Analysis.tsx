@@ -10,6 +10,7 @@ type Line = { key:string; collector:string; coordinator:string; site:string; des
 const money = (n:number) => n.toLocaleString("es-PE",{style:"currency",currency:"PEN"});
 const text = (n:unknown) => String(n ?? "").trim();
 const amount = (n:unknown) => Number(text(n).replace(/S\/|[\s,]/g,""));
+const isPurchase=(line:Line)=>line.source==="OC" || line.details?.Origen==="OC registrada" || ["Orden de Compra","Compra","Compras"].includes(line.details?.["Tipo de orden"]??"");
 const norm = (s:string) => s.toUpperCase();
 
 type Expense={id:string;descripcion:string;monto:number;fecha:string;usuario:string;accion:string};
@@ -96,7 +97,8 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const requests=lines.filter(line=>line.source==="Solicitud" || line.source==="Plataforma" || line.details?.Origen==="OC registrada");
   const coordinators=[...new Set(requests.map(line=>line.coordinator))].filter(Boolean).sort();
   const collectors=[...new Set(requests.filter(line=>!coordinator||line.coordinator===coordinator).map(line=>line.collector))].sort();
-  const matches=(line:Line)=>(!stateFilter || (approvals[line.collector]?"Aprobada por correo":reviewed[line.collector]?"Analizada":line.details?.Status || "Pendiente")===stateFilter) && (!coordinator || line.coordinator===coordinator) && [line.collector,line.site,line.description,line.coordinator,line.details?.RUC || "",line.details?.Contratista || ""].some(value=>norm(value).includes(norm(search.trim())));
+  const status=(line:Line)=>isPurchase(line)?"Registrada":approvals[line.collector]?"Aprobada por correo":reviewed[line.collector]?"Analizada":line.details?.Status || "Pendiente";
+  const matches=(line:Line)=>(!stateFilter || status(line)===stateFilter) && (!coordinator || line.coordinator===coordinator) && [line.collector,line.site,line.description,line.coordinator,line.details?.RUC || "",line.details?.Contratista || ""].some(value=>norm(value).includes(norm(search.trim())));
   const visible=requests.filter(matches);
   const matchingCollectors=[...new Set(visible.map(line=>line.collector))];
   const groups=matchingCollectors.map(collector=>{
@@ -112,6 +114,9 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     }
     return {collector,entries,primary,pending,income:[...revenues.values()].reduce((a,b)=>a+b,0),cost:entries.filter(line=>line.included).reduce((a,b)=>a+b.cost,0)};
   });
+  const serviceRows=visible.filter(line=>!isPurchase(line));
+  const purchaseRows=visible.filter(isPurchase);
+  const tableRows=tab===3?purchaseRows:serviceRows;
   const detail=lines.filter(line=>line.collector===selected);
   const metadata=detail.find(line=>line.source==="Plataforma" || line.source==="Solicitud");
   const revenue=new Map<string,number>();
@@ -132,17 +137,17 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   }).reduce((a,b)=>({income:a.income+b.income,oc:a.oc+b.oc,os:a.os+b.os,manual:a.manual+b.manual}),{income:0,oc:0,os:0,manual:0});
   const expense=summary.oc+summary.os+summary.manual;
   const percent=(value:number)=>value.toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2});
-  const status=(line:Line)=>approvals[line.collector]?"Aprobada por correo":reviewed[line.collector]?"Analizada":line.details?.Status || "Pendiente";
-  const statusCounts=visible.reduce<Record<string,number>>((counts,line)=>{const label=status(line);counts[label]=(counts[label]??0)+1;return counts;},{});
-  const coordinatorBars=Object.entries(visible.reduce<Record<string,number>>((counts,line)=>{counts[line.coordinator || "Sin coordinador"]=(counts[line.coordinator || "Sin coordinador"]??0)+1;return counts;},{})).sort((a,b)=>b[1]-a[1]);
+
+  const statusCounts=serviceRows.reduce<Record<string,number>>((counts,line)=>{const label=status(line);counts[label]=(counts[label]??0)+1;return counts;},{});
+  const coordinatorBars=Object.entries(serviceRows.reduce<Record<string,number>>((counts,line)=>{counts[line.coordinator || "Sin coordinador"]=(counts[line.coordinator || "Sin coordinador"]??0)+1;return counts;},{})).sort((a,b)=>b[1]-a[1]);
   const typeBars=["Orden de Servicio","Orden de Compra"].map(label=>({label,count:visible.filter(line=>line.details?.["Tipo de orden"]===label).length}));
-  const issued=visible.filter(line=>Boolean(line.details?.["OS Contrata"])).length;
+  const issued=serviceRows.filter(line=>Boolean(line.details?.["OS Contrata"])).length;
   function exportAnalysis(){
     const rows=groups.map(group=>({
       Site:group.primary?.site,CECO:group.primary?.details?.CECO,Cliente:group.primary?.details?.Cliente,
       Colector:group.collector,"Costo F1":group.cost,"LPU Entel":group.pending?"Revisar LPU":group.income,
       Rentabilidad:!group.pending&&group.income>0?(group.income-group.cost)/group.income:"",
-      "Validación José Ortiz":approvals[group.collector]?"OK por correo":""
+      "Validación José Ortiz":group.entries.some(line=>!isPurchase(line)&&(line.source==="Plataforma"||line.source==="Solicitud")) && approvals[group.collector]?"OK por correo":""
     }));
     const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet(rows),"Análisis");
     XLSX.writeFile(book,"Analisis_OS_Compras.xlsx");
@@ -205,11 +210,11 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     `}</style>
     <header className="os-dashboard-header">
       <div className="os-brand"><a href="/" aria-label="Volver al inicio F1" className="os-back"><ArrowLeft size={20}/></a><Image src="/f1-services-logo-horizontal.png" alt="F1 Services & Solutions" width={180} height={58}/><div><h1>OS y Compras</h1><p>Seguimiento y rentabilidad</p></div></div>
-      <div className="os-header-actions">{logistics&&<button className="os-export" onClick={()=>setShowPurchasePdf(value=>!value)}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{logistics&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
+      <div className="os-header-actions">{logistics&&<button className="os-export" onClick={()=>{setTab(3);setShowPurchasePdf(true);}}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{logistics&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
     </header>
-    {logistics && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf}/>}
+    {logistics && tab===3 && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf}/>}
     {logistics && <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3">
-      <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Solicitudes","Análisis por coordinador"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
+      <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Servicios / OS","Análisis por coordinador","Compras / OC"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
 
     </div>}
     {logistics && tab===0 && <>
@@ -224,11 +229,12 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
         ].map(metric=><div key={metric.label} className="os-metric"><span className={"os-metric-icon "+metric.tone}><metric.icon size={24}/></span><div><strong>{metric.value}</strong><p>{metric.label}</p></div></div>)}
       </section>
       <div className="os-analytics">
-        <section className="os-progress"><h2>Órdenes emitidas</h2><div className="os-ring" style={{background:`conic-gradient(#ff6819 ${visible.length?issued/visible.length*360:0}deg,#edf0f4 0deg)`}}><div><strong>{percent(visible.length?issued/visible.length:0)}</strong><span>de solicitudes</span></div></div><div className="os-status-list">{Object.entries(statusCounts).map(([label,count])=><button key={label} onClick={()=>{setStateFilter(label);setTab(1);}}><span>{label}</span><strong>{count}</strong></button>)}</div>{!visible.length&&<p className="text-sm text-slate-500">Sin solicitudes para estos filtros.</p>}</section>
+        <section className="os-progress"><h2>Órdenes emitidas</h2><div className="os-ring" style={{background:`conic-gradient(#ff6819 ${serviceRows.length?issued/serviceRows.length*360:0}deg,#edf0f4 0deg)`}}><div><strong>{percent(serviceRows.length?issued/serviceRows.length:0)}</strong><span>de solicitudes</span></div></div><div className="os-status-list">{Object.entries(statusCounts).map(([label,count])=><button key={label} onClick={()=>{setStateFilter(label);setTab(1);}}><span>{label}</span><strong>{count}</strong></button>)}</div>{!visible.length&&<p className="text-sm text-slate-500">Sin solicitudes para estos filtros.</p>}</section>
         <section className="os-distribution"><h2>Distribución por coordinador</h2><div className="os-bar-list">{coordinatorBars.map(([name,count],index)=><button key={name} onClick={()=>setCoordinator(name)} className="os-distribution-row"><span><b>{name}</b><small>{count} ({percent(visible.length?count/visible.length:0)})</small></span><div className="os-track"><div style={{width:(visible.length?count/visible.length*100:0)+"%",background:["#397ff8","#925bff","#10b981","#f59e0b"][index%4]}}/></div></button>)}{!coordinatorBars.length&&<p className="text-sm text-slate-500">Sin solicitudes registradas.</p>}</div></section>
         <section><h2>Tipo de orden y gastos</h2><div className="os-bar-list">{typeBars.map((item,index)=><div key={item.label} className="os-distribution-row"><span><b>{item.label}</b><small>{percent(visible.length?item.count/visible.length:0)}</small></span><div className="os-track"><div style={{width:(visible.length?item.count/visible.length*100:0)+"%",background:index?"#925bff":"#397ff8"}}/></div></div>)}</div><div className="os-expense-chips"><span>OC <strong>{money(summary.oc)}</strong></span><span>OS <strong>{money(summary.os)}</strong></span></div><p className="os-manual-total">Gastos manuales <strong>{money(summary.manual)}</strong></p></section>
       </div>
     </>}
+    {logistics && tab===3 && <section className="rounded-xl border bg-white p-5"><h2 className="font-semibold">Compras / OC</h2><p className="mt-2 text-sm text-slate-600">Registra las órdenes de compra emitidas y sus gastos por colector.</p><button className="os-primary mt-3" onClick={()=>setShowPurchasePdf(value=>!value)}>Cargar OC en PDF</button></section>}
     {tab===1 && <div className="flex flex-wrap gap-3">
       <button className="rounded bg-blue-800 px-4 py-2 text-white" onClick={()=>setShowForm(v=>!v)}>{showForm?"Cerrar formulario":"Nueva solicitud"}</button>
       {logistics && <button className="rounded border px-4 py-2" onClick={()=>setShowImports(v=>!v)}>{showImports?"Ocultar Excel":"Importar Excel"}</button>}
@@ -270,7 +276,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
         <input type="search" className="mt-2 block w-full rounded-lg border border-slate-300 p-3" placeholder="Escribe parte del código o nombre…" value={search} onChange={e=>setSearch(e.target.value)}/>
       </label>
       <label className="flex items-center gap-2 text-sm">Coordinador <select className="rounded-lg border border-slate-300 p-2" value={coordinator} onChange={e=>{setCoordinator(e.target.value);setSelected("");}}><option value="">Todos</option>{coordinators.map(name=><option key={name}>{name}</option>)}</select></label>
-      <label className="text-sm font-medium">Estado<select className="mt-2 block rounded-lg border border-slate-300 p-3" value={stateFilter} onChange={e=>setStateFilter(e.target.value)}><option value="">Todos los estados</option>{[...new Set(["Pendiente","Analizada","Observada","Aprobada por correo","OS emitida",...requests.map(line=>line.details?.Status).filter(Boolean)])].map(label=><option key={label}>{label}</option>)}</select></label>
+      <label className="text-sm font-medium">Estado<select className="mt-2 block rounded-lg border border-slate-300 p-3" value={stateFilter} onChange={e=>setStateFilter(e.target.value)}><option value="">Todos los estados</option>{[...new Set(["Registrada","Pendiente","Analizada","Observada","Aprobada por correo","OS emitida",...requests.map(line=>line.details?.Status).filter(Boolean)])].map(label=><option key={label}>{label}</option>)}</select></label>
       {tab===2 && <button className="rounded-lg border px-4 py-3" onClick={()=>{setSelected("");setSearch("");setStateFilter("");}}>Ver todos los colectores</button>}
       <button className="os-reset" onClick={()=>{setSearch("");setCoordinator("");setStateFilter("");setSelected("");}}>Limpiar filtros</button>
       <button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>+ Nueva solicitud</button>
@@ -291,18 +297,18 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
             <td>{line.details?.Contratista || "—"}</td><td>{line.description}{line.details?.["Número OC"] && <small className="block text-slate-500">OC {line.details["Número OC"]} · IGV {line.details.IGV} · Total {line.details["Total con IGV"]}</small>}{line.details?.["PDF nombre"] && line.source==="OC" && <a className="block text-xs underline" href={"/analisis-os/documento?id="+line.key+"&tipo=oc"} target="_blank" rel="noreferrer">Ver PDF OC</a>}{!line.included && <span className="block text-slate-500">Excluido del costo</span>}</td><td className="whitespace-nowrap text-right">{money(line.cost)}</td><td className="whitespace-nowrap text-right">{line.lpu>0?money(line.lpu):"—"}</td>
             {index===0 && <>
               <td rowSpan={group.entries.length+1} className="text-center font-bold">{!group.pending&&group.income>0?percent((group.income-group.cost)/group.income):group.pending?"Revisar LPU":"Sin LPU"}</td>
-              <td rowSpan={group.entries.length+1} className="text-center"><label><input type="checkbox" disabled={!reviewed[group.collector]} checked={approvals[group.collector]??false} onChange={e=>setApprovals(old=>({...old,[group.collector]:e.target.checked}))}/> OK por correo</label></td>
+              <td rowSpan={group.entries.length+1} className="text-center">{group.entries.some(line=>!isPurchase(line) && (line.source==="Plataforma" || line.source==="Solicitud"))?<label><input type="checkbox" disabled={!reviewed[group.collector]} checked={approvals[group.collector]??false} onChange={e=>setApprovals(old=>({...old,[group.collector]:e.target.checked}))}/> OK por correo</label>:<span className="text-slate-500">OC registrada</span>}</td>
             </>}
           </tr>)}
           <tr className="subtotal"><th scope="row" colSpan={6} className="text-right">Total {group.primary?.site || group.collector}</th><td className="whitespace-nowrap text-right">{money(group.cost)}</td><td className="whitespace-nowrap text-right">{group.pending?"Por revisar":money(group.income)}</td></tr>
         </tbody>)}
       </table></div>}
     </section>}
-    {(tab===1 || (logistics&&tab===0)) && <section className="os-request-table rounded-xl border bg-white p-5">
-      <h2 className="mb-3 text-xl font-semibold">{logistics?"Bandeja de solicitudes":"Mis solicitudes"} <span className="text-sm font-normal text-slate-500">({visible.length})</span></h2>
-      {visible.length===0 ? <p className="text-sm text-slate-600">Todavía no hay solicitudes para mostrar.</p> : <div className="max-h-96 overflow-auto"><table className="w-full text-left text-sm">
+    {(tab===1 || tab===3 || (logistics&&tab===0)) && <section className="os-request-table rounded-xl border bg-white p-5">
+      <h2 className="mb-3 text-xl font-semibold">{tab===3?"Órdenes de compra registradas":logistics?"Solicitudes de servicios":"Mis solicitudes"} <span className="text-sm font-normal text-slate-500">({tableRows.length})</span></h2>
+      {tableRows.length===0 ? <p className="text-sm text-slate-600">Todavía no hay solicitudes para mostrar.</p> : <div className="max-h-96 overflow-auto"><table className="w-full text-left text-sm">
         <thead className="sticky top-0 bg-slate-100"><tr>{["Estado","Proveedor / RUC / Contacto","Servicio / Site","Coordinador","Colector","Tipo de orden","Monto solicitado","40% inicial","40% intermedio","20% final","Acciones"].map(label=><th key={label}>{label}</th>)}</tr></thead>
-        <tbody>{visible.map(line=><tr key={line.key}>
+        <tbody>{tableRows.map(line=><tr key={line.key}>
           <td><span className={"os-status "+(status(line).includes("emitida")?"done":status(line).includes("Aprob")?"approved":"waiting")}>{status(line)}</span></td>
           <td><strong>{line.details?.Contratista || "—"}</strong><small>RUC {line.details?.RUC || "—"}</small><small>{line.details?.Contacto || ""}</small></td>
           <td><strong>{line.description}</strong><small>{line.site}</small></td>
@@ -338,7 +344,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
             <td className="p-2 whitespace-nowrap">{money(total)}</td>
             <td className="p-2 whitespace-nowrap">{conflict?"Por revisar":money(income)}</td>
             <td className="p-2">{!conflict&&income>0?((income-total)/income).toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2}):"Pendiente"}</td>
-            <td className="p-2"><label className="flex gap-2"><input type="checkbox" disabled={!reviewed[selected]} checked={approvals[selected]??false} onChange={e=>setApprovals(old=>({...old,[selected]:e.target.checked}))}/>OK por correo</label></td>
+            <td className="p-2">{detail.some(line=>!isPurchase(line)&&(line.source==="Plataforma" || line.source==="Solicitud"))?<label className="flex gap-2"><input type="checkbox" disabled={!reviewed[selected]} checked={approvals[selected]??false} onChange={e=>setApprovals(old=>({...old,[selected]:e.target.checked}))}/>OK por correo</label>:<span className="text-slate-500">OC registrada</span>}</td>
           </tr></tfoot>
         </table>
       </div>
