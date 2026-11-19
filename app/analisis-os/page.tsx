@@ -14,14 +14,14 @@ async function getAccess() {
   const access = await getKardexAccess(user.email, user.userId, user.authProvider);
   if (!access?.active || access.mustChangePassword) redirect("/");
   const logistics = access.role === "ADMINISTRADOR" || access.role === "LOGISTICA";
-  const canReview=access.id===3;
+  const canReview=access.id===3 || access.role==="ADMINISTRADOR";
   if (!logistics && !canReview && access.role !== "COORDINADOR") redirect("/");
   let coordinator=access.displayName || user.displayName;
   if("coordinatorId" in access && access.coordinatorId){
     const rows=await getDb().execute(sql`SELECT name FROM coordinators WHERE id=${access.coordinatorId} AND active=true LIMIT 1`);
     if(rows[0])coordinator=String(rows[0].name);
   }
-  return { user, logistics, canReview, coordinator, role:access.role };
+  return { user, logistics, canReview, coordinator, role:access.role, isAdmin:access.role==="ADMINISTRADOR" };
 }
 
 const fields = ["ID", "CECO", "Año", "Cliente", "Proyecto", "Tipo de comprobante", "RUC", "Contratista", "Contacto", "Cantidad", "Tipo de orden", "Comentarios"];
@@ -152,7 +152,7 @@ async function importPurchasePdf(form:FormData){
 
 async function reviewService(form:FormData){
  "use server";
- const {user,canReview,coordinator}=await getAccess();
+ const {user,canReview,coordinator,isAdmin}=await getAccess();
  const parsed=z.object({id:z.string().uuid(),action:z.enum(["observe","reply","approve"]),version:z.coerce.number().int().nonnegative(),message:z.string().trim().max(4000).default("")}).safeParse(Object.fromEntries(form));
  if(!parsed.success)return "Revisa la solicitud y el mensaje.";
  const {id,action,version,message}=parsed.data;
@@ -167,7 +167,7 @@ async function reviewService(form:FormData){
    if(current!==version)return "La solicitud cambió. Actualiza la página antes de continuar.";
    const state=String(record.details.Status??"Pendiente");
    if(state==="OS emitida"||state==="Finalizada")return "Esta solicitud ya tiene una OS emitida.";
-   if(action==="reply" && record.owner_email!==user.email && record.coordinator!==coordinator)return "Solo el coordinador responsable puede enviar el sustento.";
+   if(action==="reply" && !isAdmin && record.owner_email!==user.email && record.coordinator!==coordinator)return "Solo el coordinador responsable puede enviar el sustento.";
    if(action==="reply"&&state!=="Observada")return "La solicitud no tiene una observación pendiente.";
    if(action==="approve"&&state==="Observada")return "Falta el sustento del coordinador para aprobar.";
    if(action==="approve"&&state==="Aprobada")return "La solicitud ya está aprobada.";
@@ -179,7 +179,7 @@ async function reviewService(form:FormData){
    if(correctedDescription.length>1000)return "La descripción corregida admite hasta 1000 caracteres.";
    if(action==="reply" && correctedAmount)await tx.execute(sql`UPDATE f1_os_requests SET cost=${Number(correctedAmount)} WHERE id=${id}`);
    if(action==="reply" && correctedDescription)await tx.execute(sql`UPDATE f1_os_requests SET description=${correctedDescription} WHERE id=${id}`);
-   const event={fecha:now,usuario:user.email,accion:newState,mensaje:message,montoCorregido:action==="reply"?correctedAmount:"",descripcionCorregida:action==="reply"?correctedDescription:""};
+   const event={fecha:now,usuario:user.email,accion:newState,mensaje:message,administrador:isAdmin,montoCorregido:action==="reply"?correctedAmount:"",descripcionCorregida:action==="reply"?correctedDescription:""};
    const patch={"Status":newState,"Revisión versión":current+1,"Último mensaje":message,"Mensaje para":action==="observe"?"Coordinador":"José Ortiz","Aprobado por":action==="approve"?user.email:"","Fecha de aprobación":action==="approve"?now:""};
    await tx.execute(sql`UPDATE f1_os_requests SET details=(details || ${JSON.stringify(patch)}::jsonb) || jsonb_build_object('Conversación',COALESCE(details->'Conversación','[]'::jsonb) || ${JSON.stringify(event)}::jsonb) WHERE id=${id}`);
    return null;
