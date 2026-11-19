@@ -31,7 +31,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   manageOrderLine:(data:FormData)=>Promise<string|null>;canReview:boolean;canOperate:boolean;reviewService:(data:FormData)=>Promise<string|null>;coordinatorOptions:string[]; importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
 }){
   const [lines,setLines] = useState<Line[]>(() => initialLines(saved,purchaseExpenses));
-  const [tab,setTab] = useState(logistics?0:1);
+  const [tab,setTab] = useState(canReview?4:logistics?0:1);
   const [reviewed,setReviewed] = useState<Record<string,{income:number;oc:number;os:number;manual:number}>>({});
   
   const [showForm,setShowForm] = useState(!logistics);
@@ -49,14 +49,20 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     });
   },[saved,purchaseExpenses]);
   const [errors,setErrors] = useState("");
-  const [coordinator,setCoordinator] = useState("");
+
   const [ruc,setRuc] = useState("");
   const [requestedCost,setRequestedCost] = useState("");
   const [trackingMessage,setTrackingMessage] = useState("");
   const [trackingBusy,setTrackingBusy] = useState(false);
   const supplier=suppliers.find(item=>item.ruc===ruc);
-  const [stateFilter,setStateFilter] = useState("");
-  const [search,setSearch] = useState("");
+  const [filters,setFilters]=useState<Record<number,{coordinator:string;stateFilter:string;search:string}>>({});
+  const {coordinator,stateFilter,search}=filters[tab]??{coordinator:"",stateFilter:"",search:""};
+  function updateFilter(patch:Partial<{coordinator:string;stateFilter:string;search:string}>){
+    setFilters(old=>({...old,[tab]:{coordinator:"",stateFilter:"",search:"",...old[tab],...patch}}));
+  }
+  const setCoordinator=(value:string)=>updateFilter({coordinator:value});
+  const setStateFilter=(value:string)=>updateFilter({stateFilter:value});
+  const setSearch=(value:string)=>updateFilter({search:value});
   const [selected,setSelected] = useState("");
   const [cost,setCost] = useState("");
   const [description,setDescription] = useState("");
@@ -119,7 +125,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   });
   const serviceRows=visible.filter(line=>!isPurchase(line));
   const purchaseRows=visible.filter(isPurchase);
-  const tableRows=tab===3?purchaseRows:serviceRows;
+  const tableRows=tab===3?purchaseRows:tab===5?serviceRows.filter(line=>["Aprobada","OS emitida","Finalizada"].includes(line.details?.Status??"")):serviceRows;
   const detail=lines.filter(line=>line.collector===selected);
   const metadata=detail.find(line=>line.source==="Plataforma" || line.source==="Solicitud");
   const revenue=new Map<string,number>();
@@ -221,11 +227,11 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     `}</style>
     <header className="os-dashboard-header">
       <div className="os-brand"><a href="/" aria-label="Volver al inicio F1" className="os-back"><ArrowLeft size={20}/></a><Image src="/f1-services-logo-horizontal.png" alt="F1 Services & Solutions" width={180} height={58}/><div><h1>OS y Compras</h1><p>Seguimiento y rentabilidad</p></div></div>
-      <div className="os-header-actions">{canOperate&&<button className="os-export" onClick={()=>{setTab(3);setShowPurchasePdf(true);}}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{canOperate&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
+      <div className="os-header-actions">{canOperate&&<button className="os-export" onClick={()=>{setTab(3);setShowPurchasePdf(true);}}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button></div>
     </header>
     {canOperate && tab===3 && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf} coordinators={coordinatorOptions}/>}
     {logistics && <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3">
-      <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Servicios / OS","Análisis por coordinador","Compras / OC"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
+      <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Solicitudes OS","Análisis por coordinador","Compras / OC","Validación de José","Emisión · Logística"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} hidden={(index===5&&!canOperate)||(canReview&&index===1)} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
 
     </div>}
     {logistics && tab===0 && <>
@@ -240,7 +246,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
         ].map(metric=><div key={metric.label} className="os-metric"><span className={"os-metric-icon "+metric.tone}><metric.icon size={24}/></span><div><strong>{metric.value}</strong><p>{metric.label}</p></div></div>)}
       </section>
       <div className="os-analytics">
-        <section className="os-progress"><h2>Órdenes emitidas</h2><div className="os-ring" style={{background:`conic-gradient(#ff6819 ${serviceRows.length?issued/serviceRows.length*360:0}deg,#edf0f4 0deg)`}}><div><strong>{percent(serviceRows.length?issued/serviceRows.length:0)}</strong><span>de solicitudes</span></div></div><div className="os-status-list">{Object.entries(statusCounts).map(([label,count])=><button key={label} onClick={()=>{setStateFilter(label);setTab(1);}}><span>{label}</span><strong>{count}</strong></button>)}</div>{!visible.length&&<p className="text-sm text-slate-500">Sin solicitudes para estos filtros.</p>}</section>
+        <section className="os-progress"><h2>Órdenes emitidas</h2><div className="os-ring" style={{background:`conic-gradient(#ff6819 ${serviceRows.length?issued/serviceRows.length*360:0}deg,#edf0f4 0deg)`}}><div><strong>{percent(serviceRows.length?issued/serviceRows.length:0)}</strong><span>de solicitudes</span></div></div><div className="os-status-list">{Object.entries(statusCounts).map(([label,count])=><button key={label} onClick={()=>{setFilters(old=>({...old,1:{coordinator:"",search:"",stateFilter:label}}));setTab(1);}}><span>{label}</span><strong>{count}</strong></button>)}</div>{!visible.length&&<p className="text-sm text-slate-500">Sin solicitudes para estos filtros.</p>}</section>
         <section className="os-distribution"><h2>Distribución por coordinador</h2><div className="os-bar-list">{coordinatorBars.map(([name,count],index)=><button key={name} onClick={()=>setCoordinator(name)} className="os-distribution-row"><span><b>{name}</b><small>{count} ({percent(visible.length?count/visible.length:0)})</small></span><div className="os-track"><div style={{width:(visible.length?count/visible.length*100:0)+"%",background:["#397ff8","#925bff","#10b981","#f59e0b"][index%4]}}/></div></button>)}{!coordinatorBars.length&&<p className="text-sm text-slate-500">Sin solicitudes registradas.</p>}</div></section>
         <section><h2>Tipo de orden y gastos</h2><div className="os-bar-list">{typeBars.map((item,index)=><div key={item.label} className="os-distribution-row"><span><b>{item.label}</b><small>{percent(visible.length?item.count/visible.length:0)}</small></span><div className="os-track"><div style={{width:(visible.length?item.count/visible.length*100:0)+"%",background:index?"#925bff":"#397ff8"}}/></div></div>)}</div><div className="os-expense-chips"><span>OC <strong>{money(summary.oc)}</strong></span><span>OS <strong>{money(summary.os)}</strong></span></div><p className="os-manual-total">Gastos manuales <strong>{money(summary.manual)}</strong></p></section>
       </div>
@@ -283,7 +289,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       <label>Registro de OC <input className="block text-sm" type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0];if(f)void load(f,true);e.target.value="";}}/></label>
       <p role="status" className="text-sm text-slate-700">{errors}</p>
     </section>}
-    {logistics && <section className="os-control-bar">
+    {logistics && tab!==4 && <section className="os-control-bar">
       <label className="min-w-64 flex-1 text-sm font-medium">Buscar colector, site o servicio
         <input type="search" className="mt-2 block w-full rounded-lg border border-slate-300 p-3" placeholder="Escribe parte del código o nombre…" value={search} onChange={e=>setSearch(e.target.value)}/>
       </label>
@@ -291,7 +297,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       <label className="text-sm font-medium">Estado<select className="mt-2 block rounded-lg border border-slate-300 p-3" value={stateFilter} onChange={e=>setStateFilter(e.target.value)}><option value="">Todos los estados</option>{[...new Set(["Registrada","Pendiente","Analizada","Observada","Aprobada por correo","OS emitida",...requests.map(line=>line.details?.Status).filter(Boolean)])].map(label=><option key={label}>{label}</option>)}</select></label>
       {tab===2 && <button className="rounded-lg border px-4 py-3" onClick={()=>{setSelected("");setSearch("");setStateFilter("");}}>Ver todos los colectores</button>}
       <button className="os-reset" onClick={()=>{setSearch("");setCoordinator("");setStateFilter("");setSelected("");}}>Limpiar filtros</button>
-      {canOperate && <button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>+ Nueva solicitud</button>}
+      
       <button className="os-export" onClick={exportAnalysis}><Download size={15}/>Exportar</button>
     </section>}
     {logistics && tab===2 && <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
@@ -309,21 +315,27 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
             <td>{line.details?.Contratista || "—"}</td><td>{line.description}{line.details?.["Número OC"] && <small className="block text-slate-500">OC {line.details["Número OC"]} · IGV {line.details.IGV} · Total {line.details["Total con IGV"]}</small>}{line.details?.["PDF nombre"] && line.source==="OC" && <a className="block text-xs underline" href={"/analisis-os/documento?id="+line.key+"&tipo=oc"} target="_blank" rel="noreferrer">Ver PDF OC</a>}{!line.included && <span className="block text-slate-500">Excluido del costo</span>}</td><td className="whitespace-nowrap text-right">{money(line.cost)}</td><td className="whitespace-nowrap text-right">{line.lpu>0?money(line.lpu):"—"}</td>
             {index===0 && <>
               <td rowSpan={group.entries.length+1} className="text-center font-bold">{!group.pending&&group.income>0?percent((group.income-group.cost)/group.income):group.pending?"Revisar LPU":"Sin LPU"}</td>
-              <td rowSpan={group.entries.length+1} className="text-center">{group.entries.some(line=>!isPurchase(line)&&(line.source==="Plataforma"||line.source==="Solicitud"))?<button className="text-sm underline" onClick={()=>{setTab(1);setSearch(group.collector);}}>Ver revisión de solicitudes</button>:<span className="text-slate-500">OC registrada</span>}</td>
+              <td rowSpan={group.entries.length+1} className="text-center">{group.entries.some(line=>!isPurchase(line)&&(line.source==="Plataforma"||line.source==="Solicitud"))?<button className="text-sm underline" onClick={()=>{setTab(4);}}>Ver revisión de solicitudes</button>:<span className="text-slate-500">OC registrada</span>}</td>
             </>}
           </tr>)}
           <tr className="subtotal"><th scope="row" colSpan={6} className="text-right">Total {group.primary?.site || group.collector}</th><td className="whitespace-nowrap text-right">{money(group.cost)}</td><td className="whitespace-nowrap text-right">{group.pending?"Por revisar":money(group.income)}</td></tr>
         </tbody>)}
       </table></div>}
     </section>}
-    {tab===1 && <ServiceReview requests={saved.filter(line=>(!coordinator || line.coordinator===coordinator) && (!search || [line.collector,line.description,line.coordinator].some(value=>norm(value).includes(norm(search)))))} canReview={canReview} canOperate={canOperate} save={reviewService}/>}
-    {(tab===1 || tab===3 || (logistics&&tab===0)) && <section className="os-request-table rounded-xl border bg-white p-5">
-      <h2 className="mb-3 text-xl font-semibold">{tab===3?"Órdenes de compra registradas":logistics?"Solicitudes de servicios":"Mis solicitudes"} <span className="text-sm font-normal text-slate-500">({tableRows.length})</span></h2>
+    {tab===1 && !logistics && <ServiceReview requests={saved} canReview={false} canOperate={false} save={reviewService}/>}
+    {tab===4 && <section className="space-y-4">
+      <div className="rounded-xl border bg-white p-5"><h2 className="text-xl font-semibold">Validación de José Ortiz</h2><p className="mt-2 text-sm text-slate-600">{canReview?"Aquí están las solicitudes pendientes y las observaciones sustentadas, listas para tu decisión.":"José Ortiz puede escribir observaciones y aprobar desde su cuenta. Esta vista permite consultar su bandeja."}</p></div>
+      {saved.filter(line=>!isPurchase({...line,source:"Plataforma",included:true})&&["Pendiente","Analizada","Sustentada"].includes(line.details?.Status || "Pendiente")).length===0?<p className="rounded-xl border bg-white p-5 text-sm">No hay solicitudes pendientes de decisión.</p>:<ServiceReview requests={saved.filter(line=>!isPurchase({...line,source:"Plataforma",included:true})&&["Pendiente","Analizada","Sustentada"].includes(line.details?.Status || "Pendiente"))} canReview={canReview} canOperate={canOperate} save={reviewService}/>}
+      <details className="rounded-xl border bg-white p-5"><summary className="cursor-pointer text-sm font-semibold">Observadas · esperando sustento del coordinador</summary><ServiceReview requests={saved.filter(line=>line.details?.Status==="Observada")} canReview={false} canOperate={true} save={reviewService}/></details>
+    </section>}
+    {tab===5 && canOperate && <section className="rounded-xl border bg-white p-5"><h2 className="text-xl font-semibold">Emisión y cierre de órdenes de servicio</h2><p className="mt-2 text-sm text-slate-600">Las solicitudes aprobadas llegan automáticamente a esta bandeja. Carga el número y PDF o enlace de la OS. Después pulsa Finalizar.</p></section>}
+    {(tab===1 || tab===3 || tab===5 || (logistics&&tab===0)) && <section className="os-request-table rounded-xl border bg-white p-5">
+      <h2 className="mb-3 text-xl font-semibold">{tab===5?"OS aprobadas, emitidas y finalizadas":tab===3?"Órdenes de compra registradas":logistics?"Solicitudes de servicios":"Mis solicitudes"} <span className="text-sm font-normal text-slate-500">({tableRows.length})</span></h2>
       {tableRows.length===0 ? <p className="text-sm text-slate-600">Todavía no hay solicitudes para mostrar.</p> : <div className="max-h-96 overflow-auto"><table className="w-full text-left text-sm">
-        <thead className="sticky top-0 bg-slate-100"><tr>{["Estado","Proveedor / RUC / Contacto","Servicio / Site","Coordinador","Colector","Tipo de orden","Monto total",...(tab===3?[]:["40% inicial","40% intermedio","20% final"]),"Acciones"].map(label=><th key={label}>{label}</th>)}</tr></thead>
+        <thead className="sticky top-0 bg-slate-100"><tr>{["Estado",tab===3?"Número OC":"Número OS","Proveedor / RUC / Contacto","Servicio / Site","Coordinador","Colector","Tipo de orden","Monto total",...(tab===3?[]:["40% inicial","40% intermedio","20% final"]),"Acciones"].map(label=><th key={label}>{label}</th>)}</tr></thead>
         <tbody>{tableRows.map(line=><tr key={line.key}>
           <td><span className={"os-status "+(status(line).includes("emitida")?"done":status(line).includes("Aprob")?"approved":"waiting")}>{status(line)}</span></td>
-          <td><strong>{line.details?.Contratista || "—"}</strong><small>RUC {line.details?.RUC || "—"}</small><small>{line.details?.Contacto || ""}</small></td>
+          <td className="whitespace-nowrap"><strong>{line.details?.["Número OC"] || line.details?.["OS Contrata"] || "Por emitir"}</strong></td><td><strong>{line.details?.Contratista || "—"}</strong><small>RUC {line.details?.RUC || "—"}</small><small>{line.details?.Contacto || ""}</small></td>
           <td><strong>{line.description}</strong><small>{line.site}</small></td>
           <td><strong>{line.coordinator}</strong><small>{line.details?.Cliente || ""}</small></td>
           <td><button className="os-code" disabled={!logistics} onClick={()=>{setSelected(line.collector);setTab(2);}}>{line.collector}</button></td>
