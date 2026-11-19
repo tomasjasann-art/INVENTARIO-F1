@@ -21,12 +21,12 @@ function storedExpenses(line:Saved):Expense[]{
 }
 function initialLines(saved:Saved[],purchaseExpenses:Saved[]=[]):Line[]{
   const requests=saved.flatMap(line=>[{...line,source:"Plataforma",included:true},...storedExpenses(line).map(expense=>({key:expense.id,collector:line.collector,coordinator:line.coordinator,site:line.site,description:expense.descripcion,cost:expense.monto,lpu:0,reference:"",source:"Manual guardado",included:true}))]);
-  return [...requests,...purchaseExpenses.map(line=>({...line,coordinator:saved.find(request=>request.collector===line.collector)?.coordinator || "Sin coordinador asignado",source:"OC",included:true}))];
+  return [...requests,...purchaseExpenses.map(line=>({...line,coordinator:line.coordinator || saved.find(request=>request.collector===line.collector)?.coordinator || "Sin coordinador asignado",source:"OC",included:true}))];
 
 }
 type Saved = Omit<Line,"source"|"included">;
-export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf}: {
-  importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
+export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf, coordinatorOptions}: {
+  coordinatorOptions:string[]; importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
 }){
   const [lines,setLines] = useState<Line[]>(() => initialLines(saved,purchaseExpenses));
   const [tab,setTab] = useState(logistics?0:1);
@@ -207,12 +207,20 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       .os-request-table>div{max-height:650px}.os-request-table table{min-width:1500px}.os-request-table table th{padding:16px;text-transform:uppercase;font-size:10px;letter-spacing:.04em;color:#69819f}.os-request-table table td{padding:20px 16px;border-bottom:1px solid #e8eef6;vertical-align:middle;line-height:1.4}.os-request-table small{display:block;color:#8090a5;font-size:10px;margin-top:3px}.os-request-table strong{font-weight:600}
       .os-code{background:#edf2f8;border-radius:5px;padding:3px 6px;font-size:10px;color:#617997!important;text-align:left}.os-order-tag{display:inline-block;background:#f0ebff;color:#8560ca;border-radius:5px;font-size:10px;padding:4px 6px}.os-installment{display:block;background:#f6f8fc;border:1px solid #e0e7f0;border-radius:7px;padding:6px 8px;white-space:nowrap;font-size:11px;color:#536985}.os-row-detail{color:#d65413;font-size:11px;white-space:nowrap}
       @media(max-width:1000px){.os-analytics{grid-template-columns:1fr 1fr}.os-progress{grid-column:1/-1}}@media(max-width:650px){.os-analytics{grid-template-columns:1fr}.os-control-bar>label{width:100%}.os-control-bar select{width:100%;max-width:none}}
+
+      .os-f1 .report{font-size:12px;border-collapse:separate;border-spacing:0;min-width:1200px}
+      .os-f1 .report th,.os-f1 .report td{border:0;border-bottom:1px solid #e5edf7;padding:16px 12px;vertical-align:middle}
+      .os-f1 .report thead,.os-f1 .report .rate,.os-f1 .report .approval{background:#f3f7fd;color:#6b819e}
+      .os-f1 .report thead th{text-transform:uppercase;font-size:10px;letter-spacing:.035em;white-space:nowrap}
+      .os-f1 .report tbody{background:white}.os-f1 .report tbody:nth-of-type(even){background:#fff}
+      .os-f1 .report .subtotal{background:#fff7f1;color:#8a431b;border-top:0}.os-f1 .report td.font-bold{font-size:16px;color:#263f60}
+      .os-f1 .report button.underline{background:#eef3fa;color:#577191!important;padding:4px 7px;border-radius:5px;text-decoration:none;font-size:11px}
     `}</style>
     <header className="os-dashboard-header">
       <div className="os-brand"><a href="/" aria-label="Volver al inicio F1" className="os-back"><ArrowLeft size={20}/></a><Image src="/f1-services-logo-horizontal.png" alt="F1 Services & Solutions" width={180} height={58}/><div><h1>OS y Compras</h1><p>Seguimiento y rentabilidad</p></div></div>
       <div className="os-header-actions">{logistics&&<button className="os-export" onClick={()=>{setTab(3);setShowPurchasePdf(true);}}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{logistics&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
     </header>
-    {logistics && tab===3 && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf}/>}
+    {logistics && tab===3 && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf} coordinators={coordinatorOptions}/>}
     {logistics && <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3">
       <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Servicios / OS","Análisis por coordinador","Compras / OC"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
 
@@ -254,12 +262,13 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
       } catch {setSubmission("No se pudo confirmar el guardado. Puedes reintentar.");}
       finally {setSending(false);}
     }}>
+      {logistics && <label className="text-sm">Coordinador F1<select name="coordinator" required className="block w-full rounded border p-2"><option value="">Seleccionar coordinador</option>{coordinatorOptions.map(name=><option key={name}>{name}</option>)}</select></label>}
       {fields.filter(field=>field!=="Comentarios").map(field=><label key={field} className="text-sm">{field}
         {field==="Tipo de comprobante" || field==="Tipo de orden" ? <select name={field} required className="block w-full rounded border p-2"><option value="">Seleccionar</option>{(field==="Tipo de comprobante"?["Factura","Recibo RXH"]:["Orden de Servicio","Orden de Compra"]).map(option=><option key={option}>{option}</option>)}</select>
         :field==="RUC"?<><input name={field} list="os-proveedores" required value={ruc} onChange={e=>setRuc(e.target.value)} className="block w-full rounded border p-2" placeholder="Buscar RUC de proveedor"/><datalist id="os-proveedores">{suppliers.map(item=><option key={item.ruc} value={item.ruc}>{item.name}</option>)}</datalist>{ruc&&!supplier&&<span className="text-xs text-red-700">Selecciona un proveedor registrado.</span>}</>
         :field==="Contratista"?<input name={field} readOnly value={supplier?.name??""} className="block w-full rounded border bg-slate-50 p-2"/>
         :<input name={field} maxLength={500} className="block w-full rounded border p-2"/>}</label>)}
-      {[["collector","Colector"],["site","Site"],["description","Servicio"],["reference","Referencia LPU si corresponde a un adicional"]].map(([name,label])=><label key={name} className="text-sm">{label}<input name={name} required={name!=="reference"} className="block w-full rounded border p-2"/></label>)}
+      {[["collector","Colector"],["site","Site"],["description","Servicio"]].map(([name,label])=><label key={name} className="text-sm">{label}<input name={name} required={name!=="reference"} className="block w-full rounded border p-2"/></label>)}
       <label className="text-sm">Monto solicitado<input name="cost" value={requestedCost} onChange={e=>setRequestedCost(e.target.value)} type="number" min="0.01" step="0.01" required className="block w-full rounded border p-2"/></label>
       <label className="text-sm">LPU validada<input name="lpu" type="number" min="0" step="0.01" className="block w-full rounded border p-2"/></label>
       <div className="flex flex-wrap gap-4 sm:col-span-2 lg:col-span-3">{[0.4,0.4,0.2].map((share,index)=><div key={index} className="rounded-lg bg-orange-50 p-3"><span className="block text-xs">{["Primer 40%","Segundo 40%","Saldo 20%"][index]}</span><strong>{money((Number(requestedCost)||0)*share)}</strong></div>)}</div>
@@ -307,16 +316,16 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     {(tab===1 || tab===3 || (logistics&&tab===0)) && <section className="os-request-table rounded-xl border bg-white p-5">
       <h2 className="mb-3 text-xl font-semibold">{tab===3?"Órdenes de compra registradas":logistics?"Solicitudes de servicios":"Mis solicitudes"} <span className="text-sm font-normal text-slate-500">({tableRows.length})</span></h2>
       {tableRows.length===0 ? <p className="text-sm text-slate-600">Todavía no hay solicitudes para mostrar.</p> : <div className="max-h-96 overflow-auto"><table className="w-full text-left text-sm">
-        <thead className="sticky top-0 bg-slate-100"><tr>{["Estado","Proveedor / RUC / Contacto","Servicio / Site","Coordinador","Colector","Tipo de orden","Monto solicitado","40% inicial","40% intermedio","20% final","Acciones"].map(label=><th key={label}>{label}</th>)}</tr></thead>
+        <thead className="sticky top-0 bg-slate-100"><tr>{["Estado","Proveedor / RUC / Contacto","Servicio / Site","Coordinador","Colector","Tipo de orden","Monto total",...(tab===3?[]:["40% inicial","40% intermedio","20% final"]),"Acciones"].map(label=><th key={label}>{label}</th>)}</tr></thead>
         <tbody>{tableRows.map(line=><tr key={line.key}>
           <td><span className={"os-status "+(status(line).includes("emitida")?"done":status(line).includes("Aprob")?"approved":"waiting")}>{status(line)}</span></td>
           <td><strong>{line.details?.Contratista || "—"}</strong><small>RUC {line.details?.RUC || "—"}</small><small>{line.details?.Contacto || ""}</small></td>
           <td><strong>{line.description}</strong><small>{line.site}</small></td>
           <td><strong>{line.coordinator}</strong><small>{line.details?.Cliente || ""}</small></td>
           <td><button className="os-code" disabled={!logistics} onClick={()=>{setSelected(line.collector);setTab(2);}}>{line.collector}</button></td>
-          <td><span className="os-order-tag">{line.details?.["Tipo de orden"] || "Por definir"}</span></td>
+          <td><span className="os-order-tag">{isPurchase(line)?"Orden de Compra":line.details?.["Tipo de orden"] || "Orden de Servicio"}</span></td>
           <td className="whitespace-nowrap"><strong>{money(line.cost)}</strong><small>{line.details?.["Tipo de comprobante"] || ""}</small></td>
-          {[0.4,0.4,0.2].map((share,index)=><td key={index}><span className={"os-installment installment-"+index}>{money(line.cost*share)}</span></td>)}
+          {tab!==3 && [0.4,0.4,0.2].map((share,index)=><td key={index}><span className={"os-installment installment-"+index}>{money(line.cost*share)}</span></td>)}
           <td>{logistics&&<button className="os-row-detail" aria-label={"Abrir detalle de "+line.collector} onClick={()=>{setSelected(line.collector);setTab(2);}}>Ver detalle</button>}</td>
         </tr>)}</tbody>
       </table></div>}
@@ -334,8 +343,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
             <td className="p-2">{line.collector}</td>
             <td className="p-2">{line.details?.Contratista || "—"}</td>
             <td className="p-2">{line.description}<span className="block text-xs text-slate-600">{line.source}</span></td>
-            <td className="p-2 whitespace-nowrap"><label className="flex items-center gap-2"><input aria-label={"Incluir costo de "+line.description} type="checkbox" checked={line.included} onChange={e=>update(line.key,{included:e.target.checked})}/>{money(line.cost)}</label>
-            {(line.source==="Solicitud" || line.source==="Plataforma") && <span className="mt-1 block text-xs text-slate-600">40 / 40 / 20%<br/>{[0.4,0.4,0.2].map(p=>money(line.cost*p)).join(" / ")}</span>}</td>
+            <td className="p-2 whitespace-nowrap"><label className="flex items-center gap-2"><input aria-label={"Incluir costo de "+line.description} type="checkbox" checked={line.included} onChange={e=>update(line.key,{included:e.target.checked})}/>{money(line.cost)}</label></td>
             <td className="p-2 whitespace-nowrap">{line.lpu?money(line.lpu):"—"}{line.lpu>0 && <input className="mt-1 block w-28 rounded border p-1" placeholder="Referencia" aria-label="Referencia LPU" value={line.reference} onChange={e=>update(line.key,{reference:e.target.value})}/>}</td>
             <td/><td/>
           </tr>)}</tbody>
@@ -348,9 +356,11 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
           </tr></tfoot>
         </table>
       </div>
+      <datalist id="solicitudes-colector">{saved.filter(line=>line.collector===selected).map(line=><option key={line.key} value={line.description}/>)}</datalist>
       <section className="grid gap-5 lg:grid-cols-2">
         <form className="space-y-3 rounded-xl border bg-orange-50/40 p-4" onSubmit={async e=>{
           e.preventDefault(); const form=e.currentTarget; const data=new FormData(form);
+          data.set("request",saved.find(line=>line.collector===selected && line.description===data.get("solicitud"))?.key || String(data.get("request")??""));
           data.set("kind","expense");data.set("expenseId",crypto.randomUUID());
           setTrackingBusy(true);
           try{const error=await saveTracking(data);setTrackingMessage(error??"Gasto guardado.");if(!error)form.reset();}
@@ -358,19 +368,19 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
           finally{setTrackingBusy(false);}
         }}>
           <h3 className="font-semibold">Agregar gasto al colector</h3>
-          <label className="block text-sm">Solicitud<select name="request" required className="block w-full rounded border p-2"><option value="">Seleccionar solicitud</option>{saved.filter(line=>line.collector===selected).map(line=><option key={line.key} value={line.key}>{line.description}</option>)}</select></label>
+          <input type="hidden" name="request" value={saved.find(line=>line.collector===selected)?.key || ""}/><label className="block text-sm">Solicitud<input name="solicitud" required list="solicitudes-colector" placeholder="Escribe la solicitud…" className="block w-full rounded border p-2"/></label>
           <label className="block text-sm">Descripción<input name="description" required className="block w-full rounded border p-2"/></label>
           <label className="block text-sm">Importe<input name="cost" type="number" min="0.01" step="0.01" required className="block w-full rounded border p-2"/></label>
           <button disabled={trackingBusy} className="rounded bg-blue-800 px-4 py-2 text-white">Guardar gasto</button>
         </form>
         <form className="space-y-3 rounded-xl border p-4" onSubmit={async e=>{
-          e.preventDefault();const form=e.currentTarget;const data=new FormData(form);data.set("kind","order");setTrackingBusy(true);
+          e.preventDefault();const form=e.currentTarget;const data=new FormData(form);data.set("request",saved.find(line=>line.collector===selected && line.description===data.get("solicitud"))?.key || String(data.get("request")??""));data.set("kind","order");setTrackingBusy(true);
           try{const error=await saveTracking(data);setTrackingMessage(error??"Orden emitida guardada.");if(!error)form.reset();}
           catch{setTrackingMessage("No se pudo guardar la orden.");}
           finally{setTrackingBusy(false);}
         }}>
           <h3 className="font-semibold">Orden generada en Odoo</h3>
-          <label className="block text-sm">Solicitud<select name="request" required className="block w-full rounded border p-2"><option value="">Seleccionar solicitud</option>{saved.filter(line=>line.collector===selected).map(line=><option key={line.key} value={line.key}>{line.description}</option>)}</select></label>
+          <input type="hidden" name="request" value={saved.find(line=>line.collector===selected)?.key || ""}/><label className="block text-sm">Solicitud<input name="solicitud" required list="solicitudes-colector" placeholder="Escribe la solicitud…" className="block w-full rounded border p-2"/></label>
           <label className="block text-sm">Número de OC / OS<input name="number" required className="block w-full rounded border p-2"/></label>
           <label className="block text-sm">Enlace de Odoo o del documento<input name="link" type="url" className="block w-full rounded border p-2"/></label>
           <label className="block text-sm">PDF de la orden (máximo 2 MB)<input name="pdf" type="file" accept="application/pdf" className="block w-full"/></label>
