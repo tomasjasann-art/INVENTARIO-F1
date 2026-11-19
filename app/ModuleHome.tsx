@@ -1,6 +1,5 @@
 "use client";
 import F1Header from "./F1Header";
-import { f1Background } from "./f1-brand";
 import {useState} from "react";
 import {Boxes,Truck,Wrench,Files,ChartNoAxesCombined,ArrowUpRight,Search,LogOut} from "lucide-react";
 
@@ -16,7 +15,7 @@ export default function ModuleHome({name,role,signOut}:{name:string;role:string;
  const coordinator=role==="COORDINADOR";
  const allowed=modules.filter(module=>!coordinator || module.tag==="Equipos" || module.tag==="Análisis");
  const visible=allowed.filter(module=>(module.name+" "+module.description).toLocaleLowerCase("es").includes(search.toLocaleLowerCase("es")));
- return <div className="f1-portal f1-branded-portal" style={{backgroundColor:"#706c69",backgroundImage:`url("${f1Background}")`,backgroundPosition:"center bottom",backgroundSize:"100% auto",backgroundRepeat:"no-repeat",backgroundAttachment:"fixed"}}>
+ return <div className="f1-portal">
  <style>{`
  .f1-portal{min-height:100vh;background:#f7f7f8;color:#252a30;font-family:Arial,Helvetica,sans-serif}
  .f1-portal header{height:88px;background:white;border-bottom:1px solid #e8e8eb;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:12px clamp(20px,5vw,84px)}
