@@ -17,7 +17,7 @@ async function getAccess() {
   const canReview=access.id===3;
   if (!logistics && !canReview && access.role !== "COORDINADOR") redirect("/");
   let coordinator=access.displayName || user.displayName;
-  if(access.coordinatorId){
+  if("coordinatorId" in access && access.coordinatorId){
     const rows=await getDb().execute(sql`SELECT name FROM coordinators WHERE id=${access.coordinatorId} AND active=true LIMIT 1`);
     if(rows[0])coordinator=String(rows[0].name);
   }
@@ -77,6 +77,10 @@ async function saveTracking(form: FormData) {
   let patch:Record<string,string>={};
   let action="";
   if(kind==="order"){
+    const requests=await getDb().execute(sql`SELECT details FROM f1_os_requests WHERE id=${id.data} LIMIT 1`);
+    if(!requests.length)return "Solicitud no encontrada.";
+    const info=requests[0].details as Record<string,unknown>;
+    if(info["Tipo de orden"]!=="Orden de Compra" && info.Status!=="Aprobada" && info.Status!=="OS emitida")return "La OS requiere la aprobación de José antes de registrar su emisión.";
     const number=String(form.get("number")??"").trim();
     const link=String(form.get("link")??"").trim();
     if(!number) return "Ingresa el número de orden.";
@@ -97,7 +101,7 @@ async function saveTracking(form: FormData) {
     if(!description || !Number.isFinite(cost) || cost<=0 || cost>999999999) return "Revisa la descripción y el importe.";
     patch={};
     const event=JSON.stringify({fecha:new Date().toISOString(),usuario:user.email,accion:"Gasto agregado",solicitud:String(form.get("solicitud")??"").trim().slice(0,500),descripcion:description,monto:cost,id:z.string().uuid().parse(form.get("expenseId"))});
-    await getDb().execute(sql`UPDATE public.f1_os_requests SET details=jsonb_set(details,'{Gastos}', COALESCE(details->'Gastos','[]'::jsonb) || ${event}::jsonb) WHERE id=${id.data} AND NOT COALESCE(details->'Gastos','[]'::jsonb) @> ${JSON.stringify([{id:String(form.get("expenseId"))}])}::jsonb`);
+    await getDb().execute(sql`UPDATE public.f1_os_requests SET details=jsonb_set(details,'{Gastos}', COALESCE(details->'Gastos','[]'::jsonb) || ${event}::jsonb) || jsonb_build_object('Revisión versión',COALESCE((details->>'Revisión versión')::int,0)+1) || CASE WHEN details->>'Status'='Aprobada' THEN '{"Status":"Sustentada","Último mensaje":"Se agregó un gasto después de la aprobación. Requiere nueva revisión.","Mensaje para":"José Ortiz","Aprobado por":"","Fecha de aprobación":""}'::jsonb ELSE '{}'::jsonb END WHERE id=${id.data} AND NOT COALESCE(details->'Gastos','[]'::jsonb) @> ${JSON.stringify([{id:String(form.get("expenseId"))}])}::jsonb`);
     revalidatePath("/analisis-os");
     return null;
   } else return "Operación inválida.";
