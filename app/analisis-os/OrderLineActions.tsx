@@ -20,6 +20,10 @@ export default function OrderLineActions({line,save}:{line:Line;save:(data:FormD
    {line.details?.["PDF nombre"]&&<a className="underline" target="_blank" rel="noreferrer" href={"/analisis-os/documento?id="+line.key+(purchase?"&tipo=oc":"")}>Ver PDF</a>}
    {/^https?:\/\//i.test(link)&&<a className="underline" href={link} target="_blank" rel="noreferrer">Abrir enlace</a>}
    <button disabled={!eligible||busy} className="text-orange-700 disabled:text-slate-400" title={eligible?"Cargar PDF o enlace":"La OS requiere aprobación de José"} onClick={()=>setOpen(value=>!value)}>{purchase?"PDF / enlace OC":"PDF / enlace OS"}</button>
+   {!purchase&&line.details?.Status==="OS emitida"&&<button disabled={busy} className="font-semibold text-emerald-700" onClick={async()=>{
+    const data=new FormData();data.set("id",line.key);data.set("kind","os");data.set("action","finalize");setBusy(true);
+    try{const error=await save(data);setMessage(error??"Solicitud finalizada.");if(!error)router.refresh();}catch{setMessage("No se pudo finalizar.");}finally{setBusy(false);}
+   }}>Finalizar</button>}
    <button disabled={busy} className="text-red-700" onClick={()=>setConfirmDelete(true)}>Borrar línea</button>
   </div>
   {confirmDelete&&<div className="rounded border border-red-200 bg-red-50 p-3"><p>¿Retirar esta línea y su gasto de los totales?</p><div className="mt-2 flex gap-3"><button disabled={busy} onClick={()=>void remove()} className="text-red-700">Confirmar borrado</button><button onClick={()=>setConfirmDelete(false)}>Cancelar</button></div></div>}
