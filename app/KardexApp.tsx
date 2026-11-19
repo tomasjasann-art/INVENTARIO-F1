@@ -680,7 +680,7 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
           <F1Mark/>
-          <div><strong>LOGÍSTICA F1</strong><small>PLATAFORMA OPERATIVA</small></div>
+
           <button className="icon-button sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="Cerrar menú"><X size={18} /></button>
         </div>
         {initialModule==="equipos" && <>
