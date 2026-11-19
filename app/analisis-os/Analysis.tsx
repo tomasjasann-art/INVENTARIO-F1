@@ -322,7 +322,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
         </tbody>)}
       </table></div>}
     </section>}
-    {tab===1 && !logistics && <ServiceReview requests={saved} canReview={false} canOperate={false} save={reviewService}/>}
+    {tab===1 && !logistics && <ServiceReview analysis={Object.fromEntries(groups.map(group=>[group.collector,{cost:group.cost,lpu:group.income,pending:group.pending}]))} requests={saved} canReview={false} canOperate={false} save={reviewService}/>}
     {tab===4 && <section className="space-y-4">
       <div className="rounded-xl border bg-white p-5"><h2 className="text-xl font-semibold">Validación de José Ortiz</h2><p className="mt-2 text-sm text-slate-600">{canReview?"Aquí están las solicitudes pendientes y las observaciones sustentadas, listas para tu decisión.":"José Ortiz puede escribir observaciones y aprobar desde su cuenta. Esta vista permite consultar su bandeja."}</p></div>
       {saved.filter(line=>!isPurchase({...line,source:"Plataforma",included:true})&&["Pendiente","Analizada","Sustentada"].includes(line.details?.Status || "Pendiente")).length===0?<p className="rounded-xl border bg-white p-5 text-sm">No hay solicitudes pendientes de decisión.</p>:<ServiceReview requests={saved.filter(line=>!isPurchase({...line,source:"Plataforma",included:true})&&["Pendiente","Analizada","Sustentada"].includes(line.details?.Status || "Pendiente"))} canReview={canReview} canOperate={canOperate} save={reviewService}/>}
