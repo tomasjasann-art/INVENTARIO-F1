@@ -94,6 +94,38 @@ async function saveTracking(form: FormData) {
   return null;
 }
 
+
+async function importPurchasePdf(form:FormData){
+ "use server";
+ const {user,logistics}=await getAccess();
+ if(!logistics)return "Solo Logística puede registrar gastos de OC.";
+ const header=z.object({order:z.string().trim().regex(/^[A-Za-z0-9_-]{2,50}$/),provider:z.string().trim().min(1).max(500),ruc:z.string().regex(/^\d{11}$/),date:z.string().trim().min(1).max(30)}).safeParse(Object.fromEntries(form));
+ if(!header.success)return "Revisa el número de OC, proveedor, RUC y fecha.";
+ let parsed:unknown;
+ try{parsed=JSON.parse(String(form.get("items")));}catch{return "Las líneas no son válidas.";}
+ const result=z.array(z.object({collector:z.string().trim().min(1).max(160),ceco:z.string().trim().max(30),description:z.string().trim().min(1).max(4000),cost:z.coerce.number().positive().max(999999999),tax:z.coerce.number().nonnegative().max(999999999)})).min(1).max(200).safeParse(parsed);
+ if(!result.success)return "Revisa el colector, descripción, subtotal e IGV de cada línea.";
+ const pdf=form.get("pdf");
+ if(!(pdf instanceof File)||pdf.size===0||pdf.size>2*1024*1024)return "Selecciona un PDF de hasta 2 MB.";
+ const bytes=Buffer.from(await pdf.arrayBuffer());
+ if(bytes.subarray(0,5).toString()!=="%PDF-")return "El archivo no es un PDF válido.";
+ const order=header.data.order.toUpperCase();
+ try{
+  const response=await getDb().transaction(async tx=>{
+   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${"f1-oc:"+order}))`);
+   const existing=await tx.execute(sql`SELECT id FROM f1_os_purchase_expenses WHERE order_number=${order} LIMIT 1`);
+   if(existing.length)return "La OC "+order+" ya está registrada. No se duplicaron sus gastos.";
+   for(const [index,line] of result.data.entries()){
+    const subtotal=Math.round(line.cost*100)/100,tax=Math.round(line.tax*100)/100,total=Math.round((subtotal+tax)*100)/100;
+    const details={"CECO":line.ceco,"Contratista":header.data.provider,"RUC":header.data.ruc,"Fecha":header.data.date,"Moneda":"PEN","Origen":"PDF OC","PDF":bytes.toString("base64"),"PDF nombre":pdf.name.slice(0,200),"Registrado por":user.email};
+    await tx.execute(sql`INSERT INTO f1_os_purchase_expenses (order_number,collector,line_number,description,subtotal,tax,total,details) VALUES (${order},${line.collector.toUpperCase()},${index+1},${line.description},${subtotal},${tax},${total},${JSON.stringify(details)}::jsonb)`);
+   }
+   return null;
+  });
+  revalidatePath("/analisis-os");return response;
+ }catch{return "No se pudo registrar la OC. Sus líneas se guardan juntas. Puedes reintentar.";}
+}
+
 export default async function AnalysisPage() {
   const {user, logistics} = await getAccess();
   const rows = await getDb().execute<{
@@ -106,7 +138,7 @@ export default async function AnalysisPage() {
   const purchaseExpenses=logistics ? await getDb().execute<{
     key:string;collector:string;coordinator:string;site:string;description:string;cost:number;lpu:number;reference:string;details:Record<string,string>;
   }>(sql`SELECT id::text AS key,collector,'' AS coordinator,'' AS site,description,subtotal::float8 AS cost,0::float8 AS lpu,'' AS reference,
-    details || jsonb_build_object('Número OC',order_number,'IGV',tax::text,'Total con IGV',total::text,'Origen','OC registrada') AS details
+    (details - 'PDF') || jsonb_build_object('Número OC',order_number,'IGV',tax::text,'Total con IGV',total::text,'Origen','OC registrada') AS details
     FROM public.f1_os_purchase_expenses ORDER BY created_at DESC`) : [];
-  return <Analysis purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics} fields={fields} submit={submit} />;
+  return <Analysis importPurchasePdf={importPurchasePdf} purchaseExpenses={Array.from(purchaseExpenses)} suppliers={Array.from(suppliers)} saveTracking={saveTracking} saved={Array.from(rows)} logistics={logistics} fields={fields} submit={submit} />;
 }
