@@ -166,7 +166,7 @@ async function reviewService(form:FormData){
    const current=Number(record.details["Revisión versión"]??0);
    if(current!==version)return "La solicitud cambió. Actualiza la página antes de continuar.";
    const state=String(record.details.Status??"Pendiente");
-   if(state==="OS emitida")return "Esta solicitud ya tiene una OS emitida.";
+   if(state==="OS emitida"||state==="Finalizada")return "Esta solicitud ya tiene una OS emitida.";
    if(action==="reply" && record.owner_email!==user.email && record.coordinator!==coordinator)return "Solo el coordinador responsable puede enviar el sustento.";
    if(action==="reply"&&state!=="Observada")return "La solicitud no tiene una observación pendiente.";
    if(action==="approve"&&state==="Observada")return "Falta el sustento del coordinador para aprobar.";
@@ -193,7 +193,7 @@ async function manageOrderLine(form:FormData){
  "use server";
  const {user,logistics}=await getAccess();
  if(!logistics)return "Solo Logística puede modificar órdenes.";
- const parsed=z.object({id:z.string().uuid(),kind:z.enum(["oc","os"]),action:z.enum(["document","delete"])}).safeParse(Object.fromEntries(form));
+ const parsed=z.object({id:z.string().uuid(),kind:z.enum(["oc","os"]),action:z.enum(["document","delete","finalize"])}).safeParse(Object.fromEntries(form));
  if(!parsed.success)return "Selecciona una línea válida.";
  const {id,kind,action}=parsed.data;
  const link=String(form.get("link")??"").trim();
@@ -218,10 +218,16 @@ async function manageOrderLine(form:FormData){
    if(action==="document" && kind==="os" && details["Tipo de orden"]!=="Orden de Compra" && details.Status!=="Aprobada" && details.Status!=="OS emitida")return "La solicitud requiere aprobación de José antes de cargar su OS.";
    if(action==="document" && !link && !pdfData.PDF && !details["PDF nombre"])return "Adjunta un PDF o registra su enlace.";
    if(action==="document" && kind==="os" && !number)return "Ingresa el número de OS.";
+   if(action==="finalize"){
+    if(kind!=="os" || details.Status!=="OS emitida")return "Carga primero la OS emitida.";
+    if(!details["OS Contrata"] || (!details["PDF nombre"]&&!details["Link de OS"]))return "Registra el número y el PDF o enlace de la OS antes de finalizar.";
+   }
    const patch:Record<string,unknown>=action==="delete"
     ? {Eliminada:true,"Eliminada por":user.email,"Fecha eliminación":new Date().toISOString()}
-    : {...pdfData,"Link de OS":link,...(kind==="os"?{"OS Contrata":number,Status:"OS emitida"}:{})};
-   const event={fecha:new Date().toISOString(),usuario:user.email,accion:action==="delete"?"Línea retirada":"PDF o enlace de orden actualizado"};
+    : action==="finalize"
+     ? {Status:"Finalizada","Finalizada por":user.email,"Fecha finalización":new Date().toISOString()}
+     : {...pdfData,"Link de OS":link,...(kind==="os"?{"OS Contrata":number,Status:"OS emitida"}:{})};
+   const event={fecha:new Date().toISOString(),usuario:user.email,accion:action==="delete"?"Línea retirada":action==="finalize"?"Solicitud finalizada por Logística":"PDF o enlace de orden actualizado"};
    await tx.execute(sql`UPDATE ${table} SET details=(details || ${JSON.stringify(patch)}::jsonb) || jsonb_build_object('Eventos',COALESCE(details->'Eventos','[]'::jsonb) || ${JSON.stringify(event)}::jsonb) WHERE id=${id}`);
    if(action==="delete"){
     await tx.execute(sql`UPDATE f1_os_requests SET details=details || '{"Status":"Sustentada","Último mensaje":"Se retiró una línea del colector. Requiere revisar el análisis actualizado.","Mensaje para":"José Ortiz","Aprobado por":"","Fecha de aprobación":""}'::jsonb || jsonb_build_object('Revisión versión',COALESCE((details->>'Revisión versión')::int,0)+1)
