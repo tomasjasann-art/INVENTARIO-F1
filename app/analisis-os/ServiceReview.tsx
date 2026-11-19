@@ -4,7 +4,7 @@ import {useRouter} from "next/navigation";
 
 type Request={key:string;collector:string;description:string;coordinator:string;cost?:number;lpu?:number;details?:Record<string,unknown>};
 type Message={fecha:string;usuario:string;accion:string;mensaje:string;montoCorregido?:string;descripcionCorregida?:string};
-export default function ServiceReview({requests,canReview,canOperate,save}:{requests:Request[];canReview:boolean;canOperate:boolean;save:(data:FormData)=>Promise<string|null>}){
+export default function ServiceReview({requests,canReview,canOperate,save,analysis}:{analysis:Record<string,{cost:number;lpu:number;pending:boolean}>;requests:Request[];canReview:boolean;canOperate:boolean;save:(data:FormData)=>Promise<string|null>}){
  const router=useRouter();
  const [open,setOpen]=useState("");
  const [busy,setBusy]=useState(false);
@@ -27,6 +27,7 @@ export default function ServiceReview({requests,canReview,canOperate,save}:{requ
      <span className={"rounded-full px-3 py-1 text-xs "+(status==="Aprobada"?"bg-emerald-100 text-emerald-800":status==="Observada"?"bg-orange-100 text-orange-800":"bg-slate-100 text-slate-600")}>{status}</span>
     </button>
     {(canReview || open===request.key)&&<div className="space-y-3 border-t p-4">
+     {canReview&&analysis[request.collector]&&<div className="flex flex-wrap gap-4 rounded-lg bg-orange-50 p-3 text-sm"><span>Costo total del colector <strong>{analysis[request.collector].cost.toLocaleString("es-PE",{style:"currency",currency:"PEN"})}</strong></span><span>LPU total <strong>{analysis[request.collector].pending?"Revisar LPU":analysis[request.collector].lpu.toLocaleString("es-PE",{style:"currency",currency:"PEN"})}</strong></span><span>Rentabilidad <strong>{!analysis[request.collector].pending&&analysis[request.collector].lpu>0?((analysis[request.collector].lpu-analysis[request.collector].cost)/analysis[request.collector].lpu).toLocaleString("es-PE",{style:"percent",maximumFractionDigits:2}):"Sin LPU validada"}</strong></span></div>}
      {messages.length===0&&<p className="text-sm text-slate-500">Esta solicitud aún no tiene comentarios de revisión.</p>}
      {messages.map((message,index)=><div key={index} className="rounded-lg bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2 text-xs text-slate-500"><strong>{message.accion}</strong><time>{new Date(message.fecha).toLocaleString("es-PE",{timeZone:"America/Lima"})}</time></div><p className="mt-2 whitespace-pre-wrap">{message.mensaje || "Solicitud aprobada."}</p>{message.montoCorregido&&<p className="text-xs text-slate-600">Monto corregido · S/ {message.montoCorregido}</p>}{message.descripcionCorregida&&<p className="text-xs text-slate-600">Servicio corregido · {message.descripcionCorregida}</p>}<small className="text-slate-500">{message.usuario}</small></div>)}
      {(canReview || (!canOperate&&status==="Observada"))&&!["OS emitida","Finalizada"].includes(status)&&<form className="space-y-3" onSubmit={async event=>{
