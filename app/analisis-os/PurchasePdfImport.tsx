@@ -4,11 +4,12 @@ import {useState} from "react";
 type Item={collector:string;description:string;cost:string;tax:string;ceco:string};
 type PdfItem={str:string;transform:number[]};
 function number(value:string){return Number(value.replace(/,/g,""));}
-export default function PurchasePdfImport({save}:{save:(data:FormData)=>Promise<string|null>}){
+export default function PurchasePdfImport({save,coordinators}:{coordinators:string[];save:(data:FormData)=>Promise<string|null>}){
  const [file,setFile]=useState<File|null>(null);
  const [order,setOrder]=useState("");
  const [provider,setProvider]=useState("");
  const [ruc,setRuc]=useState("");
+ const [coordinator,setCoordinator]=useState("");
  const [date,setDate]=useState("");
  const [items,setItems]=useState<Item[]>([]);
  const [message,setMessage]=useState("");
@@ -16,7 +17,7 @@ export default function PurchasePdfImport({save}:{save:(data:FormData)=>Promise<
  const [raw,setRaw]=useState("");
  function patch(index:number,field:keyof Item,value:string){setItems(old=>old.map((item,i)=>i===index?{...item,[field]:value}:item));}
  async function read(pdf:File){
-  setFile(pdf);setItems([]);setRaw("");setOrder("");setProvider("");setRuc("");setDate("");setBusy(true);setMessage("Leyendo PDF…");
+  setFile(pdf);setItems([]);setRaw("");setOrder("");setProvider("");setRuc("");setDate("");setCoordinator("");setBusy(true);setMessage("Leyendo PDF…");
   try{
    if(pdf.size>2*1024*1024)throw new Error("El PDF debe pesar como máximo 2 MB.");
    const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -40,6 +41,7 @@ export default function PurchasePdfImport({save}:{save:(data:FormData)=>Promise<
    const text=lines.join("\n");setRaw(text);
    setOrder(text.match(/\bP\d{4,}\b/)?.[0]??"");
    setDate(text.match(/\b\d{2}\/\d{2}\/\d{4}\b/)?.[0]??"");
+   setCoordinator(lines.find(line=>/Solicitado\s*:/i.test(line))?.replace(/^.*?Solicitado\s*:\s*/i,"").trim()??"");
    const supplierIndex=lines.findIndex(line=>/^\s*NOMBRE\s*:/i.test(line));
    if(supplierIndex>=0){
     setProvider(lines[supplierIndex].replace(/^\s*NOMBRE\s*:\s*/i,"").trim());
@@ -58,6 +60,7 @@ export default function PurchasePdfImport({save}:{save:(data:FormData)=>Promise<
      const description=tail.replace(/^\s*\d{4}\s+/,"").replace(/^\d+(?:\.\d+)?\s+/,"").replace(/\s+\d[\d,]*\.\d{2}\s+\d[\d,]*\.\d{2}\s*$/,"").trim();
      active={collector:collector.toUpperCase(),ceco,description,cost,tax:"0"};parsed.push(active);
     }else if(active && /sub\s*total|observaciones|IGV|total\s+PEN/i.test(line)){active=null;}
+    else if(active && /fecha|solicitud\s*:|solicitado\s*:|autorizado|creado por|forma de pago|servicio\s*:|moneda\s*:/i.test(line)){continue;}
     else if(active && line.trim()){active.description+=" "+line.trim();}
    }
    const taxText=text.match(/IGV[^\n]*?([\d,]+\.\d{2})/i)?.[1];
@@ -79,11 +82,12 @@ export default function PurchasePdfImport({save}:{save:(data:FormData)=>Promise<
   <p role="status" className="text-sm">{message}</p>
   {file&&items.length>0&&<form className="space-y-4" onSubmit={async e=>{
    e.preventDefault();if(busy)return;setBusy(true);
-   try{const data=new FormData();data.set("pdf",file);data.set("order",order);data.set("provider",provider);data.set("ruc",ruc);data.set("date",date);data.set("items",JSON.stringify(items));const error=await save(data);setMessage(error??"OC registrada. Sus gastos ya aparecen por colector.");if(!error){setFile(null);setItems([]);}}
+   try{const data=new FormData();data.set("pdf",file);data.set("order",order);data.set("provider",provider);data.set("ruc",ruc);data.set("date",date);data.set("coordinator",coordinator);data.set("items",JSON.stringify(items));const error=await save(data);setMessage(error??"OC registrada. Sus gastos ya aparecen por colector.");if(!error){setFile(null);setItems([]);}}
    catch{setMessage("No se pudo confirmar el registro. Puedes reintentar la misma orden.");}
    finally{setBusy(false);}
   }}>
    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[["Orden",order,setOrder],["Proveedor",provider,setProvider],["RUC proveedor",ruc,setRuc],["Fecha",date,setDate]].map(([label,value,setter])=><label key={label as string} className="text-sm">{label as string}<input required value={value as string} onChange={e=>(setter as (value:string)=>void)(e.target.value)} className="block w-full rounded border p-2"/></label>)}</div>
+   <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Coordinador · Solicitado<input value={coordinator} onChange={e=>setCoordinator(e.target.value)} list="oc-coordinadores" required className="block w-full rounded border p-2" placeholder="Nombre extraído de Solicitado"/><datalist id="oc-coordinadores">{coordinators.map(name=><option key={name}>{name}</option>)}</datalist></label><label className="text-sm">Tipo de orden<input readOnly value="Orden de Compra" className="block w-full rounded border bg-slate-50 p-2"/></label></div>
    <div className="overflow-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead><tr>{["Colector","CECO","Descripción","Subtotal sin IGV","IGV","Total",""].map((label,i)=><th key={i} className="p-2">{label}</th>)}</tr></thead><tbody>{items.map((item,index)=><tr key={index}>{(["collector","ceco","description","cost","tax"] as const).map(field=><td key={field} className="p-1"><input aria-label={field+" "+(index+1)} required={field!=="ceco"} className="w-full min-w-24 rounded border p-2" type={field==="cost"||field==="tax"?"number":"text"} min={field==="cost"?"0.01":"0"} step="0.01" value={item[field]} onChange={e=>patch(index,field,e.target.value)}/></td>)}<td className="p-2">{((Number(item.cost)||0)+(Number(item.tax)||0)).toFixed(2)}</td><td><button type="button" disabled={items.length===1} onClick={()=>setItems(old=>old.filter((_,i)=>i!==index))}>Quitar</button></td></tr>)}</tbody></table></div>
    <div className="flex gap-3"><button type="button" className="rounded border p-2" onClick={()=>setItems(old=>[...old,{collector:"",ceco:"",description:"",cost:"",tax:""}])}>Agregar línea</button><button disabled={busy} className="os-primary">{busy?"Guardando…":"Guardar gastos de OC"}</button></div>
    {raw&&<details><summary className="cursor-pointer text-sm">Ver texto del PDF</summary><pre className="max-h-52 overflow-auto whitespace-pre-wrap text-xs">{raw}</pre></details>}
