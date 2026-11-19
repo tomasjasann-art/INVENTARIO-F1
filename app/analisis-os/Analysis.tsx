@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import PurchasePdfImport from "./PurchasePdfImport";
 import Image from "next/image";
 import { CircleDollarSign, ShoppingCart, FileText, ChartNoAxesCombined, Layers, ArrowLeft, X, Download, Search } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -23,8 +24,8 @@ function initialLines(saved:Saved[],purchaseExpenses:Saved[]=[]):Line[]{
 
 }
 type Saved = Omit<Line,"source"|"included">;
-export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses}: {
-  saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
+export default function Analysis({saved, logistics, fields, submit, suppliers, saveTracking, purchaseExpenses, importPurchasePdf}: {
+  importPurchasePdf:(data:FormData)=>Promise<string|null>; saved:Saved[]; purchaseExpenses:Saved[]; logistics:boolean; fields:string[]; suppliers:{ruc:string;name:string}[]; saveTracking:(data:FormData)=>Promise<string|null>; submit:(data:FormData)=>Promise<string|null>;
 }){
   const [lines,setLines] = useState<Line[]>(() => initialLines(saved,purchaseExpenses));
   const [tab,setTab] = useState(logistics?0:1);
@@ -32,6 +33,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const [approvals,setApprovals] = useState<Record<string,boolean>>({});
   const [showForm,setShowForm] = useState(!logistics);
   const [showImports,setShowImports] = useState(false);
+  const [showPurchasePdf,setShowPurchasePdf] = useState(false);
   const [submission,setSubmission] = useState("");
   const [sending,setSending] = useState(false);
   const [requestId,setRequestId] = useState("");
@@ -203,8 +205,9 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
     `}</style>
     <header className="os-dashboard-header">
       <div className="os-brand"><a href="/" aria-label="Volver al inicio F1" className="os-back"><ArrowLeft size={20}/></a><Image src="/f1-services-logo-horizontal.png" alt="F1 Services & Solutions" width={180} height={58}/><div><h1>OS y Compras</h1><p>Seguimiento y rentabilidad</p></div></div>
-      <div className="os-header-actions"><button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{logistics&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
+      <div className="os-header-actions">{logistics&&<button className="os-export" onClick={()=>setShowPurchasePdf(value=>!value)}>Cargar OC en PDF</button>}<button onClick={exportAnalysis} className="os-export"><Download size={16}/>Exportar análisis</button>{logistics&&<button className="os-primary" onClick={()=>{setTab(1);setShowForm(true);}}>Nueva solicitud</button>}</div>
     </header>
+    {logistics && showPurchasePdf && <PurchasePdfImport save={importPurchasePdf}/>}
     {logistics && <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3">
       <nav aria-label="Vistas" className="flex flex-wrap gap-2">{["Resumen","Solicitudes","Análisis por coordinador"].map((label,index)=><button key={label} aria-current={tab===index?"page":undefined} className={`rounded-lg px-4 py-2 font-medium ${tab===index?"bg-blue-900 text-white":"text-slate-700 hover:bg-slate-100"}`} onClick={()=>setTab(index)}>{label}</button>)}</nav>
 
@@ -285,7 +288,7 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
               <td rowSpan={group.entries.length}>{group.primary?.details?.Cliente || "—"}</td>
               <td rowSpan={group.entries.length}><button className="text-left text-blue-800 underline" onClick={()=>setSelected(group.collector)}>{group.collector}</button></td>
             </>}
-            <td>{line.details?.Contratista || "—"}</td><td>{line.description}{line.details?.["Número OC"] && <small className="block text-slate-500">OC {line.details["Número OC"]} · IGV {line.details.IGV} · Total {line.details["Total con IGV"]}</small>}{!line.included && <span className="block text-slate-500">Excluido del costo</span>}</td><td className="whitespace-nowrap text-right">{money(line.cost)}</td><td className="whitespace-nowrap text-right">{line.lpu>0?money(line.lpu):"—"}</td>
+            <td>{line.details?.Contratista || "—"}</td><td>{line.description}{line.details?.["Número OC"] && <small className="block text-slate-500">OC {line.details["Número OC"]} · IGV {line.details.IGV} · Total {line.details["Total con IGV"]}</small>}{line.details?.["PDF nombre"] && line.source==="OC" && <a className="block text-xs underline" href={"/analisis-os/documento?id="+line.key+"&tipo=oc"} target="_blank" rel="noreferrer">Ver PDF OC</a>}{!line.included && <span className="block text-slate-500">Excluido del costo</span>}</td><td className="whitespace-nowrap text-right">{money(line.cost)}</td><td className="whitespace-nowrap text-right">{line.lpu>0?money(line.lpu):"—"}</td>
             {index===0 && <>
               <td rowSpan={group.entries.length+1} className="text-center font-bold">{!group.pending&&group.income>0?percent((group.income-group.cost)/group.income):group.pending?"Revisar LPU":"Sin LPU"}</td>
               <td rowSpan={group.entries.length+1} className="text-center"><label><input type="checkbox" disabled={!reviewed[group.collector]} checked={approvals[group.collector]??false} onChange={e=>setApprovals(old=>({...old,[group.collector]:e.target.checked}))}/> OK por correo</label></td>
