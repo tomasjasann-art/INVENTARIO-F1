@@ -16,6 +16,7 @@ export default function PurchasePdfImport({save,coordinators}:{coordinators:stri
  const [items,setItems]=useState<Item[]>([]);
  const [message,setMessage]=useState("");
  const [busy,setBusy]=useState(false);
+ const [dragging,setDragging]=useState(false);
  const [raw,setRaw]=useState("");
  function patch(index:number,field:keyof Item,value:string){setItems(old=>old.map((item,i)=>i===index?{...item,[field]:value}:item));}
  async function read(pdf:File){
@@ -80,7 +81,10 @@ export default function PurchasePdfImport({save,coordinators}:{coordinators:stri
  return <section className="space-y-4 rounded-xl border bg-white p-5">
   <h2 className="text-lg font-semibold">Registrar gastos de OC desde PDF</h2>
   <p className="text-sm text-slate-600">El gasto se asigna al colector de cada línea. Se conserva el subtotal sin IGV, el impuesto y el documento.</p>
-  <input aria-label="PDF de orden de compra" type="file" accept="application/pdf" disabled={busy} onChange={e=>{const pdf=e.target.files?.[0];if(pdf)void read(pdf);e.target.value="";}}/>
+  <div onDragOver={event=>{event.preventDefault();if(!busy)setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={event=>{event.preventDefault();setDragging(false);if(busy)return;const pdf=event.dataTransfer.files[0];if(!pdf)return;if(pdf.type!=="application/pdf"&&!pdf.name.toLowerCase().endsWith(".pdf")){setMessage("Arrastra un archivo PDF.");return;}void read(pdf);}} className={"rounded-xl border-2 border-dashed p-8 text-center "+(dragging?"border-orange-500 bg-orange-50":"border-slate-300 bg-slate-50")}>
+    <p className="mb-3 text-sm font-medium">{busy?"Procesando PDF…":"Arrastra aquí tu OC en PDF o selecciona el archivo"}</p>
+    <input aria-label="PDF de orden de compra" type="file" accept="application/pdf" disabled={busy} onChange={e=>{const pdf=e.target.files?.[0];if(pdf)void read(pdf);e.target.value="";}}/>
+   </div>
   <button type="button" className="ml-3 rounded border px-3 py-2 text-sm" onClick={()=>{setLinkMode(true);setFile(null);setItems([{collector:"",description:"",cost:"",tax:"",ceco:""}]);setMessage("Completa las líneas y registra el enlace del documento.");}}>Registrar OC por enlace</button>
   <p role="status" className="text-sm">{message}</p>
   {(file||linkMode)&&items.length>0&&<form className="space-y-4" onSubmit={async e=>{
