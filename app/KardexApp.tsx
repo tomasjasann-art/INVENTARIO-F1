@@ -1,6 +1,5 @@
 "use client";
-import F1Header, { F1Mark } from "./F1Header";
-import { f1Background } from "./f1-brand";
+import F1Header from "./F1Header";
 
 import {
   AlertTriangle,
@@ -676,13 +675,29 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
   }
 
   return (
-    <div className="app-shell f1-module-shell" style={{backgroundColor:"#706c69",backgroundImage:`url("${f1Background}")`,backgroundSize:"100% auto",backgroundPosition:"center bottom",backgroundRepeat:"no-repeat",backgroundAttachment:"fixed"}}>
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="brand">
-          <F1Mark/>
+    <div className="app-shell f1-module-shell">
+        <F1Header title={view==="configuracion"?"Configuración y usuarios":initialModule==="vehiculos"?"Control de vehículos":initialModule==="activos"?"Activos F1":initialModule==="documentos"?"Gestores documentales":"Control de Equipos Entel"} name={user.displayName} role={role} signOut={signOutPath} onSettings={()=>{setSettingsInitialRole("SOLO_LECTURA");setView("configuracion");setSidebarOpen(false);}} onRefresh={()=>void loadData()} loading={loading}>
+          <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Abrir menú"><Menu size={21} /></button>
+          {view === "activos" ? <strong className="fleet-shell-title">Activos F1</strong> : view === "flota" ? <strong className="fleet-shell-title">Control de vehículos</strong> : <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>}
+          <div className="top-actions">
+            <div className="notification-center">
+              <button className={`notification-button ${notificationRequests.length ? "has-alerts" : ""}`} onClick={() => setNotificationsOpen((open) => !open)} aria-label={`${notificationRequests.length} solicitudes nuevas`} aria-expanded={notificationsOpen}><Bell size={19} />{notificationRequests.length > 0 && <span>{notificationRequests.length > 99 ? "99+" : notificationRequests.length}</span>}</button>
+              {notificationsOpen && <div className="notification-panel">
+                <div className="notification-head"><div><strong>{isCoordinator ? "Mis solicitudes activas" : "Solicitudes nuevas"}</strong><small>{notificationRequests.length} Pedido(s) F1 {isCoordinator ? "en seguimiento" : "por validar"}</small></div><button className="icon-button" onClick={() => setNotificationsOpen(false)} aria-label="Cerrar notificaciones"><X size={16} /></button></div>
+                <div className="notification-list">{notificationRequests.length === 0 ? <p>No tienes solicitudes nuevas.</p> : notificationRequests.slice(0, 8).map((group) => { const request = group[0]; const quantity = group.reduce((sum, row) => sum + row.quantity, 0); return <button key={request.requestCode} onClick={() => openRequestFromNotification(request.requestCode)}><span className="notification-icon"><ShoppingCart size={16} /></span><span><strong>{request.requestCode}</strong><small>{request.coordinatorName} · {quantity} equipo(s)</small><small>Despacho: {request.neededDate ? displayDate(request.neededDate) : "Sin fecha"}</small></span><b>{requestElapsedLabel(request)}</b></button>; })}</div>
+                {notificationRequests.length > 0 && <button className="notification-footer" onClick={() => { setView("solicitudes"); setNotificationsOpen(false); }}>Ver todas las solicitudes</button>}
+              </div>}
+            </div>
+            {!isCoordinator && !(["documentos", "activos", "flota", "solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
+            {canOperate && view === "ingresos" && <button className="secondary-button quick-movement gr-read-button" onClick={() => setModal("grIngreso")}><FileSpreadsheet size={17} />Leer GR de ingreso</button>}
+            {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
+            {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
+            {canOperate && view === "carga" && <button className="secondary-button product-button" onClick={() => setModal("product")}><PackagePlus size={17} />Nuevo SKU</button>}
+          </div>
+</F1Header>
 
-          <button className="icon-button sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="Cerrar menú"><X size={18} /></button>
-        </div>
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+        <button className="icon-button sidebar-close f1-sidebar-close" onClick={()=>setSidebarOpen(false)} aria-label="Cerrar menú"><X size={18}/></button>
         {initialModule==="equipos" && <>
         <button
           className="module-pill"
@@ -772,26 +787,7 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
       </aside>
 
       <main className="main-area">
-        <F1Header title={view==="configuracion"?"Configuración y usuarios":initialModule==="vehiculos"?"Control de vehículos":initialModule==="activos"?"Activos F1":initialModule==="documentos"?"Gestores documentales":"Control de Equipos Entel"} name={user.displayName} role={role} signOut={signOutPath} onSettings={()=>{setSettingsInitialRole("SOLO_LECTURA");setView("configuracion");setSidebarOpen(false);}}/>
-        <header className="topbar">
-          <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Abrir menú"><Menu size={21} /></button>
-          {view === "activos" ? <strong className="fleet-shell-title">Activos F1</strong> : view === "flota" ? <strong className="fleet-shell-title">Control de vehículos</strong> : <div className="search-box"><Search size={18} /><input list={view === "salidas" ? "exit-site-search-options" : undefined} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "salidas" ? "Buscar site de salida por código o nombre..." : "Buscar SKU, equipo, guía, proyecto o site..."} />{view === "salidas" && <datalist id="exit-site-search-options">{exitSiteOptions.map((site) => <option value={site} key={site} />)}</datalist>}</div>}
-          <div className="top-actions">
-            <div className="notification-center">
-              <button className={`notification-button ${notificationRequests.length ? "has-alerts" : ""}`} onClick={() => setNotificationsOpen((open) => !open)} aria-label={`${notificationRequests.length} solicitudes nuevas`} aria-expanded={notificationsOpen}><Bell size={19} />{notificationRequests.length > 0 && <span>{notificationRequests.length > 99 ? "99+" : notificationRequests.length}</span>}</button>
-              {notificationsOpen && <div className="notification-panel">
-                <div className="notification-head"><div><strong>{isCoordinator ? "Mis solicitudes activas" : "Solicitudes nuevas"}</strong><small>{notificationRequests.length} Pedido(s) F1 {isCoordinator ? "en seguimiento" : "por validar"}</small></div><button className="icon-button" onClick={() => setNotificationsOpen(false)} aria-label="Cerrar notificaciones"><X size={16} /></button></div>
-                <div className="notification-list">{notificationRequests.length === 0 ? <p>No tienes solicitudes nuevas.</p> : notificationRequests.slice(0, 8).map((group) => { const request = group[0]; const quantity = group.reduce((sum, row) => sum + row.quantity, 0); return <button key={request.requestCode} onClick={() => openRequestFromNotification(request.requestCode)}><span className="notification-icon"><ShoppingCart size={16} /></span><span><strong>{request.requestCode}</strong><small>{request.coordinatorName} · {quantity} equipo(s)</small><small>Despacho: {request.neededDate ? displayDate(request.neededDate) : "Sin fecha"}</small></span><b>{requestElapsedLabel(request)}</b></button>; })}</div>
-                {notificationRequests.length > 0 && <button className="notification-footer" onClick={() => { setView("solicitudes"); setNotificationsOpen(false); }}>Ver todas las solicitudes</button>}
-              </div>}
-            </div>
-            {!isCoordinator && !(["documentos", "activos", "flota", "solicitudes", "devoluciones", "configuracion", "ingresos", "salidas"] as View[]).includes(view) && <button className="secondary-button" onClick={exportCsv}><Download size={17} />Exportar</button>}
-            {canOperate && view === "ingresos" && <button className="secondary-button quick-movement gr-read-button" onClick={() => setModal("grIngreso")}><FileSpreadsheet size={17} />Leer GR de ingreso</button>}
-            {canOperate && view === "ingresos" && <button className="primary-button quick-movement" onClick={() => openMovement("entrada")}><ArrowDownLeft size={17} />Registrar ingreso unitario</button>}
-            {canOperate && view === "salidas" && <button className="primary-button quick-movement" onClick={() => openMovement("salida")}><ArrowUpRight size={17} />Registrar salida unitaria</button>}
-            {canOperate && view === "carga" && <button className="secondary-button product-button" onClick={() => setModal("product")}><PackagePlus size={17} />Nuevo SKU</button>}
-          </div>
-        </header>
+
 
         <div className={`content ${view === "flota" ? "fleet-shell-content" : ""}`}>
           {view === "documentos" && (
