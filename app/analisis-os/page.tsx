@@ -167,7 +167,13 @@ async function reviewService(form:FormData){
    if(action==="approve"&&state==="Aprobada")return "La solicitud ya está aprobada.";
    const newState=action==="observe"?"Observada":action==="reply"?"Sustentada":"Aprobada";
    const now=new Date().toISOString();
-   const event={fecha:now,usuario:user.email,accion:newState,mensaje:message};
+   const correctedAmount=String(form.get("correctedCost")??"").trim();
+   const correctedDescription=String(form.get("correctedDescription")??"").trim();
+   if(action==="reply" && correctedAmount && (!Number.isFinite(Number(correctedAmount)) || Number(correctedAmount)<=0 || Number(correctedAmount)>999999999))return "El monto corregido debe ser mayor a cero.";
+   if(correctedDescription.length>1000)return "La descripción corregida admite hasta 1000 caracteres.";
+   if(action==="reply" && correctedAmount)await tx.execute(sql`UPDATE f1_os_requests SET cost=${Number(correctedAmount)} WHERE id=${id}`);
+   if(action==="reply" && correctedDescription)await tx.execute(sql`UPDATE f1_os_requests SET description=${correctedDescription} WHERE id=${id}`);
+   const event={fecha:now,usuario:user.email,accion:newState,mensaje:message,montoCorregido:action==="reply"?correctedAmount:"",descripcionCorregida:action==="reply"?correctedDescription:""};
    const patch={"Status":newState,"Revisión versión":current+1,"Último mensaje":message,"Mensaje para":action==="observe"?"Coordinador":"José Ortiz","Aprobado por":action==="approve"?user.email:"","Fecha de aprobación":action==="approve"?now:""};
    await tx.execute(sql`UPDATE f1_os_requests SET details=(details || ${JSON.stringify(patch)}::jsonb) || jsonb_build_object('Conversación',COALESCE(details->'Conversación','[]'::jsonb) || ${JSON.stringify(event)}::jsonb) WHERE id=${id}`);
    return null;
