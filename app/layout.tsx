@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
+import "./f1-theme.css";
 import { isClerkConfigured } from "./deployment-config";
 
 export const metadata: Metadata = {
