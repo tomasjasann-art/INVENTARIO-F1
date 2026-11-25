@@ -32,7 +32,7 @@ const SignInPage = await loadPage('../app/sign-in/[[...sign-in]]/page.tsx', {
 });
 const LegacyPage = await loadPage('../app/sign-in/legacy/[[...legacy]]/page.tsx', { '@clerk/nextjs':moduleUrl('export function SignIn(){}'), '../../../deployment-config':configUrl, '../../../../lib/return-path':returnUrl });
 const DriversPage = await loadPage('../app/conductores/page.tsx', { '../LoginScreen':loginUrl, '../PasswordChangeScreen':passwordUrl, '../auth':authUrl, '../deployment-config':configUrl, '../vehiculos/FleetApp':fleetUrl, './DriverInstallHelp':installUrl });
-const Home = await loadPage('../app/page.tsx', { './KardexApp':moduleUrl('export default function KardexApp(){}'), './LoginScreen':loginUrl, './PasswordChangeScreen':passwordUrl, './auth':authUrl, './deployment-config':configUrl });
+const Home = await loadPage('../app/page.tsx', { './ModuleHome':moduleUrl('export default function ModuleHome(){}'), './KardexApp':moduleUrl('export default function KardexApp(){}'), './LoginScreen':loginUrl, './PasswordChangeScreen':passwordUrl, './auth':authUrl, './deployment-config':configUrl });
 const FleetPage = await loadPage('../app/vehiculos/page.tsx', { '../auth':authUrl, './FleetApp':fleetUrl });
 function reset() { globalThis.driverAccessState = { clerk:false, missing:[], user:null, access:null }; }
 function signedIn(role='CONDUCTOR') { reset();Object.assign(globalThis.driverAccessState, { user:{email:'persona@example.test',userId:'qa',authProvider:'supabase',displayName:'Prueba'}, access:{id:1,active:true,role,displayName:'Prueba'} }); }
@@ -71,7 +71,8 @@ test('Inicio general y enlace anterior conducen a la nueva app del conductor', a
 test('La administración de conductores abre la configuración solo para un administrador', async () => {
   for(const role of ['ADMINISTRADOR','LOGISTICA']) {
     signedIn(role);const page=await Home({searchParams:Promise.resolve({administrar:'conductores'})});
-    assert.equal(page.props.driverSetup,role==='ADMINISTRADOR');
+    if(role==='ADMINISTRADOR'){assert.equal(page.type.name,'KardexApp');assert.equal(page.props.driverSetup,true);}
+    else{assert.equal(page.type.name,'ModuleHome');assert.ok(!page.props.driverSetup);await assert.rejects(Home({searchParams:Promise.resolve({modulo:'configuracion'})}),error=>error.destination==='/');}
   }
 });
 

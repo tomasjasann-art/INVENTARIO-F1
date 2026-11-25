@@ -67,9 +67,7 @@ export default function FleetApp({ embedded = false, activeTab, onTabChange, dri
     const s = specs[historical ? "historyAssignment" : kind];
     if (!s) return;
     const editable = ["assignment", "document", "invoice"].includes(kind) && Boolean(values?.id);
-    const lockedAssignment = kind === "assignment" && Boolean(values?.startedAt);
     setForm({ ...s, title: historical ? "Editar seguimiento histórico" : editable ? `Editar ${kind === "assignment" ? "asignación" : kind === "document" ? "documento" : "factura"}` : s.title,
-      ...(lockedAssignment ? { vehicleUsages: undefined } : {}),
       values: { ...s.values, ...values, ...(historical ? { collector: (values?.source as { collector?: string })?.collector || "" } : {}), ...(editable ? { _version: fleetRecordVersion(kind as EditableFleetRecord, values!) } : {}) } });
   }
   const visibleVehicles = useMemo(() => data?.vehicles.filter(v => (!vehicleId || v.id === Number(vehicleId)) && (!usage || v.usage === usage) && (!tenure || v.tenure === tenure)) || [], [data, vehicleId, usage, tenure]);

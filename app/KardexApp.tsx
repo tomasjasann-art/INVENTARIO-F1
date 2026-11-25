@@ -1,5 +1,6 @@
 "use client";
 import F1Header from "./F1Header";
+import Link from "next/link";
 
 import {
   AlertTriangle,
@@ -783,7 +784,7 @@ export default function KardexApp({ user, signOutPath, technicianSetup = false, 
           </nav>
         </div>
         </>}
-        <a className="f1-sidebar-home" href="/">← Volver al inicio</a>
+        <Link className="f1-sidebar-home" href="/">← Volver al inicio</Link>
       </aside>
 
       <main className="main-area">

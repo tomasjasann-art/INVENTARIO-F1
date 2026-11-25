@@ -39,16 +39,16 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
 
   const params = await searchParams;
 
-  const module=typeof params.modulo==="string"?params.modulo:"";
+  const moduleName=typeof params.modulo==="string"?params.modulo:"";
   const adminSetup=access.role==="ADMINISTRADOR" && (params.administrar==="tecnicos" || params.administrar==="conductores");
-  if(module==="configuracion" && access.role!=="ADMINISTRADOR")redirect("/");
-  if (!["equipos","vehiculos","activos","documentos","configuracion"].includes(module) && !adminSetup) {
+  if(moduleName==="configuracion" && access.role!=="ADMINISTRADOR")redirect("/");
+  if (!["equipos","vehiculos","activos","documentos","configuracion"].includes(moduleName) && !adminSetup) {
     return <ModuleHome name={access.displayName || user.displayName} role={access.role} signOut={signOutPath()} />;
   }
 
   return (
     <KardexApp
-      initialModule={module}
+      initialModule={moduleName}
       user={{ displayName: user.displayName, email: user.email }}
       technicianSetup={params.administrar === "tecnicos" && access.role === "ADMINISTRADOR"}
       driverSetup={params.administrar === "conductores" && access.role === "ADMINISTRADOR"}

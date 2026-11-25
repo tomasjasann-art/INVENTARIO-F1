@@ -42,12 +42,13 @@ export default function Analysis({saved, logistics, fields, submit, suppliers, s
   const [sending,setSending] = useState(false);
   const [requestId,setRequestId] = useState("");
   useEffect(()=>{
-    setLines(old=>{
+    const timer=window.setTimeout(()=>setLines(old=>{
       const previous=new Map(old.map(line=>[line.key,line]));
       const next=initialLines(saved,purchaseExpenses).map(line=>({...line,included:previous.get(line.key)?.included??true,reference:previous.get(line.key)?.reference??line.reference}));
       const keys=new Set(next.map(line=>line.key));
       return [...next,...old.filter(line=>!keys.has(line.key) && line.source!=="Plataforma" && line.source!=="Manual guardado" && line.details?.Origen!=="OC registrada")];
-    });
+    }),0);
+    return()=>window.clearTimeout(timer);
   },[saved,purchaseExpenses]);
   const [errors,setErrors] = useState("");
 

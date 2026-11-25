@@ -15,7 +15,7 @@ export function fleetForms(d: FleetData) {
       vehicleUsages: Object.fromEntries(d.vehicles.map(v => [String(v.id), v.usage])),
       title: "Asignación diaria", action: "assignment",
       values: { serviceDate: limaDate(), endDate: limaDate(), expectedStart: "08:00", expectedEnd: "18:00", planStatus: "CONFIRMADA" },
-      fields: [vehicle, field("serviceDate", "Fecha", "date", true),
+      fields: [vehicle, { name: "operationalLoan", label: "Prestar a técnico / conductor", type: "checkbox", administrativeVehicleOnly: true, hint: "Durante esta asignación usará la app de conductores: Inicio, Final, kilometraje y siete fotos en cada registro. El vehículo conserva su uso administrativo." }, field("serviceDate", "Fecha", "date", true),
         { ...field("endDate", "Fecha de Final / retorno", "date", true), operationsOnly: true },
         { name: "driverId", label: "Conductor / cuenta de acceso", required: true, operationsOnly: true,
           options: activeDrivers(d.drivers).map(u => ({ value: String(u.id), label: `${u.displayName} · ${u.username || u.role}` })),

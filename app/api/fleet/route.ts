@@ -186,13 +186,15 @@ export async function POST(request: Request) {
       } else await db.insert(vehicles).values(v);
     } else if (action === "assignment") {
       const { id: assignmentId, ...input } = assignmentSchema.parse(body);
+      const operationalLoan = z.boolean().default(false).parse(body.operationalLoan);
       await db.transaction(async tx => {
         await tx.execute(sql`select pg_advisory_xact_lock(7614, 1)`);
         await tx.execute(sql`select pg_advisory_xact_lock(7610, ${input.vehicleId})`);
-        // The vehicle master determines the mode; a posted mode cannot bypass driver evidence.
+        // Only administrative vehicles can opt into a temporary operational assignment.
+        // Operations vehicles always keep their driver, kilometre and evidence requirements.
         const [vehicle] = await tx.select().from(vehicles).where(eq(vehicles.id, input.vehicleId)).for("share").limit(1);
         if (!vehicle) throw new FleetError("Selecciona un vehículo registrado.");
-        const administrative = vehicle.usage === "ADMINISTRACION";
+        const administrative = vehicle.usage === "ADMINISTRACION" && !operationalLoan;
         const a = { ...input, endDate: administrative ? input.serviceDate : input.endDate || input.serviceDate, driverId: administrative ? null : input.driverId, trackingMode: administrative ? "ADMINISTRATIVO" : "OPERATIVO", responsibleName: administrative ? input.responsibleName : "", expectedStart: administrative ? "" : input.expectedStart, expectedEnd: administrative ? "" : input.expectedEnd, planStatus: administrative ? "CONFIRMADA" : input.planStatus, reason: administrative ? "" : input.reason };
         const [existing] = assignmentId ? await tx.select().from(assignments).where(eq(assignments.id, assignmentId)).for("update").limit(1) : [];
         if (assignmentId && !existing) throw new FleetError("Asignación no encontrada.", 404);

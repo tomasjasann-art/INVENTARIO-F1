@@ -430,3 +430,57 @@ test('La carga obtiene placa y hora del servidor y exige actualizar versiones si
  assert.equal((await uploadPhoto({watermarkVersion:undefined})).status,400);
  state.user.id=3;assert.equal((await uploadPhoto({})).status,403);
 });
+
+test('Un préstamo administrativo asigna una cuenta real sin cambiar el uso del vehículo',async()=>{
+ const state=reset('ADMINISTRACION');
+ assert.equal((await post(assignment({operationalLoan:true,responsibleName:'No usar nombre libre'}))).status,200);
+ const saved=state.rows.fleetAssignments[0];
+ assert.equal(saved.trackingMode,'OPERATIVO');assert.equal(saved.driverId,2);assert.equal(saved.responsibleName,'');
+ assert.equal(saved.expectedStart,'08:00');assert.equal(saved.expectedEnd,'18:00');assert.equal(state.rows.fleetVehicles[0].usage,'ADMINISTRACION');
+ assert.equal(Object.hasOwn(saved,'operationalLoan'),false);
+});
+test('El préstamo exige conductor activo, horarios válidos y vehículo disponible; un modo publicado no evita evidencias',async()=>{
+ for(const extra of [{driverId:null},{expectedStart:''},{expectedEnd:'07:00'}]){
+  const state=reset('ADMINISTRACION');assert.equal((await post(assignment({operationalLoan:true,...extra}))).status,400);assert.equal(state.writes.length,0);
+ }
+ for(const role of ['ADMINISTRADOR','LOGISTICA','CONDUCTOR']){
+  const state=reset('ADMINISTRACION');state.rows.appUsers[0]={id:2,role,active:role!=='CONDUCTOR'};
+  assert.equal((await post(assignment({operationalLoan:true,trackingMode:'ADMINISTRATIVO'}))).status,400);assert.equal(state.writes.length,0);
+ }
+ const state=reset('ADMINISTRACION');state.rows.fleetVehicles[0].status='MANTENIMIENTO';
+ assert.equal((await post(assignment({operationalLoan:true}))).status,400);assert.equal(state.writes.length,0);
+ assert.equal((await post(assignment({operationalLoan:'true'}))).status,400);
+});
+test('La asignación administrativa existente puede convertirse en préstamo antes del Inicio',async()=>{
+ const state=reset('ADMINISTRACION'),a=journey(state,{trackingMode:'ADMINISTRATIVO',driverId:null,responsibleName:'Gerencia',expectedStart:'',expectedEnd:''});
+ assert.equal((await editAssignment(a,{operationalLoan:true,driverId:2,expectedStart:'08:00',expectedEnd:'18:00'})).status,200);
+ assert.equal(state.rows.fleetAssignments[0].id,a.id);assert.equal(state.rows.fleetAssignments[0].trackingMode,'OPERATIVO');assert.equal(state.rows.fleetAssignments[0].driverId,2);
+});
+test('El técnico ve el préstamo en su app y registra Inicio y Final con siete evidencias por etapa',async()=>{
+ const state=reset('ADMINISTRACION');state.rows.fleetVehicles[0].plate='PRU001';
+ assert.equal((await post(assignment({operationalLoan:true}))).status,200);
+ const a=journey(state,{...state.rows.fleetAssignments[0],id:20});
+ state.rows.fleetAssignments.push({...a,id:21,trackingMode:'ADMINISTRATIVO',driverId:null});
+ state.user={id:2,displayName:'Técnico conductor',role:'CONDUCTOR',active:true};
+ const response=await GET(new Request('https://f1.example/api/fleet'));assert.deepEqual((await response.json()).assignments.map(a=>a.id),[20]);
+ const ticket=await uploadPhoto({});assert.equal(ticket.status,200);
+ const start=record({photos:[]});assert.equal((await post(start)).status,400);
+ start.photos=record().photos.map(p=>({...p,path:p.path.replace('fleet/1/','fleet/2/')}));
+ assert.equal((await post(start)).status,200);
+ const end=record({phase:'FINAL',odometer:200,finalZone:'Cochera',photos:start.photos.map(p=>({...p,path:p.path.replace('/INICIO/','/FINAL/')}))});
+ assert.equal((await post(end)).status,200);
+ const saved=state.rows.fleetAssignments.find(a=>a.id===20);assert.equal(domain.distance(saved),50);assert.equal(saved.startPhotos.length,7);assert.equal(saved.endPhotos.length,7);assert.equal(saved.finalZone,'Cochera');
+ assert.equal(state.rows.fleetVehicles[0].usage,'ADMINISTRACION');
+});
+test('El préstamo iniciado conserva su modo y conductor al editar y bloquea quitarle el control operativo',async()=>{
+ const state=reset('ADMINISTRACION'),a=journey(state,{startedAt:'2026-11-25T13:00:00Z',initialKm:150,startPhotos:[{slot:'Frente',path:'original'}]});
+ assert.equal((await editAssignment(a,{operationalLoan:true,site:'Trabajo corregido'})).status,200);
+ const current=state.rows.fleetAssignments[0],snapshot=structuredClone(current);
+ assert.equal((await editAssignment(current,{operationalLoan:false})).status,400);
+ assert.deepEqual(state.rows.fleetAssignments[0],snapshot);assert.equal(state.rows.fleetVehicles[0].usage,'ADMINISTRACION');
+});
+test('El conductor no puede autoasignarse préstamos y un préstamo ajeno no queda visible',async()=>{
+ const state=reset('ADMINISTRACION');state.user={id:3,displayName:'Otro conductor',role:'CONDUCTOR',active:true};
+ assert.equal((await post(assignment({operationalLoan:true}))).status,403);journey(state);
+ const response=await GET(new Request('https://f1.example/api/fleet'));assert.deepEqual((await response.json()).assignments,[]);assert.equal(state.writes.length,0);
+});
